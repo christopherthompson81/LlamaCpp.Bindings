@@ -411,6 +411,30 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial uint llama_sampler_get_seed(IntPtr smpl);
 
+    // ----- Perf readouts (Tier 1 expansion) -----
+    //
+    // The _print functions log to stderr via llama_log; we still bind them
+    // for diagnostic use even though the managed API prefers returning the
+    // struct for callers to render themselves.
+
+    [LibraryImport(LibName)]
+    internal static partial llama_perf_context_data llama_perf_context(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_perf_context_print(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_perf_context_reset(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static partial llama_perf_sampler_data llama_perf_sampler(IntPtr chain);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_perf_sampler_print(IntPtr chain);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_perf_sampler_reset(IntPtr chain);
+
     // ----- Memory / KV cache (Phase 4) -----
     //
     // Note: in this pinned version the KV cache is reached via an opaque

@@ -50,6 +50,15 @@ public sealed class LlamaContextParameters
     /// </summary>
     public bool UseFullSwaCache { get; set; } = true;
 
+    /// <summary>
+    /// Record per-context performance counters (prompt/token eval ms, token
+    /// counts). llama.cpp defaults this to OFF via an inverted <c>no_perf</c>
+    /// field; we flip it to ON because <see cref="LlamaContext.GetPerformance"/>
+    /// is cheap and most callers want the numbers available. Set <c>false</c>
+    /// if you care about the sub-microsecond timing overhead.
+    /// </summary>
+    public bool MeasurePerformance { get; set; } = true;
+
     internal llama_context_params ToNative()
     {
         var native = NativeMethods.llama_context_default_params();
@@ -63,6 +72,7 @@ public sealed class LlamaContextParameters
         native.embeddings = Embeddings;
         native.offload_kqv = OffloadKQV;
         native.swa_full = UseFullSwaCache;
+        native.no_perf = !MeasurePerformance;
         return native;
     }
 

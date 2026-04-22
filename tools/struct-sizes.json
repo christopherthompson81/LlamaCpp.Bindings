@@ -63,5 +63,16 @@
     "offsetof_struct llama_batch__logits": 48,
     "sizeof_struct llama_sampler_chain_params": 1,
     "offsetof_struct llama_sampler_chain_params__no_perf": 0,
+    "sizeof_struct llama_perf_context_data": 48,
+    "offsetof_struct llama_perf_context_data__t_start_ms": 0,
+    "offsetof_struct llama_perf_context_data__t_load_ms": 8,
+    "offsetof_struct llama_perf_context_data__t_p_eval_ms": 16,
+    "offsetof_struct llama_perf_context_data__t_eval_ms": 24,
+    "offsetof_struct llama_perf_context_data__n_p_eval": 32,
+    "offsetof_struct llama_perf_context_data__n_eval": 36,
+    "offsetof_struct llama_perf_context_data__n_reused": 40,
+    "sizeof_struct llama_perf_sampler_data": 16,
+    "offsetof_struct llama_perf_sampler_data__t_sample_ms": 0,
+    "offsetof_struct llama_perf_sampler_data__n_sample": 8,
     "_end": 0
 }

@@ -185,6 +185,47 @@ public sealed class LlamaContext : IDisposable
         return NativeMethods.llama_memory_can_shift(Memory());
     }
 
+    // ----- Performance (Tier 1 expansion) -----
+
+    /// <summary>
+    /// Snapshot the context's timing counters. Cheap to call (~tens of ns);
+    /// safe to sample frequently.
+    /// </summary>
+    public LlamaContextPerformance GetPerformance()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var d = NativeMethods.llama_perf_context(_handle.DangerousHandle);
+        return new LlamaContextPerformance(
+            StartMilliseconds:      d.t_start_ms,
+            LoadMilliseconds:       d.t_load_ms,
+            PromptEvalMilliseconds: d.t_p_eval_ms,
+            TokenEvalMilliseconds:  d.t_eval_ms,
+            PromptTokenCount:       d.n_p_eval,
+            GeneratedTokenCount:    d.n_eval,
+            GraphReuseCount:        d.n_reused);
+    }
+
+    /// <summary>
+    /// Reset all performance counters to zero. The next call to
+    /// <see cref="GetPerformance"/> measures from this point forward.
+    /// </summary>
+    public void ResetPerformance()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_perf_context_reset(_handle.DangerousHandle);
+    }
+
+    /// <summary>
+    /// Ask llama.cpp to log a human-readable performance report via its log
+    /// sink. Primarily a diagnostic shortcut; prefer <see cref="GetPerformance"/>
+    /// for programmatic use.
+    /// </summary>
+    public void LogPerformanceReport()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_perf_context_print(_handle.DangerousHandle);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

@@ -176,6 +176,39 @@ public sealed class LlamaSampler : IDisposable
         return new LlamaSampler(SafeLlamaSamplerHandle.FromUnsafeHandle(raw));
     }
 
+    // ----- Performance (Tier 1 expansion) -----
+
+    /// <summary>
+    /// Snapshot the sampler chain's timing counters. Only meaningful for
+    /// chains; non-chain samplers return a zero-valued snapshot.
+    /// </summary>
+    public LlamaSamplerPerformance GetPerformance()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var d = NativeMethods.llama_perf_sampler(_handle.DangerousHandle);
+        return new LlamaSamplerPerformance(
+            SampleMilliseconds: d.t_sample_ms,
+            SampleCount:        d.n_sample);
+    }
+
+    /// <summary>
+    /// Reset the sampler's performance counters to zero.
+    /// </summary>
+    public void ResetPerformance()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_perf_sampler_reset(_handle.DangerousHandle);
+    }
+
+    /// <summary>
+    /// Log a human-readable sampler performance report via llama.cpp's log sink.
+    /// </summary>
+    public void LogPerformanceReport()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_perf_sampler_print(_handle.DangerousHandle);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -209,6 +242,19 @@ public sealed class LlamaSamplerBuilder
 {
     private readonly List<IntPtr> _pending = new();
     private bool _hasTerminal;
+    private bool _measurePerformance = true;
+
+    /// <summary>
+    /// Record per-sampler performance counters. Defaults to true (overriding
+    /// llama.cpp's OFF default) so <see cref="LlamaSampler.GetPerformance"/>
+    /// returns useful numbers. Call with <c>false</c> if you care about the
+    /// sub-microsecond per-sample overhead.
+    /// </summary>
+    public LlamaSamplerBuilder WithPerformanceMeasurement(bool enabled)
+    {
+        _measurePerformance = enabled;
+        return this;
+    }
 
     /// <summary>Top-K truncation. Keeps only the K highest-probability tokens.</summary>
     public LlamaSamplerBuilder WithTopK(int k)
@@ -307,6 +353,7 @@ public sealed class LlamaSamplerBuilder
         }
 
         var chainParams = NativeMethods.llama_sampler_chain_default_params();
+        chainParams.no_perf = !_measurePerformance;
         var chain = NativeMethods.llama_sampler_chain_init(chainParams);
         if (chain == IntPtr.Zero)
         {

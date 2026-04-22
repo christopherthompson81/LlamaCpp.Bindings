@@ -181,6 +181,33 @@ internal struct llama_sampler_chain_params
     public const int ExpectedSize = 1;
 }
 
+// llama_perf_context_data: timing + count info from a context.
+// 4 doubles + 3 int32 = 44 bytes data + 4 bytes struct-alignment padding = 48.
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_perf_context_data
+{
+    public double t_start_ms;    // absolute start time
+    public double t_load_ms;     // time needed for loading the model
+    public double t_p_eval_ms;   // time spent processing the prompt
+    public double t_eval_ms;     // time spent generating tokens
+    public int n_p_eval;         // number of prompt tokens evaluated
+    public int n_eval;           // number of generated tokens
+    public int n_reused;         // number of times a compute graph was reused
+
+    public const int ExpectedSize = 48;
+}
+
+// llama_perf_sampler_data: timing + count info from a sampler chain.
+// 1 double + 1 int32 = 12 bytes data + 4 bytes struct-alignment padding = 16.
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_perf_sampler_data
+{
+    public double t_sample_ms;   // total time spent in sampling
+    public int n_sample;         // number of tokens sampled
+
+    public const int ExpectedSize = 16;
+}
+
 /// <summary>
 /// Struct layout assertions. Called once from <see cref="LlamaBackend"/>'s
 /// static constructor before any native call is made. If the native struct
@@ -196,6 +223,8 @@ internal static class NativeLayout
         Check<llama_chat_message>(llama_chat_message.ExpectedSize);
         Check<llama_batch>(llama_batch.ExpectedSize);
         Check<llama_sampler_chain_params>(llama_sampler_chain_params.ExpectedSize);
+        Check<llama_perf_context_data>(llama_perf_context_data.ExpectedSize);
+        Check<llama_perf_sampler_data>(llama_perf_sampler_data.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct

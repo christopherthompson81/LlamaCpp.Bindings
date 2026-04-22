@@ -90,6 +90,21 @@ int main(void) {
     SZ(struct llama_sampler_chain_params);
     OFF(struct llama_sampler_chain_params, no_perf);
 
+    // ----- llama_perf_context_data -----
+    SZ(struct llama_perf_context_data);
+    OFF(struct llama_perf_context_data, t_start_ms);
+    OFF(struct llama_perf_context_data, t_load_ms);
+    OFF(struct llama_perf_context_data, t_p_eval_ms);
+    OFF(struct llama_perf_context_data, t_eval_ms);
+    OFF(struct llama_perf_context_data, n_p_eval);
+    OFF(struct llama_perf_context_data, n_eval);
+    OFF(struct llama_perf_context_data, n_reused);
+
+    // ----- llama_perf_sampler_data -----
+    SZ(struct llama_perf_sampler_data);
+    OFF(struct llama_perf_sampler_data, t_sample_ms);
+    OFF(struct llama_perf_sampler_data, n_sample);
+
     // Terminator to keep JSON valid without worrying about trailing comma.
     printf("    \"_end\": 0\n");
     printf("}\n");
