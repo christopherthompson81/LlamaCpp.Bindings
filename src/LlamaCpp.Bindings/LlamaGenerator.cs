@@ -112,6 +112,11 @@ public sealed class LlamaGenerator
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // llama_sampler_sample already does apply + select + accept
+            // internally. Do NOT call _sampler.Accept(nextToken) after — that
+            // double-advances stateful stages (grammar, penalties). The
+            // double-accept on grammar was fatal ("empty grammar stack"
+            // runtime_error) once the grammar got close to completion.
             int nextToken = await Task.Run(() => _sampler.Sample(_context), cancellationToken).ConfigureAwait(false);
 
             if (vocab.IsEndOfGeneration(nextToken))
@@ -121,8 +126,6 @@ public sealed class LlamaGenerator
                 if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
                 yield break;
             }
-
-            _sampler.Accept(nextToken);
 
             // TokenToPiece handles UTF-8 correctly but a single token may be a
             // partial multi-byte sequence (very common for CJK, emoji). Feed
@@ -141,6 +144,17 @@ public sealed class LlamaGenerator
                     charCount = decoder.GetChars(pieceBytes, charBuf, flush: false);
                 }
                 if (charCount > 0) yield return new string(charBuf, 0, charCount);
+            }
+
+            // Grammar-termination gate: if the sampler has a grammar stage
+            // and the grammar now permits only EOG tokens, stop cleanly
+            // instead of letting the next Sample/Accept crash the process
+            // with the "empty grammar stack" runtime_error.
+            if (_sampler.HasGrammar && _sampler.IsGrammarSatisfied(vocab))
+            {
+                int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
+                if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
+                yield break;
             }
 
             // Feed the accepted token back into the context as a 1-token batch

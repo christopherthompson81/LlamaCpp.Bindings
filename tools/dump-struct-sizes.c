@@ -110,6 +110,19 @@ int main(void) {
     OFF(struct llama_logit_bias, token);
     OFF(struct llama_logit_bias, bias);
 
+    // ----- llama_token_data -----
+    SZ(llama_token_data);
+    OFF(llama_token_data, id);
+    OFF(llama_token_data, logit);
+    OFF(llama_token_data, p);
+
+    // ----- llama_token_data_array -----
+    SZ(llama_token_data_array);
+    OFF(llama_token_data_array, data);
+    OFF(llama_token_data_array, size);
+    OFF(llama_token_data_array, selected);
+    OFF(llama_token_data_array, sorted);
+
     // Terminator to keep JSON valid without worrying about trailing comma.
     printf("    \"_end\": 0\n");
     printf("}\n");

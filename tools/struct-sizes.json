@@ -77,5 +77,14 @@
     "sizeof_struct llama_logit_bias": 8,
     "offsetof_struct llama_logit_bias__token": 0,
     "offsetof_struct llama_logit_bias__bias": 4,
+    "sizeof_llama_token_data": 12,
+    "offsetof_llama_token_data__id": 0,
+    "offsetof_llama_token_data__logit": 4,
+    "offsetof_llama_token_data__p": 8,
+    "sizeof_llama_token_data_array": 32,
+    "offsetof_llama_token_data_array__data": 0,
+    "offsetof_llama_token_data_array__size": 8,
+    "offsetof_llama_token_data_array__selected": 16,
+    "offsetof_llama_token_data_array__sorted": 24,
     "_end": 0
 }

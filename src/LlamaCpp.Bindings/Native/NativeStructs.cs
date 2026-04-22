@@ -218,6 +218,33 @@ internal struct llama_logit_bias
     public const int ExpectedSize = 8;
 }
 
+// llama_token_data: one candidate in the logit/prob distribution. 12 bytes.
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_token_data
+{
+    public int id;      // 0  token id
+    public float logit; // 4  log-odds
+    public float p;     // 8  probability
+    // = 12 bytes, no padding
+
+    public const int ExpectedSize = 12;
+}
+
+// llama_token_data_array: the candidate set passed to llama_sampler_apply.
+// Samplers mutate this in place — .size can shrink, .data pointer may be
+// reassigned (though most samplers edit in-place without reallocating).
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_token_data_array
+{
+    public IntPtr data;     // 0   llama_token_data*
+    public nuint size;      // 8   size_t
+    public long selected;   // 16  int64_t (index into data, not token id)
+    [MarshalAs(UnmanagedType.I1)] public bool sorted; // 24
+    // 7 bytes tail padding for struct alignment
+
+    public const int ExpectedSize = 32;
+}
+
 /// <summary>
 /// Struct layout assertions. Called once from <see cref="LlamaBackend"/>'s
 /// static constructor before any native call is made. If the native struct
@@ -236,6 +263,8 @@ internal static class NativeLayout
         Check<llama_perf_context_data>(llama_perf_context_data.ExpectedSize);
         Check<llama_perf_sampler_data>(llama_perf_sampler_data.ExpectedSize);
         Check<llama_logit_bias>(llama_logit_bias.ExpectedSize);
+        Check<llama_token_data>(llama_token_data.ExpectedSize);
+        Check<llama_token_data_array>(llama_token_data_array.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct

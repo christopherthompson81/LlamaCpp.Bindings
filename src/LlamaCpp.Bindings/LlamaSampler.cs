@@ -16,6 +16,14 @@ public sealed class LlamaSampler : IDisposable
     private readonly SafeLlamaSamplerHandle _handle;
     private bool _disposed;
 
+    // Borrowed (non-owning) pointer to the grammar sub-sampler within the
+    // chain, if one was added via WithGrammar / WithLazyGrammar. Used by
+    // IsGrammarSatisfied to apply JUST the grammar stage against a neutral
+    // candidate array without interference from top-k / top-p truncation.
+    // Freed transitively when the chain is disposed — we never free it
+    // directly.
+    internal IntPtr GrammarSubSampler { get; set; } = IntPtr.Zero;
+
     internal LlamaSampler(SafeLlamaSamplerHandle handle)
     {
         _handle = handle;
@@ -63,6 +71,80 @@ public sealed class LlamaSampler : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         NativeMethods.llama_sampler_reset(_handle.DangerousHandle);
+    }
+
+    /// <summary>True if this sampler includes a grammar stage (either <see cref="LlamaSamplerBuilder.WithGrammar"/> or <see cref="LlamaSamplerBuilder.WithLazyGrammar"/>).</summary>
+    public bool HasGrammar => GrammarSubSampler != IntPtr.Zero;
+
+    /// <summary>
+    /// Check whether the current grammar state permits any non-EOG token.
+    /// Returns true when the grammar is fully satisfied — i.e., the only
+    /// candidates that survive the grammar mask are end-of-generation
+    /// tokens. Returns false when the grammar still permits more content,
+    /// or when the sampler has no grammar at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>Purpose: gate the <see cref="LlamaGenerator"/> loop. If this
+    /// returns true, the next sample-and-accept cycle would crash because
+    /// llama.cpp's grammar engine throws on "accept after satisfied" rather
+    /// than forcing EOG. Detect and stop cleanly instead.</para>
+    ///
+    /// <para>Implementation: runs <c>llama_sampler_apply</c> on JUST the
+    /// grammar sub-sampler over a full-vocab candidate array with neutral
+    /// logits. Any token left with a finite logit is a grammar-allowed
+    /// token. If every such token is EOG, the grammar is done.</para>
+    ///
+    /// <para>This is a peek-only call — <c>apply</c> does not advance
+    /// grammar state. Safe to call every decode step.</para>
+    /// </remarks>
+    public unsafe bool IsGrammarSatisfied(LlamaVocab vocab)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(vocab);
+
+        if (!HasGrammar) return false;
+
+        var n = vocab.TokenCount;
+
+        // Allocate candidate data + probe with the grammar sub-sampler only.
+        // Using the sub-sampler (not the whole chain) avoids interference
+        // from top-k / top-p truncation which would hide grammar-valid
+        // tokens purely because they didn't win the truncation lottery.
+        //
+        // Give all tokens the same finite logit (NOT 0.0 — some grammar
+        // implementations short-circuit on zero-logit arrays). Use 1.0
+        // which is neutral and obviously non-special.
+        var candidates = new llama_token_data[n];
+        for (int i = 0; i < n; i++)
+        {
+            candidates[i] = new llama_token_data { id = i, logit = 1.0f, p = 0.0f };
+        }
+
+        fixed (llama_token_data* candPtr = candidates)
+        {
+            var arr = new llama_token_data_array
+            {
+                data     = (IntPtr)candPtr,
+                size     = (nuint)n,
+                selected = -1,
+                sorted   = false,
+            };
+            NativeMethods.llama_sampler_apply(GrammarSubSampler, &arr);
+
+            // Scan for any finite-logit non-EOG token. If found, grammar
+            // still permits more content. The array's size / pointer may
+            // have been mutated, so re-read both.
+            var resultPtr = (llama_token_data*)arr.data;
+            for (nuint i = 0; i < arr.size; i++)
+            {
+                var td = resultPtr[i];
+                if (float.IsFinite(td.logit) && !vocab.IsEndOfGeneration(td.id))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 
     /// <summary>
@@ -243,6 +325,9 @@ public sealed class LlamaSamplerBuilder
     private readonly List<IntPtr> _pending = new();
     private bool _hasTerminal;
     private bool _measurePerformance = true;
+    // Remembered so the built LlamaSampler can apply it standalone for
+    // grammar-done detection without interference from other chain stages.
+    private IntPtr _grammarSubSampler = IntPtr.Zero;
 
     /// <summary>
     /// Record per-sampler performance counters. Defaults to true (overriding
@@ -516,24 +601,17 @@ public sealed class LlamaSamplerBuilder
     /// filters have already narrowed the candidate set; grammar parsing per
     /// candidate is not free.
     ///
-    /// <para><b>Process-crash warnings:</b></para>
-    /// <list type="bullet">
-    /// <item>llama.cpp's GBNF parser aborts the process on syntax errors
-    /// rather than returning NULL. An invalid grammar here will kill your
-    /// application. Validate grammars with llama.cpp's CLI
-    /// (<c>llama-cli --grammar-file ...</c>) before passing them here.</item>
-    /// <item>Once the grammar is fully satisfied (e.g., a complete JSON
-    /// object has been emitted), the sampler mask permits only EOG tokens.
-    /// If the sampler's terminal happens to pick a non-EOG token anyway
-    /// (rare but possible with certain ordering), the grammar engine throws
-    /// "Unexpected empty grammar stack after accepting piece" as a C++
-    /// exception that llama.cpp lets propagate — crashing the host. Mitigate
-    /// by (1) placing <see cref="WithGrammar"/> LATE in the chain so
-    /// truncation filters run first; (2) making grammars permissive enough
-    /// that they accept trailing whitespace / don't "complete" before EOG;
-    /// (3) using modest <c>maxTokens</c> when the grammar is intentionally
-    /// short so the process exits via <c>maxTokens</c> before the hazard.</item>
-    /// </list>
+    /// <para><b>Process-crash warning:</b> llama.cpp's GBNF parser aborts the
+    /// process on syntax errors rather than returning NULL. An invalid grammar
+    /// passed here will kill your application. Validate grammars with
+    /// llama.cpp's CLI (<c>llama-cli --grammar-file ...</c>) before passing
+    /// them to the binding.</para>
+    ///
+    /// <para>Grammar-completion handling: the generator detects when the
+    /// grammar is fully satisfied (via <see cref="LlamaSampler.IsGrammarSatisfied"/>)
+    /// and exits cleanly before the next sample/accept cycle would hit
+    /// llama.cpp's "empty grammar stack" throw. No special handling needed
+    /// by callers.</para>
     /// </remarks>
     public LlamaSamplerBuilder WithGrammar(LlamaVocab vocab, LlamaGrammar grammar)
     {
@@ -554,6 +632,7 @@ public sealed class LlamaSamplerBuilder
                 "Check the grammar_str against llama.cpp's grammars/README.md.");
         }
         _pending.Add(sub);
+        _grammarSubSampler = sub;
         return this;
     }
 
@@ -596,6 +675,7 @@ public sealed class LlamaSamplerBuilder
                             "llama_sampler_init_grammar_lazy_patterns returned NULL — likely a GBNF parse error.");
                     }
                     _pending.Add(sub);
+                    _grammarSubSampler = sub;
                 }
             }
         }
@@ -687,7 +767,12 @@ public sealed class LlamaSamplerBuilder
         _pending.Clear();
         _hasTerminal = false;
 
-        return new LlamaSampler(SafeLlamaSamplerHandle.FromUnsafeHandle(chain));
+        var built = new LlamaSampler(SafeLlamaSamplerHandle.FromUnsafeHandle(chain))
+        {
+            GrammarSubSampler = _grammarSubSampler,
+        };
+        _grammarSubSampler = IntPtr.Zero;
+        return built;
     }
 
     private void ThrowIfTerminalAdded()

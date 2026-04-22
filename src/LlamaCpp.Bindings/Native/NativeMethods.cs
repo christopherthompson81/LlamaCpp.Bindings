@@ -461,6 +461,16 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial IntPtr llama_sampler_name(IntPtr smpl);
 
+    // Applies a sampler (single or chain) to a candidate array. Mutates in
+    // place: .size may shrink (truncation samplers), logits may be rescaled
+    // (temperature), masked to -inf (grammar / logit_bias), or reordered.
+    // The .selected field is set by terminal samplers (dist/greedy/mirostat/
+    // adaptive_p). Importantly: apply does NOT advance stateful samplers
+    // (grammar position, penalty history, etc.) — that's what accept() does.
+    // Safe to call multiple times without side effects on sampler state.
+    [LibraryImport(LibName)]
+    internal static unsafe partial void llama_sampler_apply(IntPtr smpl, llama_token_data_array* cur_p);
+
     [LibraryImport(LibName)]
     internal static partial IntPtr llama_sampler_clone(IntPtr smpl);
 
