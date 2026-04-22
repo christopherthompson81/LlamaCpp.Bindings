@@ -16,17 +16,22 @@ public sealed class LlamaSampler : IDisposable
     private readonly SafeLlamaSamplerHandle _handle;
     private bool _disposed;
 
-    // Borrowed (non-owning) pointer to the grammar sub-sampler within the
-    // chain, if one was added via WithGrammar / WithLazyGrammar. Used by
-    // IsGrammarSatisfied to apply JUST the grammar stage against a neutral
-    // candidate array without interference from top-k / top-p truncation.
-    // Freed transitively when the chain is disposed — we never free it
-    // directly.
-    internal IntPtr GrammarSubSampler { get; set; } = IntPtr.Zero;
+    // Grammar is held as an OWNED, independent sampler — NOT part of the
+    // chain. This mirrors how llama.cpp's own common_sampler does it, and
+    // is what makes rejection sampling possible: sample from the chain
+    // without grammar, post-hoc validate against grammar, resample with
+    // grammar-first if the pick was invalid. Keeping grammar in the chain
+    // ran into a reject/accept disagreement bug in llama.cpp's grammar
+    // engine that crashed the process on complex grammars like JSON.
+    //
+    // Because we own it (and it's NOT in the chain), we free it ourselves
+    // in Dispose. Zero = no grammar.
+    internal IntPtr GrammarSampler { get; private set; } = IntPtr.Zero;
 
-    internal LlamaSampler(SafeLlamaSamplerHandle handle)
+    internal LlamaSampler(SafeLlamaSamplerHandle handle, IntPtr grammar = default)
     {
         _handle = handle;
+        GrammarSampler = grammar;
     }
 
     internal IntPtr DangerousHandle
@@ -44,14 +49,120 @@ public sealed class LlamaSampler : IDisposable
     /// batch to sample from; <c>-1</c> (the default) means "the last
     /// position", which is what you want for single-token generation.
     /// </summary>
-    public int Sample(LlamaContext context, int idx = -1)
+    /// <remarks>
+    /// This call both samples AND accepts the token — advancing any
+    /// stateful stages (grammar, penalties, RNG). Do not call
+    /// <see cref="Accept"/> separately on the returned token; that would
+    /// double-advance state.
+    ///
+    /// When a grammar is present, this does rejection sampling (matching
+    /// llama.cpp's common_sampler): apply chain (without grammar), check
+    /// if the picked token is grammar-valid; if not, re-pick with grammar
+    /// applied first. Keeps the process safe from the "empty grammar stack"
+    /// crash path that trips when grammar is inside the chain.
+    /// </remarks>
+    public unsafe int Sample(LlamaContext context, int idx = -1)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(context);
-        return NativeMethods.llama_sampler_sample(
-            _handle.DangerousHandle,
-            context.Handle.DangerousHandle,
-            idx);
+
+        // Grammar-less path: delegate to the native shortcut which handles
+        // apply+select+accept in one call. Faster and matches the long-
+        // standing behaviour.
+        if (!HasGrammar)
+        {
+            return NativeMethods.llama_sampler_sample(
+                _handle.DangerousHandle,
+                context.Handle.DangerousHandle,
+                idx);
+        }
+
+        // Grammar path: manual apply/select/validate/accept. Mirrors
+        // common_sampler_sample in llama.cpp's common/sampling.cpp.
+        var ctxPtr   = context.Handle.DangerousHandle;
+        var logits   = NativeMethods.llama_get_logits_ith(ctxPtr, idx);
+        if (logits == null)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_get_logits_ith),
+                $"llama_get_logits_ith returned NULL for idx={idx}.");
+        }
+
+        int nVocab = context.Model.Vocab.TokenCount;
+        var cur = new llama_token_data[nVocab];
+        InitCandidates(cur, logits, nVocab);
+
+        fixed (llama_token_data* curPtr = cur)
+        {
+            var arr = MakeArray(curPtr, nVocab);
+
+            // 1) Apply chain (no grammar) and take the chain's pick.
+            NativeMethods.llama_sampler_apply(_handle.DangerousHandle, &arr);
+            int firstId = SelectedTokenId(ref arr);
+
+            // 2) Validate pick against grammar on a single-token array.
+            var single = new llama_token_data { id = firstId, logit = 1.0f, p = 0.0f };
+            var singleArr = new llama_token_data_array
+            {
+                data     = (IntPtr)(&single),
+                size     = 1,
+                selected = -1,
+                sorted   = false,
+            };
+            NativeMethods.llama_sampler_apply(GrammarSampler, &singleArr);
+            bool valid = !float.IsNegativeInfinity(single.logit);
+
+            int chosenId;
+            if (valid)
+            {
+                chosenId = firstId;
+            }
+            else
+            {
+                // 3) Resample with grammar first. Re-fill candidates from
+                // the raw logits so we're not working off chain-mutated state.
+                InitCandidates(cur, logits, nVocab);
+                arr = MakeArray(curPtr, nVocab);
+                NativeMethods.llama_sampler_apply(GrammarSampler, &arr);
+                NativeMethods.llama_sampler_apply(_handle.DangerousHandle, &arr);
+                chosenId = SelectedTokenId(ref arr);
+            }
+
+            // 4) Accept into BOTH grammar and chain. Grammar's accept handles
+            // EOG specially (no-op) so it's safe regardless of whether
+            // chosenId is EOG.
+            NativeMethods.llama_sampler_accept(GrammarSampler, chosenId);
+            NativeMethods.llama_sampler_accept(_handle.DangerousHandle, chosenId);
+            return chosenId;
+        }
+    }
+
+    private static unsafe void InitCandidates(llama_token_data[] cur, float* logits, int n)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            cur[i] = new llama_token_data { id = i, logit = logits[i], p = 0.0f };
+        }
+    }
+
+    private static unsafe llama_token_data_array MakeArray(llama_token_data* data, int size) =>
+        new llama_token_data_array
+        {
+            data     = (IntPtr)data,
+            size     = (nuint)size,
+            selected = -1,
+            sorted   = false,
+        };
+
+    private static unsafe int SelectedTokenId(ref llama_token_data_array arr)
+    {
+        if (arr.selected < 0 || (nuint)arr.selected >= arr.size)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_sampler_apply),
+                $"sampler_apply produced no selected token (selected={arr.selected}, size={arr.size}).");
+        }
+        return ((llama_token_data*)arr.data)[arr.selected].id;
     }
 
     /// <summary>
@@ -74,7 +185,7 @@ public sealed class LlamaSampler : IDisposable
     }
 
     /// <summary>True if this sampler includes a grammar stage (either <see cref="LlamaSamplerBuilder.WithGrammar"/> or <see cref="LlamaSamplerBuilder.WithLazyGrammar"/>).</summary>
-    public bool HasGrammar => GrammarSubSampler != IntPtr.Zero;
+    public bool HasGrammar => GrammarSampler != IntPtr.Zero;
 
     /// <summary>
     /// Check whether the current grammar state permits any non-EOG token.
@@ -129,7 +240,7 @@ public sealed class LlamaSampler : IDisposable
                 selected = -1,
                 sorted   = false,
             };
-            NativeMethods.llama_sampler_apply(GrammarSubSampler, &arr);
+            NativeMethods.llama_sampler_apply(GrammarSampler, &arr);
 
             // Scan for any finite-logit non-EOG token. If found, grammar
             // still permits more content. The array's size / pointer may
@@ -295,6 +406,16 @@ public sealed class LlamaSampler : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // We own the grammar sub-sampler because it's NOT part of the chain.
+        // Chain's own dispose won't free it; we have to. Free it BEFORE the
+        // chain in case any chain teardown step wants to reference vocab
+        // pointers the grammar may indirectly touch.
+        if (GrammarSampler != IntPtr.Zero)
+        {
+            NativeMethods.llama_sampler_free(GrammarSampler);
+            GrammarSampler = IntPtr.Zero;
+        }
         _handle.Dispose();
     }
 }
@@ -622,6 +743,11 @@ public sealed class LlamaSamplerBuilder
             throw new ArgumentException("Start rule name must not be empty.", nameof(grammar));
         ThrowIfTerminalAdded();
 
+        if (_grammarSubSampler != IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                "A grammar has already been added to this sampler.");
+        }
         var sub = NativeMethods.llama_sampler_init_grammar(
             vocab.Handle, grammar.GbnfSource, grammar.StartRuleName);
         if (sub == IntPtr.Zero)
@@ -631,7 +757,9 @@ public sealed class LlamaSamplerBuilder
                 "llama_sampler_init_grammar returned NULL — likely a GBNF parse error. " +
                 "Check the grammar_str against llama.cpp's grammars/README.md.");
         }
-        _pending.Add(sub);
+        // Grammar is held separately from the chain. The built LlamaSampler
+        // will do rejection sampling: apply chain first, validate the picked
+        // token against grammar, resample with grammar-first if invalid.
         _grammarSubSampler = sub;
         return this;
     }
@@ -647,6 +775,11 @@ public sealed class LlamaSamplerBuilder
         if (string.IsNullOrEmpty(lazy.Grammar.GbnfSource))
             throw new ArgumentException("Grammar source must not be empty.", nameof(lazy));
         ThrowIfTerminalAdded();
+        if (_grammarSubSampler != IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                "A grammar has already been added to this sampler.");
+        }
 
         var patterns = lazy.TriggerPatterns ?? Array.Empty<string>();
         var tokens   = lazy.TriggerTokens   ?? Array.Empty<int>();
@@ -674,7 +807,7 @@ public sealed class LlamaSamplerBuilder
                             nameof(NativeMethods.llama_sampler_init_grammar_lazy_patterns),
                             "llama_sampler_init_grammar_lazy_patterns returned NULL — likely a GBNF parse error.");
                     }
-                    _pending.Add(sub);
+                    // Not added to _pending — grammar is held separately.
                     _grammarSubSampler = sub;
                 }
             }
@@ -767,10 +900,9 @@ public sealed class LlamaSamplerBuilder
         _pending.Clear();
         _hasTerminal = false;
 
-        var built = new LlamaSampler(SafeLlamaSamplerHandle.FromUnsafeHandle(chain))
-        {
-            GrammarSubSampler = _grammarSubSampler,
-        };
+        var built = new LlamaSampler(
+            SafeLlamaSamplerHandle.FromUnsafeHandle(chain),
+            grammar: _grammarSubSampler);
         _grammarSubSampler = IntPtr.Zero;
         return built;
     }

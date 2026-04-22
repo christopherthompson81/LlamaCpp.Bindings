@@ -6,7 +6,7 @@ public class GrammarBuilderTests : IClassFixture<ModelFixture>
     public GrammarBuilderTests(ModelFixture fx) => _fx = fx;
 
     [Fact]
-    public void Grammar_Adds_Non_Terminal_Stage()
+    public void Grammar_Is_Held_Separately_From_The_Chain()
     {
         if (_fx.Model is null) { _fx.SkipMessage(); return; }
 
@@ -15,7 +15,11 @@ public class GrammarBuilderTests : IClassFixture<ModelFixture>
             .WithTemperature(0.7f)
             .WithDistribution(seed: 1)
             .Build();
-        Assert.Equal(3, s.ChainLength);
+        // Grammar is NOT in the chain (rejection-sampling design).
+        // Chain stages: temperature + distribution. Grammar is owned
+        // separately and runs as a post-pick validator.
+        Assert.Equal(2, s.ChainLength);
+        Assert.True(s.HasGrammar);
     }
 
     [Fact]
@@ -46,7 +50,9 @@ public class GrammarBuilderTests : IClassFixture<ModelFixture>
                 TriggerTokens: Array.Empty<int>()))
             .WithGreedy()
             .Build();
-        Assert.Equal(2, s.ChainLength);
+        // Grammar held separately; chain only has greedy.
+        Assert.Equal(1, s.ChainLength);
+        Assert.True(s.HasGrammar);
     }
 }
 
@@ -87,22 +93,38 @@ public class GrammarGenerationTests
             $"grammar should constrain output to 'yes' or 'no'; got \"{output}\"");
     }
 
-    // NOTE: no JSON-mode generation test.
-    //
-    // The simple literal-choice grammar (yes/no) works end-to-end with the
-    // grammar-termination detection we just added. The bundled JSON grammar
-    // has trailing-ws productions that let the grammar accept arbitrary
-    // whitespace after a closed object — my IsGrammarSatisfied check
-    // correctly reports "still permits whitespace," so the generator keeps
-    // going, and at some point the native grammar engine hits an internal
-    // "empty stack" state not captured by the apply()-probe approach and
-    // throws.
-    //
-    // The remaining fix is probably to bind llama_grammar_free-style
-    // lifecycle helpers or to port more of the CLI's grammar-complete
-    // heuristics. Tracked as a follow-up in #10's comments; for now,
-    // complex grammars with trailing-ws productions should bound generation
-    // via maxTokens, not rely on grammar termination.
+    [Fact]
+    public async Task Json_Grammar_Produces_Parseable_Json()
+    {
+        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
+        _fx.Context.ClearKvCache();
+
+        // With the rejection-sampling design, grammar is held separately from
+        // the chain. This avoids the reject/accept disagreement in llama.cpp's
+        // grammar engine that crashed the host on complex grammars in the
+        // previous in-chain design.
+        using var sampler = new LlamaSamplerBuilder()
+            .WithTopK(40)
+            .WithTemperature(0.7f)
+            .WithGrammar(_fx.Model.Vocab, LlamaGrammar.Json)
+            .WithDistribution(seed: 123)
+            .Build();
+
+        var gen = new LlamaGenerator(_fx.Context, sampler);
+        var sb = new System.Text.StringBuilder();
+        await foreach (var p in gen.GenerateAsync(
+            "Emit a JSON object with a name and age. Output JSON only.\n",
+            maxTokens: 200, addSpecial: false, parseSpecial: false))
+        {
+            sb.Append(p);
+        }
+        var output = sb.ToString().Trim();
+        Assert.False(string.IsNullOrWhiteSpace(output),
+            "grammar-constrained generation produced empty output");
+
+        using var doc = System.Text.Json.JsonDocument.Parse(output);
+        Assert.NotNull(doc);
+    }
 
     [Fact]
     public void IsGrammarSatisfied_Is_False_On_Non_Grammar_Sampler()
