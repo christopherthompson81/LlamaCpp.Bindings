@@ -35,8 +35,13 @@ public sealed record SamplerSettings
     public int DryPenaltyLastN { get; init; } = -1;
 
     // --- Repetition penalties ---
+    // PenaltyRepeat defaults to 1.1 (matching samples/LlamaChat). 1.0 is the
+    // identity and disables the stage; a value that low lets the model fall
+    // into trivial loops ("1. [1]", "2. [2]", ...) once it finds a repeatable
+    // pattern, with nothing to push it back out. 1.1 is a mild nudge that
+    // costs nothing on well-behaved generations.
     public int PenaltyLastN { get; init; } = 64;
-    public float PenaltyRepeat { get; init; } = 1.0f;
+    public float PenaltyRepeat { get; init; } = 1.1f;
     public float PenaltyFrequency { get; init; } = 0.0f;
     public float PenaltyPresence { get; init; } = 0.0f;
 

@@ -3,6 +3,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
+        xmlns:views="using:LlamaCpp.Bindings.LlamaChat.Views"
         mc:Ignorable="d"
         d:DesignWidth="1200" d:DesignHeight="800"
         x:Class="LlamaCpp.Bindings.LlamaChat.Views.MainWindow"
@@ -167,8 +168,7 @@
                                                                  Classes="sm muted"
                                                                  TextWrapping="Wrap" />
                                         </Expander>
-                                        <SelectableTextBlock Text="{Binding Content}"
-                                                             TextWrapping="Wrap" />
+                                        <views:MarkdownView Markdown="{Binding Content}" />
                                         <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
                                                    IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                     </StackPanel>

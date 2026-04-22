@@ -73,32 +73,26 @@ src/
 
 ### 3. Message rendering
 
-- [ ] **Markdown to HTML pipeline** — `src/lib/components/app/content/MarkdownContent.svelte` — remark + rehype with plugins:
-  - `remark-gfm` — GitHub-flavored markdown (tables, strikethrough, task lists)
-  - `remark-breaks` — soft line breaks → `<br>`
-  - `remark-math` — LaTeX delimiters `$$..$$` and `$...$`
-  - `remark-rehype` — AST conversion
-  - `rehype-highlight` — syntax highlighting with highlight.js
-  - `rehype-katex` — LaTeX math rendering
-  - `rehype-stringify` — HTML output
-- [ ] **Custom rehype plugins** — defined in `src/lib/markdown/`:
-  - `enhance-code-blocks.ts` — adds copy button, language label, preview icon
-  - `enhance-links.ts` — wraps links in tooltip / external-link icon
-  - `resolve-attachment-images.ts` — remaps image URLs to uploaded attachment paths
-  - `table-html-restorer.ts` — preserves GFM table HTML structure
-  - `literal-html.ts` — sanitizes embedded HTML blocks
-- [ ] **KaTeX math rendering** — `rehype-katex` plugin, CSS from `node_modules/katex/dist/fonts` (inlined at build via vite `MAX_ASSET_SIZE = 32000`), custom styles in `src/styles/katex-custom.scss`
-- [ ] **Syntax highlighting theme switching** — `MarkdownContent.svelte` — imports both `github-dark.css` and `github.css` from highlight.js, applies via `mode-watcher` (dark/light)
-- [ ] **Code block copy button** — `src/lib/components/app/actions/ActionIconsCodeBlock.svelte`, `ChatFormActions.svelte` — icon button, tooltip, click copies to clipboard via `copyCodeToClipboard()` utility
-- [ ] **Code block preview/expand** — `DialogCodePreview.svelte` — dialog with full code display, syntax highlighting, copy button
-- [ ] **Incomplete code block detection** — `detectIncompleteCodeBlock()` utility in `src/lib/utils/index.ts` — handles streaming code blocks (missing closing fence)
-- [ ] **Image display from attachments** — `resolve-attachment-images.ts` rehype plugin — resolves image URLs from `ChatUploadedFile[]`, shows file attachments in message
-- [ ] **Image error fallback** — `getImageErrorFallbackHtml()` utility — fallback SVG/text if image fails to load
-- [ ] **GFM tables** — `table-html-restorer.ts` — parses GFM markdown tables, preserves `<table>` HTML structure
-- [ ] **Footnotes** — Not explicitly visible in codebase; remark plugins don't include footnote support in current snapshot
-- [ ] **Mermaid diagrams** — Not found in markdown pipeline; no mermaid plugin configured
-- [ ] **Streaming cursor/indicator** — `ChatMessageAssistant.svelte` — appends blinking `<span class="cursor"></span>` during streaming with Tailwind animation
-- [ ] **HTML sanitization** — `literal-html.ts` rehype plugin — rejects script/iframe/onload, allows safe HTML tags
+- [x] **Markdown pipeline** — Markdig → Avalonia control tree, no HTML intermediate (no WebView on Avalonia). Implemented in `Services/MarkdownRenderer.cs`. Pipeline uses:
+  - `UseEmphasisExtras()` — strikethrough via `~~...~~`, sub/sup
+  - `UseAutoLinks()` — bare URLs render as styled links
+  - `UsePipeTables()` — GFM tables via `Markdig.Extensions.Tables`
+  - `UseTaskLists()` — `[ ]` / `[x]` rendered with `☐`/`☑` glyph markers
+- [x] **Block-level coverage** — paragraphs, ATX headings (h1-h3 distinct sizes, h4+ body-weight), bullet/ordered lists with configurable start index, blockquotes (3px left border + 85% opacity), fenced + indented code blocks, thematic breaks, pipe tables (bordered Grid).
+- [x] **Inline-level coverage** — Literal, CodeInline (monospace run w/ CodeBackground), EmphasisInline (bold/italic), strikethrough via `TextDecorations`, LinkInline + AutolinkInline (coloured Ring + underline — inert in v1), LineBreak, HtmlInline (raw tag shown as text = no HTML passthrough), HtmlEntityInline.
+- [ ] **KaTeX math rendering** — deferred. Strategy: keep a LaTeX→SkiaSharp or LaTeX→bitmap converter and replace `$...$` spans with `InlineUIContainer` holding the bitmap.
+- [ ] **Syntax highlighting** — deferred. Candidates: `ColorCode.Universal` (NuGet, language-aware tokeniser) or `TextMateSharp` (grammar-based, matches VS Code). Code blocks currently render plain monospace on `CodeBackground`.
+- [ ] **Code-block copy button** — deferred. Place a ghost-variant icon button in the code-block header (language row); uses `TopLevel.Clipboard`.
+- [ ] **Code-block preview/expand dialog** — deferred.
+- [x] **Incomplete code block / mid-stream robustness** — `Markdown.Parse` is wrapped in `try`; if parsing fails (e.g. unclosed fence mid-stream) we fall back to showing the raw text in a `TextBlock` instead of leaving the bubble blank. Markdig actually tolerates most mid-stream cases — the try is belt-and-braces.
+- [ ] **Image display from attachments** — deferred with multimodal input.
+- [ ] **Image error fallback** — deferred with the above.
+- [x] **GFM tables** — rendered as a bordered Grid with Auto columns. Header row detected via Markdig's `TableRow.IsHeader`, emitted SemiBold.
+- [ ] **Footnotes** — deferred (not in v1 `MarkdownPipelineBuilder` extensions; webui doesn't support them either).
+- [ ] **Mermaid diagrams** — deferred (no equivalent native renderer; would need a SkiaSharp implementation).
+- [ ] **Streaming cursor/indicator** — deferred (no blinking caret yet; `IsStreaming` flag is available in the VM for when we add one).
+- [x] **HTML sanitisation** — inert by construction: `HtmlInline` renders the raw tag string as literal text, so injected `<script>` etc. never becomes a control.
+- [x] **Streaming-safe re-render throttling** — `MarkdownView` coalesces property changes through a 40ms `DispatcherTimer` debounce to avoid thrashing the layout pass on every decoded token (~8ms intervals at 120 tok/s → ~4-5 tokens per render).
 
 ### 4. Message actions
 
