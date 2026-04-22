@@ -383,6 +383,34 @@ internal static partial class NativeMethods
         float penalty_freq,
         float penalty_present);
 
+    // ----- Sampler introspection (Tier 1 expansion) -----
+    //
+    // llama_sampler_chain_get returns a pointer INTO the chain; the pointer
+    // is NOT owned by the caller and must not be freed. We don't expose it
+    // directly as a managed type for that reason — sub-sampler introspection
+    // goes through GetChainStageName(index) which calls chain_get + sampler_name
+    // in sequence without handing back the raw pointer.
+    //
+    // llama_sampler_apply and llama_sampler_chain_remove remain deliberately
+    // unbound:
+    //   - apply needs llama_token_data_array mirroring (Tier-2 custom sampling)
+    //   - chain_remove transfers ownership back to caller (free hazard)
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_name(IntPtr smpl);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_clone(IntPtr smpl);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_sampler_chain_n(IntPtr chain);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_chain_get(IntPtr chain, int i);
+
+    [LibraryImport(LibName)]
+    internal static partial uint llama_sampler_get_seed(IntPtr smpl);
+
     // ----- Memory / KV cache (Phase 4) -----
     //
     // Note: in this pinned version the KV cache is reached via an opaque

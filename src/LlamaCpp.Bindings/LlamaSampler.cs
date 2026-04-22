@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using LlamaCpp.Bindings.Native;
 using LlamaCpp.Bindings.Native.SafeHandles;
 
@@ -62,6 +63,117 @@ public sealed class LlamaSampler : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         NativeMethods.llama_sampler_reset(_handle.DangerousHandle);
+    }
+
+    /// <summary>
+    /// Short identifier for the sampler's type (e.g., <c>"chain"</c>, <c>"top-k"</c>,
+    /// <c>"dist"</c>). For chains built by <see cref="LlamaSamplerBuilder"/> this
+    /// is always <c>"chain"</c>; use <see cref="GetChainStageName"/> to inspect
+    /// the inner stages.
+    /// </summary>
+    public string Name
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var ptr = NativeMethods.llama_sampler_name(_handle.DangerousHandle);
+            return ptr == IntPtr.Zero ? string.Empty : (Marshal.PtrToStringUTF8(ptr) ?? string.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Number of stages in this sampler chain. Returns 0 for non-chain samplers
+    /// (should not happen via <see cref="LlamaSamplerBuilder"/>, which always
+    /// produces chains — this exists for defensive inspection).
+    /// </summary>
+    public int ChainLength
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return NativeMethods.llama_sampler_chain_n(_handle.DangerousHandle);
+        }
+    }
+
+    /// <summary>
+    /// Name of the sampler stage at position <paramref name="index"/> within the
+    /// chain (e.g., <c>"top-k"</c>, <c>"temp"</c>, <c>"dist"</c>). Returns null
+    /// if the index is out of range or this sampler isn't a chain.
+    /// </summary>
+    /// <remarks>
+    /// Only returns the name, not a handle to the stage — sub-sampler pointers
+    /// are owned by the chain and must never be freed by the caller, so we
+    /// deliberately don't surface them as managed objects.
+    /// </remarks>
+    public string? GetChainStageName(int index)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (index < 0 || index >= ChainLength) return null;
+        var sub = NativeMethods.llama_sampler_chain_get(_handle.DangerousHandle, index);
+        if (sub == IntPtr.Zero) return null;
+        var ptr = NativeMethods.llama_sampler_name(sub);
+        return ptr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(ptr);
+    }
+
+    /// <summary>
+    /// Ordered list of stage names in this chain. Convenience wrapper over
+    /// <see cref="GetChainStageName"/>.
+    /// </summary>
+    public IReadOnlyList<string> ChainStageNames
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var n = ChainLength;
+            if (n <= 0) return Array.Empty<string>();
+            var names = new string[n];
+            for (int i = 0; i < n; i++)
+            {
+                names[i] = GetChainStageName(i) ?? "?";
+            }
+            return names;
+        }
+    }
+
+    /// <summary>
+    /// RNG seed for this sampler's stochastic stages, or <c>null</c> if the
+    /// sampler is deterministic (e.g., a chain ending in <c>greedy</c>).
+    /// </summary>
+    /// <remarks>
+    /// llama.cpp returns <c>LLAMA_DEFAULT_SEED</c> (<c>0xFFFFFFFF</c>) for
+    /// samplers without a seeded component — we translate that sentinel to
+    /// <c>null</c>. Note the edge case: if you deliberately chose
+    /// <c>0xFFFFFFFF</c> as your seed, this property reports null. In
+    /// practice nobody does.
+    /// </remarks>
+    public uint? Seed
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var seed = NativeMethods.llama_sampler_get_seed(_handle.DangerousHandle);
+            return seed == 0xFFFFFFFFu ? null : seed;
+        }
+    }
+
+    /// <summary>
+    /// Produce a new sampler that is a deep copy of this one, including all
+    /// per-step state (penalty histories, RNG position, etc.). Useful for
+    /// branching during speculative decoding, or snapshotting before an
+    /// experimental sampling attempt. The clone is independent: disposing
+    /// this sampler does not affect the clone and vice versa.
+    /// </summary>
+    public LlamaSampler Clone()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var raw = NativeMethods.llama_sampler_clone(_handle.DangerousHandle);
+        if (raw == IntPtr.Zero)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_sampler_clone),
+                "llama_sampler_clone returned NULL.");
+        }
+        return new LlamaSampler(SafeLlamaSamplerHandle.FromUnsafeHandle(raw));
     }
 
     public void Dispose()
