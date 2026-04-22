@@ -100,6 +100,15 @@ public sealed class LlamaGenerator
         cancellationToken.ThrowIfCancellationRequested();
         await Task.Run(() => DecodePromptBatch(promptArray), cancellationToken).ConfigureAwait(false);
 
+        // Prime the sampler chain with prompt tokens. Mirrors llama.cpp's
+        // common_sampler_accept(.., accept_grammar=false) for prompt tokens:
+        // penalties (and any other history-aware sampler) must see the prompt
+        // so they treat repetition of prompt words as repetition. Grammar is
+        // intentionally NOT primed here — it only constrains generation, and
+        // since e1423ef the grammar is held outside the chain, so this loop
+        // can't accidentally touch it.
+        foreach (var t in promptArray) _sampler.Accept(t);
+
         // 2) Sampling loop. At each step: sample one token from the logits of
         //    the last decoded position; accept it into sampler state; exit on
         //    EOG; otherwise decode the single-token batch and emit the piece.

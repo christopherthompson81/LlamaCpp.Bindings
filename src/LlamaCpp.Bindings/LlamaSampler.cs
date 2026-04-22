@@ -551,7 +551,11 @@ public sealed class LlamaSamplerBuilder
     /// <param name="dryBase">Penalty curve base. <c>1.75</c> is a typical default.</param>
     /// <param name="allowedLength">Pattern length tolerated before penalty kicks in.</param>
     /// <param name="penaltyLastN">Look-back window. <c>-1</c> = full context.</param>
-    /// <param name="sequenceBreakers">Strings that reset DRY's internal pattern tracker (e.g., newline, period). Null = defaults.</param>
+    /// <param name="sequenceBreakers">
+    /// Strings that reset DRY's internal pattern tracker (e.g., newline, period).
+    /// Null = mirror llama-completion's default set <c>["\n", ":", "\"", "*"]</c>.
+    /// Pass <see cref="Array.Empty{T}"/> for no breakers (DRY tracks across the whole stream).
+    /// </param>
     public LlamaSamplerBuilder WithDry(
         LlamaVocab vocab,
         int contextTrainSize,
@@ -564,7 +568,12 @@ public sealed class LlamaSamplerBuilder
         ArgumentNullException.ThrowIfNull(vocab);
         ThrowIfTerminalAdded();
 
-        var breakers = sequenceBreakers ?? Array.Empty<string>();
+        // Default to llama-completion's set so users get matching behavior
+        // unless they ask for something else. Differential testing surfaced
+        // long-generation divergence (binding vs llama-completion) traced
+        // directly to this default mismatch — see
+        // docs/differential_test_investigation.md.
+        var breakers = sequenceBreakers ?? new[] { "\n", ":", "\"", "*" };
         var handles = new IntPtr[breakers.Count];
         try
         {

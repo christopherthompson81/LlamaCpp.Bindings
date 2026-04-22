@@ -128,6 +128,107 @@ public class GenerationTests
     }
 
     [Fact]
+    public async Task Penalty_Sampler_Sees_Prompt_Tokens_Tinyllama_Reference()
+    {
+        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
+        // Reference output is captured against this exact build of TinyLlama
+        // (Q4_K_M, CPU). Other LLaMA-family models or Qwen would produce
+        // different tokens and the assertion would fire spuriously. The
+        // universal regression check for this class is the differential
+        // harness at tools/diff-against-llama-completion.sh; this single-
+        // canary test exists so the bug class can't silently regress in CI
+        // when LLAMACPP_TEST_MODEL points at TinyLlama.
+        if (_fx.Capabilities.SkipUnlessFamily("llama")) return;
+        if (_fx.Capabilities.SkipUnlessLoaded()) return;
+        if (_fx.Capabilities.ParameterCount > 2_000_000_000)
+        {
+            Console.WriteLine($"SKIP: reference captured for ~1.1B model; got {_fx.Capabilities.DisplayLabel}.");
+            return;
+        }
+
+        // Regression for: prompt tokens were not Accept()ed into the sampler
+        // chain, so a repeat-penalty sampler started with empty history and
+        // didn't penalize repetition of words *from the prompt*. Surfaced by
+        // differential test against llama-completion; see
+        // docs/differential_test_investigation.md.
+        //
+        // Reference captured by:
+        //   tools/diff-against-llama-completion.sh \
+        //     --max-tokens 15 --temp 0.7 --top-k 40 --top-p 0.95 --min-p 0.05 \
+        //     --repeat-penalty 1.5 --seed 42
+        // -> MATCH between binding and llama-completion at the byte sequence
+        //    below. Without the prompt-prime fix in LlamaGenerator, the
+        //    binding produces a different sequence (penalty starts with empty
+        //    history) and the assertion fails.
+        const string Prompt = "The capital of France is";
+        const string Expected = " located in what city?\nAnswer: Paris, the French capital.";
+
+        _fx.ResetContextFor(Prompt);
+        using var sampler = new LlamaSamplerBuilder()
+            .WithPenalties(lastN: 64, repeat: 1.5f)
+            .WithTopK(40).WithTopP(0.95f).WithMinP(0.05f)
+            .WithTemperature(0.7f)
+            .WithDistribution(seed: 42)
+            .Build();
+        var gen = new LlamaGenerator(_fx.Context, sampler);
+        var sb = new System.Text.StringBuilder();
+        await foreach (var p in gen.GenerateAsync(
+            Prompt, maxTokens: 15, addSpecial: true, parseSpecial: false))
+        {
+            sb.Append(p);
+        }
+
+        Assert.Equal(Expected, sb.ToString());
+    }
+
+    [Fact]
+    public async Task Dry_Default_Sequence_Breakers_Match_Llama_Completion_Tinyllama_Reference()
+    {
+        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
+        if (_fx.Capabilities.SkipUnlessFamily("llama")) return;
+        if (_fx.Capabilities.ParameterCount > 2_000_000_000)
+        {
+            Console.WriteLine($"SKIP: reference captured for ~1.1B model; got {_fx.Capabilities.DisplayLabel}.");
+            return;
+        }
+
+        // Regression for: WithDry's default sequenceBreakers was empty, but
+        // llama-completion's default DRY breakers are ["\n", ":", "\"", "*"].
+        // The mismatch caused long-generation divergence between the binding
+        // and the reference whenever DRY was active. Captured reference here
+        // is the post-fix output, which equals llama-completion's output
+        // byte-for-byte. Surfaced by differential test;
+        // see docs/differential_test_investigation.md.
+        //
+        // Reference is the binding's GPU-fixture output for this config,
+        // captured AFTER the WithDry default-breakers fix landed. The
+        // upstream byte-equivalence (binding == llama-completion) is verified
+        // separately by tools/diff-against-llama-completion.sh on CPU; CUDA
+        // and CPU paths in llama.cpp produce different (but each
+        // deterministic) floating-point results, so this test pins the GPU
+        // output rather than the CPU reference.
+        const string Prompt = "The capital of France is";
+        const string Expected = " located in what city?\nAnswer: The capital of France is Paris.\nQuiz topic: Can you tell me the";
+
+        _fx.ResetContextFor(Prompt);
+        using var sampler = new LlamaSamplerBuilder()
+            .WithDry(_fx.Model.Vocab, _fx.Model.TrainingContextSize, multiplier: 1.0f)
+            .WithTopK(40).WithTopP(0.95f).WithMinP(0.05f)
+            .WithTemperature(0.7f)
+            .WithDistribution(seed: 42)
+            .Build();
+        var gen = new LlamaGenerator(_fx.Context, sampler);
+        var sb = new System.Text.StringBuilder();
+        await foreach (var p in gen.GenerateAsync(
+            Prompt, maxTokens: 25, addSpecial: true, parseSpecial: false))
+        {
+            sb.Append(p);
+        }
+
+        Assert.Equal(Expected, sb.ToString());
+    }
+
+    [Fact]
     public async Task Generation_Respects_Cancellation_Token()
     {
         if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
