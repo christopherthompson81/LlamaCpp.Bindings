@@ -74,16 +74,37 @@
 
         <!-- Sampling settings -->
         <Grid Grid.Row="2"
-              ColumnDefinitions="Auto,80,Auto,80,Auto,80"
+              ColumnDefinitions="Auto,150,Auto,150,Auto,150"
               Margin="0,12,0,6"
               ColumnSpacing="8"
               IsEnabled="{Binding !IsGenerating}">
-            <TextBlock Grid.Column="0" Text="Temp:" VerticalAlignment="Center"/>
-            <NumericUpDown Grid.Column="1" Value="{Binding Temperature}" Minimum="0" Maximum="2" Increment="0.1" FormatString="0.0"/>
-            <TextBlock Grid.Column="2" Text="Seed:" VerticalAlignment="Center"/>
-            <NumericUpDown Grid.Column="3" Value="{Binding Seed}" Minimum="0" Maximum="9999"/>
-            <TextBlock Grid.Column="4" Text="Max:" VerticalAlignment="Center"/>
-            <NumericUpDown Grid.Column="5" Value="{Binding MaxTokens}" Minimum="16" Maximum="8192" Increment="64"/>
+            <TextBlock Grid.Column="0"
+                       Text="Temp:"
+                       VerticalAlignment="Center"
+                       ToolTip.Tip="Sampling temperature. 0 = greedy (most likely token). 0.7 is a good default for chat. Higher values flatten the probability distribution and make output more varied."/>
+            <NumericUpDown Grid.Column="1"
+                           Value="{Binding Temperature}"
+                           Minimum="0" Maximum="2" Increment="0.1"
+                           FormatString="0.0"
+                           ToolTip.Tip="Sampling temperature. 0 = greedy (most likely token). 0.7 is a good default for chat. Higher values flatten the probability distribution and make output more varied."/>
+            <TextBlock Grid.Column="2"
+                       Text="Seed:"
+                       VerticalAlignment="Center"
+                       ToolTip.Tip="RNG seed for stochastic sampling. Same seed + same prompt + same sampler = reproducible output (on CUDA with MoE models, only seeded sampling is truly reproducible; greedy can drift)."/>
+            <NumericUpDown Grid.Column="3"
+                           Value="{Binding Seed}"
+                           Minimum="0" Maximum="999999" Increment="1"
+                           FormatString="0"
+                           ToolTip.Tip="RNG seed for stochastic sampling. Same seed + same prompt + same sampler = reproducible output."/>
+            <TextBlock Grid.Column="4"
+                       Text="Max tokens:"
+                       VerticalAlignment="Center"
+                       ToolTip.Tip="Maximum tokens generated per turn. A safety cap, not a target — generation stops earlier when the model emits an end-of-turn token. Increase if the model is getting cut off mid-sentence."/>
+            <NumericUpDown Grid.Column="5"
+                           Value="{Binding MaxTokens}"
+                           Minimum="16" Maximum="8192" Increment="64"
+                           FormatString="0"
+                           ToolTip.Tip="Maximum tokens generated per turn. A safety cap, not a target — generation stops earlier when the model emits an end-of-turn token."/>
         </Grid>
 
         <!-- Input row + status -->

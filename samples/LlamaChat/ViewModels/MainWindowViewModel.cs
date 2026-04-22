@@ -51,14 +51,17 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
     private string _userInput = string.Empty;
 
+    // NumericUpDown's Value is decimal? — binding to float/int/uint silently
+    // fails to display anything. Use decimal as the bindable type and cast
+    // at point of use (sampler build).
     [ObservableProperty]
-    private float _temperature = 0.7f;
+    private decimal _temperature = 0.7m;
 
     [ObservableProperty]
-    private uint _seed = 42;
+    private decimal _seed = 42m;
 
     [ObservableProperty]
-    private int _maxTokens = 512;
+    private decimal _maxTokens = 512m;
 
     public ObservableCollection<ChatMessageViewModel> Messages { get; } = new();
 
@@ -201,15 +204,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 .WithTopK(40)
                 .WithTopP(0.9f)
                 .WithMinP(0.05f)
-                .WithTemperature(Temperature)
-                .WithDistribution(Seed)
+                .WithTemperature((float)Temperature)
+                .WithDistribution((uint)Seed)
                 .Build();
 
             var generator = new LlamaGenerator(LoadedContext, sampler);
 
             await foreach (var piece in generator.GenerateAsync(
                 renderedPrompt,
-                maxTokens: MaxTokens,
+                maxTokens: (int)MaxTokens,
                 addSpecial: false,
                 parseSpecial: true,
                 cancellationToken: _generationCts.Token))
