@@ -185,6 +185,73 @@ public sealed class LlamaContext : IDisposable
         return NativeMethods.llama_memory_can_shift(Memory());
     }
 
+    /// <summary>
+    /// Shift every token position in <paramref name="sequenceId"/> in range
+    /// <c>[fromPosition, toPosition)</c> by <paramref name="delta"/>. Delta
+    /// may be negative to shift positions earlier.
+    /// </summary>
+    /// <remarks>
+    /// The canonical use is sliding-window truncation: drop the oldest K
+    /// tokens with <see cref="RemoveSequenceRange"/>, then call this with
+    /// <c>(fromPosition = K, toPosition = -1, delta = -K)</c> to renumber
+    /// the surviving tokens back to starting at 0. Requires the memory
+    /// backend to support shifts — check <see cref="SupportsPositionShift"/>
+    /// first on exotic quantised-KV configurations.
+    /// </remarks>
+    public void ShiftSequencePositions(
+        int sequenceId, int fromPosition, int toPosition, int delta)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        EnsureBackendSupportsShift(nameof(ShiftSequencePositions));
+        NativeMethods.llama_memory_seq_add(Memory(), sequenceId, fromPosition, toPosition, delta);
+    }
+
+    /// <summary>
+    /// Divide every token position in range <c>[fromPosition, toPosition)</c>
+    /// of <paramref name="sequenceId"/> by <paramref name="divisor"/>. Rarely
+    /// useful — enables aggressive schemes that re-map positions onto a
+    /// coarser grid. <paramref name="divisor"/> must be ≥ 1.
+    /// </summary>
+    public void DivideSequencePositions(
+        int sequenceId, int fromPosition, int toPosition, int divisor)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (divisor < 1) throw new ArgumentOutOfRangeException(nameof(divisor), "must be ≥ 1");
+        EnsureBackendSupportsShift(nameof(DivideSequencePositions));
+        NativeMethods.llama_memory_seq_div(Memory(), sequenceId, fromPosition, toPosition, divisor);
+    }
+
+    /// <summary>
+    /// Both <see cref="ShiftSequencePositions"/> and
+    /// <see cref="DivideSequencePositions"/> assert at the native level on
+    /// MRope/IMRope models and other configurations where
+    /// <c>n_pos_per_embd() &gt; 1</c>. The native assert is a process-level
+    /// abort — we refuse to make the call if we know it's going to fail.
+    /// </summary>
+    private void EnsureBackendSupportsShift(string callerName)
+    {
+        if (!NativeMethods.llama_memory_can_shift(Memory()))
+        {
+            throw new NotSupportedException(
+                $"{callerName} is not supported by this model's KV cache configuration " +
+                $"(llama_memory_can_shift returned false). Typical causes: multi-dimensional " +
+                $"position encodings (MRope/IMRope, used by Qwen3, some vision models), or " +
+                $"quantised KV caches that lack a shift implementation. Use " +
+                $"RemoveSequenceRange + re-decode to achieve truncation instead.");
+        }
+    }
+
+    /// <summary>
+    /// Ask llama.cpp to log a per-device memory-usage breakdown via its log
+    /// sink. Diagnostic tool — useful when diagnosing VRAM-overallocation
+    /// failures.
+    /// </summary>
+    public void LogMemoryBreakdown()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_memory_breakdown_print(_handle.DangerousHandle);
+    }
+
     // ----- Performance (Tier 1 expansion) -----
 
     /// <summary>

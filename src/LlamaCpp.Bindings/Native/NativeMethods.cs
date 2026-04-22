@@ -466,4 +466,21 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     [return: MarshalAs(UnmanagedType.I1)]
     internal static partial bool llama_memory_can_shift(IntPtr mem);
+
+    // ----- Extra memory ops (Tier 1 expansion) -----
+
+    // Add `delta` to every position in [p0, p1) for the given sequence.
+    // Used by sliding-window truncation: remove [0, k), then seq_add(k, inf, -k)
+    // to renumber surviving tokens back down to start at 0.
+    [LibraryImport(LibName)]
+    internal static partial void llama_memory_seq_add(IntPtr mem, int seq_id, int p0, int p1, int delta);
+
+    // Divide every position in [p0, p1) by `d`. Rarely used; enables aggressive
+    // compression schemes that re-map position ids onto a coarser grid.
+    [LibraryImport(LibName)]
+    internal static partial void llama_memory_seq_div(IntPtr mem, int seq_id, int p0, int p1, int d);
+
+    // Prints a per-device memory breakdown via llama.cpp's log sink. Diagnostic.
+    [LibraryImport(LibName)]
+    internal static partial void llama_memory_breakdown_print(IntPtr ctx);
 }
