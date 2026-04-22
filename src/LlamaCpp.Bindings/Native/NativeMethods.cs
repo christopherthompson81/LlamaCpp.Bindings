@@ -311,6 +311,22 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial int llama_decode(IntPtr ctx, llama_batch batch);
 
+    // Runs the encoder path on a batch (for encoder-decoder models). Return
+    // codes mirror llama_decode: 0 success, negative = error.
+    [LibraryImport(LibName)]
+    internal static partial int llama_encode(IntPtr ctx, llama_batch batch);
+
+    // Returns a pointer into the context's internal embedding buffer —
+    // valid until the next decode / encode call. Length is n_embd floats.
+    [LibraryImport(LibName)]
+    internal static unsafe partial float* llama_get_embeddings(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial float* llama_get_embeddings_ith(IntPtr ctx, int i);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial float* llama_get_embeddings_seq(IntPtr ctx, int seq_id);
+
     [LibraryImport(LibName)]
     internal static unsafe partial float* llama_get_logits_ith(IntPtr ctx, int i);
 

@@ -83,19 +83,48 @@ public sealed class LlamaContext : IDisposable
     // getter for advanced callers that land later.
 
     private IntPtr _memoryHandleCache = IntPtr.Zero;
+    private bool _memoryProbed;
+
+    /// <summary>
+    /// True when this context has an attached KV / recurrent memory.
+    /// Encoder-only models (BGE, reranker, T5 encoder) have no memory —
+    /// every call reads the input fresh. Calling <see cref="ClearKvCache"/>
+    /// or any other memory-dependent method on such a context is a no-op
+    /// rather than an error.
+    /// </summary>
+    public bool HasKvCache
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ProbeMemory();
+            return _memoryHandleCache != IntPtr.Zero;
+        }
+    }
+
+    /// <summary>
+    /// Get the native memory handle, or throw if this context has none
+    /// and the caller required memory. Internal: callers that can tolerate
+    /// memory-less contexts should branch on <see cref="HasKvCache"/>.
+    /// </summary>
     private IntPtr Memory()
     {
+        ProbeMemory();
         if (_memoryHandleCache == IntPtr.Zero)
         {
-            _memoryHandleCache = NativeMethods.llama_get_memory(_handle.DangerousHandle);
-            if (_memoryHandleCache == IntPtr.Zero)
-            {
-                throw new LlamaException(
-                    nameof(NativeMethods.llama_get_memory),
-                    "llama_get_memory returned NULL — this context has no attached memory.");
-            }
+            throw new LlamaException(
+                nameof(NativeMethods.llama_get_memory),
+                "This context has no attached KV cache (encoder-only model). " +
+                "Check HasKvCache before calling memory-dependent methods.");
         }
         return _memoryHandleCache;
+    }
+
+    private void ProbeMemory()
+    {
+        if (_memoryProbed) return;
+        _memoryHandleCache = NativeMethods.llama_get_memory(_handle.DangerousHandle);
+        _memoryProbed = true;
     }
 
     /// <summary>
@@ -111,6 +140,7 @@ public sealed class LlamaContext : IDisposable
     public void ClearKvCache(bool alsoClearData = true)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!HasKvCache) return; // encoder-only model — nothing to clear
         NativeMethods.llama_memory_clear(Memory(), alsoClearData);
     }
 
@@ -351,6 +381,121 @@ public sealed class LlamaContext : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         NativeMethods.llama_synchronize(_handle.DangerousHandle);
+    }
+
+    // ----- Embeddings (Tier 2 expansion) -----
+
+    /// <summary>
+    /// Per-token embedding for the <paramref name="tokenIndex"/>-th output of
+    /// the last decode, copied into a managed array. Returns null if the
+    /// index is invalid or the context wasn't configured for embeddings.
+    /// </summary>
+    /// <remarks>
+    /// Negative indices count from the end (<c>-1</c> = last output, just like
+    /// slicing in most languages).
+    /// </remarks>
+    public unsafe float[]? GetTokenEmbedding(int tokenIndex)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var ptr = NativeMethods.llama_get_embeddings_ith(_handle.DangerousHandle, tokenIndex);
+        if (ptr == null) return null;
+        int dim = _model.EmbeddingSize;
+        var copy = new float[dim];
+        new ReadOnlySpan<float>(ptr, dim).CopyTo(copy);
+        return copy;
+    }
+
+    /// <summary>
+    /// Pooled embedding for <paramref name="sequenceId"/>, copied into a
+    /// managed array. Returns null when the context's pooling mode is
+    /// <see cref="LlamaPoolingType.None"/> or the sequence has no output.
+    /// </summary>
+    /// <remarks>
+    /// For classifier / reranker models (pooling = Rank) the returned array
+    /// has length <see cref="LlamaModel.ClassifierOutputCount"/> instead of
+    /// <see cref="LlamaModel.EmbeddingSize"/>.
+    /// </remarks>
+    public unsafe float[]? GetSequenceEmbedding(int sequenceId = 0)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var ptr = NativeMethods.llama_get_embeddings_seq(_handle.DangerousHandle, sequenceId);
+        if (ptr == null) return null;
+        int dim = PoolingType == LlamaPoolingType.Rank
+            ? Math.Max(1, _model.ClassifierOutputCount)
+            : _model.EmbeddingSize;
+        var copy = new float[dim];
+        new ReadOnlySpan<float>(ptr, dim).CopyTo(copy);
+        return copy;
+    }
+
+    /// <summary>
+    /// Run the model's encoder tower over a batch of tokens. Only meaningful
+    /// for encoder-decoder models (<see cref="LlamaModel.HasEncoder"/> true —
+    /// T5 family). For decoder-only models use <see cref="EncodeForEmbedding"/>
+    /// or call into the decode path with embeddings mode enabled.
+    /// </summary>
+    /// <returns>Native status code. 0 = success, negative = error.</returns>
+    public unsafe int RunEncoder(ReadOnlySpan<int> tokens)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (tokens.IsEmpty) return 0;
+
+        var array = tokens.ToArray();
+        fixed (int* ptr = array)
+        {
+            var batch = NativeMethods.llama_batch_get_one(ptr, array.Length);
+            return NativeMethods.llama_encode(_handle.DangerousHandle, batch);
+        }
+    }
+
+    /// <summary>
+    /// Convenience: tokenize <paramref name="text"/>, enable embeddings mode,
+    /// decode it once (or run the encoder for encoder-decoder models), and
+    /// return the pooled sequence embedding. Useful for one-shot
+    /// retrieval/RAG workflows where you only need a single vector per input.
+    /// </summary>
+    /// <param name="text">Input text. Empty returns an empty array.</param>
+    /// <param name="addSpecial">Forward to Vocab.Tokenize.</param>
+    /// <param name="parseSpecial">Forward to Vocab.Tokenize.</param>
+    /// <returns>
+    /// The pooled embedding vector, or an empty array if the context doesn't
+    /// produce a sequence-pooled result (pooling = None).
+    /// </returns>
+    public unsafe float[] EncodeForEmbedding(
+        string text,
+        bool addSpecial = true,
+        bool parseSpecial = false)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Length == 0) return Array.Empty<float>();
+
+        SetEmbeddingsMode(true);
+        ClearKvCache();
+
+        var tokens = _model.Vocab.Tokenize(text, addSpecial, parseSpecial);
+
+        int rc;
+        fixed (int* tokPtr = tokens)
+        {
+            var batch = NativeMethods.llama_batch_get_one(tokPtr, tokens.Length);
+            // Encoder-decoder models: run encoder. Decoder-only: run decode
+            // with embeddings mode on — the hidden states land in the
+            // embedding buffer rather than logits.
+            rc = _model.HasEncoder
+                ? NativeMethods.llama_encode(_handle.DangerousHandle, batch)
+                : NativeMethods.llama_decode(_handle.DangerousHandle, batch);
+        }
+        if (rc != 0)
+        {
+            throw new LlamaException(
+                _model.HasEncoder ? nameof(NativeMethods.llama_encode) : nameof(NativeMethods.llama_decode),
+                rc,
+                "Embedding pass failed. Check the native log and the context's embeddings/pooling configuration.");
+        }
+
+        return GetSequenceEmbedding(0)
+            ?? Array.Empty<float>();
     }
 
     // ----- Performance (Tier 1 expansion) -----
