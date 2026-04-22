@@ -415,6 +415,20 @@ internal static partial class NativeMethods
     internal static unsafe partial IntPtr llama_sampler_init_logit_bias(
         int n_vocab, int n_logit_bias, llama_logit_bias* logit_bias);
 
+    // ----- Grammar sampling (Tier 2) -----
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr llama_sampler_init_grammar(
+        IntPtr vocab, string grammar_str, string grammar_root);
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial IntPtr llama_sampler_init_grammar_lazy_patterns(
+        IntPtr vocab,
+        string grammar_str,
+        string grammar_root,
+        IntPtr* trigger_patterns, nuint num_trigger_patterns,
+        int* trigger_tokens, nuint num_trigger_tokens);
+
     // ----- Sampler introspection (Tier 1 expansion) -----
     //
     // llama_sampler_chain_get returns a pointer INTO the chain; the pointer

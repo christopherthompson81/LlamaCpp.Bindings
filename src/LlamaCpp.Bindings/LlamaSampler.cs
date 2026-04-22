@@ -505,6 +505,111 @@ public sealed class LlamaSamplerBuilder
     }
 
     /// <summary>
+    /// Constrain sampling to strings accepted by a GBNF grammar. Generation
+    /// still flows one token at a time; the grammar runs per-step, masking
+    /// out any candidate that would violate the grammar. The canonical use
+    /// is forcing valid JSON via <see cref="LlamaGrammar.Json"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is a non-terminal sampler — you still need <c>.WithDistribution()</c>
+    /// or <c>.WithGreedy()</c> after it. Put it late in the chain so other
+    /// filters have already narrowed the candidate set; grammar parsing per
+    /// candidate is not free.
+    ///
+    /// <para><b>Process-crash warnings:</b></para>
+    /// <list type="bullet">
+    /// <item>llama.cpp's GBNF parser aborts the process on syntax errors
+    /// rather than returning NULL. An invalid grammar here will kill your
+    /// application. Validate grammars with llama.cpp's CLI
+    /// (<c>llama-cli --grammar-file ...</c>) before passing them here.</item>
+    /// <item>Once the grammar is fully satisfied (e.g., a complete JSON
+    /// object has been emitted), the sampler mask permits only EOG tokens.
+    /// If the sampler's terminal happens to pick a non-EOG token anyway
+    /// (rare but possible with certain ordering), the grammar engine throws
+    /// "Unexpected empty grammar stack after accepting piece" as a C++
+    /// exception that llama.cpp lets propagate — crashing the host. Mitigate
+    /// by (1) placing <see cref="WithGrammar"/> LATE in the chain so
+    /// truncation filters run first; (2) making grammars permissive enough
+    /// that they accept trailing whitespace / don't "complete" before EOG;
+    /// (3) using modest <c>maxTokens</c> when the grammar is intentionally
+    /// short so the process exits via <c>maxTokens</c> before the hazard.</item>
+    /// </list>
+    /// </remarks>
+    public LlamaSamplerBuilder WithGrammar(LlamaVocab vocab, LlamaGrammar grammar)
+    {
+        ArgumentNullException.ThrowIfNull(vocab);
+        if (string.IsNullOrEmpty(grammar.GbnfSource))
+            throw new ArgumentException("Grammar source must not be empty.", nameof(grammar));
+        if (string.IsNullOrEmpty(grammar.StartRuleName))
+            throw new ArgumentException("Start rule name must not be empty.", nameof(grammar));
+        ThrowIfTerminalAdded();
+
+        var sub = NativeMethods.llama_sampler_init_grammar(
+            vocab.Handle, grammar.GbnfSource, grammar.StartRuleName);
+        if (sub == IntPtr.Zero)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_sampler_init_grammar),
+                "llama_sampler_init_grammar returned NULL — likely a GBNF parse error. " +
+                "Check the grammar_str against llama.cpp's grammars/README.md.");
+        }
+        _pending.Add(sub);
+        return this;
+    }
+
+    /// <summary>
+    /// Lazy grammar that engages only when a trigger pattern or token is
+    /// seen. Use for tool-call style flows where free-form output should
+    /// switch into a structured schema mid-generation.
+    /// </summary>
+    public LlamaSamplerBuilder WithLazyGrammar(LlamaVocab vocab, LlamaLazyGrammar lazy)
+    {
+        ArgumentNullException.ThrowIfNull(vocab);
+        if (string.IsNullOrEmpty(lazy.Grammar.GbnfSource))
+            throw new ArgumentException("Grammar source must not be empty.", nameof(lazy));
+        ThrowIfTerminalAdded();
+
+        var patterns = lazy.TriggerPatterns ?? Array.Empty<string>();
+        var tokens   = lazy.TriggerTokens   ?? Array.Empty<int>();
+
+        var patternHandles = new IntPtr[patterns.Count];
+        try
+        {
+            for (int i = 0; i < patterns.Count; i++)
+            {
+                patternHandles[i] = Marshal.StringToCoTaskMemUTF8(patterns[i]);
+            }
+            var tokArr = tokens.ToArray();
+            unsafe
+            {
+                fixed (IntPtr* patPtr = patternHandles)
+                fixed (int* tokPtr = tokArr)
+                {
+                    var sub = NativeMethods.llama_sampler_init_grammar_lazy_patterns(
+                        vocab.Handle, lazy.Grammar.GbnfSource, lazy.Grammar.StartRuleName,
+                        patPtr, (nuint)patterns.Count,
+                        tokPtr, (nuint)tokArr.Length);
+                    if (sub == IntPtr.Zero)
+                    {
+                        throw new LlamaException(
+                            nameof(NativeMethods.llama_sampler_init_grammar_lazy_patterns),
+                            "llama_sampler_init_grammar_lazy_patterns returned NULL — likely a GBNF parse error.");
+                    }
+                    _pending.Add(sub);
+                }
+            }
+        }
+        finally
+        {
+            foreach (var h in patternHandles)
+            {
+                if (h != IntPtr.Zero) Marshal.FreeCoTaskMem(h);
+            }
+        }
+        return this;
+    }
+
+    /// <summary>
     /// Repetition / frequency / presence penalties. <paramref name="lastN"/>
     /// is the look-back window (<c>-1</c> = context size, <c>0</c> = disable).
     /// Values of 1.0 / 0.0 / 0.0 are the "off" defaults.
