@@ -444,6 +444,67 @@ public sealed class LlamaSamplerBuilder
     }
 
     /// <summary>
+    /// Non-terminal sampler that adds a per-token bias to logits before other
+    /// filters. Positive biases favour a token; negative biases suppress it;
+    /// <c>float.NegativeInfinity</c> effectively forbids it.
+    /// </summary>
+    /// <param name="vocab">Vocabulary this sampler will run against; supplies n_vocab.</param>
+    /// <param name="biases">(token, bias) pairs. Tokens must be valid for the given vocab.</param>
+    public LlamaSamplerBuilder WithLogitBias(
+        LlamaVocab vocab,
+        IReadOnlyList<(int Token, float Bias)> biases)
+    {
+        ArgumentNullException.ThrowIfNull(vocab);
+        ArgumentNullException.ThrowIfNull(biases);
+        ThrowIfTerminalAdded();
+
+        if (biases.Count == 0)
+        {
+            // A zero-bias list is a no-op; skip the native call rather than
+            // pass a null pointer and risk undefined behaviour.
+            return this;
+        }
+
+        var arr = new llama_logit_bias[biases.Count];
+        for (int i = 0; i < biases.Count; i++)
+        {
+            var (tok, bias) = biases[i];
+            if (tok < 0 || tok >= vocab.TokenCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(biases),
+                    $"token {tok} at index {i} is out of range [0, {vocab.TokenCount}).");
+            }
+            arr[i] = new llama_logit_bias { token = tok, bias = bias };
+        }
+
+        unsafe
+        {
+            fixed (llama_logit_bias* ptr = arr)
+            {
+                var sub = NativeMethods.llama_sampler_init_logit_bias(
+                    vocab.TokenCount, biases.Count, ptr);
+                _pending.Add(sub);
+            }
+        }
+        return this;
+    }
+
+    /// <summary>
+    /// Convenience overload: hard-forbid one or more tokens by applying
+    /// <c>float.NegativeInfinity</c> bias.
+    /// </summary>
+    public LlamaSamplerBuilder WithBannedTokens(LlamaVocab vocab, IEnumerable<int> tokens)
+    {
+        ArgumentNullException.ThrowIfNull(vocab);
+        ArgumentNullException.ThrowIfNull(tokens);
+        var list = tokens
+            .Select(t => (Token: t, Bias: float.NegativeInfinity))
+            .ToArray();
+        return WithLogitBias(vocab, list);
+    }
+
+    /// <summary>
     /// Repetition / frequency / presence penalties. <paramref name="lastN"/>
     /// is the look-back window (<c>-1</c> = context size, <c>0</c> = disable).
     /// Values of 1.0 / 0.0 / 0.0 are the "off" defaults.

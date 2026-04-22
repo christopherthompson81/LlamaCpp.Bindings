@@ -208,6 +208,16 @@ internal struct llama_perf_sampler_data
     public const int ExpectedSize = 16;
 }
 
+// llama_logit_bias: (token, bias) pair. 4 + 4 = 8 bytes, no padding.
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_logit_bias
+{
+    public int token;
+    public float bias;
+
+    public const int ExpectedSize = 8;
+}
+
 /// <summary>
 /// Struct layout assertions. Called once from <see cref="LlamaBackend"/>'s
 /// static constructor before any native call is made. If the native struct
@@ -225,6 +235,7 @@ internal static class NativeLayout
         Check<llama_sampler_chain_params>(llama_sampler_chain_params.ExpectedSize);
         Check<llama_perf_context_data>(llama_perf_context_data.ExpectedSize);
         Check<llama_perf_sampler_data>(llama_perf_sampler_data.ExpectedSize);
+        Check<llama_logit_bias>(llama_logit_bias.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct

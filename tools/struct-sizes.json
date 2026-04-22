@@ -74,5 +74,8 @@
     "sizeof_struct llama_perf_sampler_data": 16,
     "offsetof_struct llama_perf_sampler_data__t_sample_ms": 0,
     "offsetof_struct llama_perf_sampler_data__n_sample": 8,
+    "sizeof_struct llama_logit_bias": 8,
+    "offsetof_struct llama_logit_bias__token": 0,
+    "offsetof_struct llama_logit_bias__bias": 4,
     "_end": 0
 }

@@ -411,6 +411,10 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial IntPtr llama_sampler_init_infill(IntPtr vocab);
 
+    [LibraryImport(LibName)]
+    internal static unsafe partial IntPtr llama_sampler_init_logit_bias(
+        int n_vocab, int n_logit_bias, llama_logit_bias* logit_bias);
+
     // ----- Sampler introspection (Tier 1 expansion) -----
     //
     // llama_sampler_chain_get returns a pointer INTO the chain; the pointer

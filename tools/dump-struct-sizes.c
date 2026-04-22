@@ -105,6 +105,11 @@ int main(void) {
     OFF(struct llama_perf_sampler_data, t_sample_ms);
     OFF(struct llama_perf_sampler_data, n_sample);
 
+    // ----- llama_logit_bias -----
+    SZ(struct llama_logit_bias);
+    OFF(struct llama_logit_bias, token);
+    OFF(struct llama_logit_bias, bias);
+
     // Terminator to keep JSON valid without worrying about trailing comma.
     printf("    \"_end\": 0\n");
     printf("}\n");
