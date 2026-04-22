@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
+using LlamaCpp.Bindings.Jinja;
 using LlamaCpp.Bindings.Native;
 
 namespace LlamaCpp.Bindings;
@@ -96,6 +98,21 @@ public static class LlamaChatTemplate
             throw new ArgumentException("Chat template needs at least one message.", nameof(messages));
         }
 
+        // Prefer our own Jinja interpreter — it handles the Qwen3-family,
+        // DeepSeek, GLM, Kimi, etc. templates that llama.cpp's curated-matcher
+        // path mis-applies. Native fallback is retained for edge cases we
+        // haven't covered yet (e.g. exotic macros / inheritance).
+        try
+        {
+            return ApplyWithJinja(template, messages, addAssistantPrefix);
+        }
+        catch (JinjaException)
+        {
+            // Fall through to the native curated-matcher path. Swallowing
+            // silently is intentional — unusual templates that confuse us
+            // still often match one of llama.cpp's built-in recognisers.
+        }
+
         // Marshal every role/content as a UTF-8 null-terminated block, then
         // point llama_chat_message.role/content at them. The lifetimes must
         // strictly cover the native call; we release in the finally.
@@ -133,6 +150,44 @@ public static class LlamaChatTemplate
                 if (handles[i] != IntPtr.Zero) Marshal.FreeCoTaskMem(handles[i]);
             }
         }
+    }
+
+    /// <summary>
+    /// Compiled-template cache keyed by the raw template source. Model
+    /// templates are stable for the lifetime of a loaded model, so this is
+    /// effectively one entry per loaded model. Thread-safe by construction.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, JinjaTemplate> _jinjaCache = new();
+
+    private static string ApplyWithJinja(
+        string template,
+        IReadOnlyList<ChatMessage> messages,
+        bool addAssistantPrefix)
+    {
+        var compiled = _jinjaCache.GetOrAdd(template, JinjaTemplate.Parse);
+
+        var msgList = new List<object?>(messages.Count);
+        foreach (var m in messages)
+        {
+            msgList.Add(new Dictionary<string, object?>
+            {
+                ["role"] = m.Role,
+                ["content"] = m.Content,
+            });
+        }
+
+        var ctx = new Dictionary<string, object?>
+        {
+            ["messages"] = msgList,
+            ["add_generation_prompt"] = addAssistantPrefix,
+            // Conservative defaults for flags some templates branch on.
+            // Keeping enable_thinking unset lets the Qwen3 thinking-mode
+            // branch render (its default is "thinking on").
+            ["tools"] = null,
+            ["add_vision_id"] = false,
+        };
+
+        return compiled.Render(ctx);
     }
 
     private static unsafe string ApplyTemplateCore(

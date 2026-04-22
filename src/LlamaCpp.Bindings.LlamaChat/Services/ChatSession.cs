@@ -63,7 +63,30 @@ public sealed class ChatSession : IDisposable
             throw;
         }
 
-        return new ChatSession(model, context, model.GetChatTemplate());
+        var template = model.GetChatTemplate();
+        DumpChatTemplate(template);
+        return new ChatSession(model, context, template);
+    }
+
+    /// <summary>
+    /// Write the model's embedded chat template verbatim to a sibling of the
+    /// app's other config files, so it can be inspected when diagnosing
+    /// template-application issues. Silent on IO failure; this is debug
+    /// plumbing, not a load-path dependency.
+    /// </summary>
+    private static void DumpChatTemplate(string? template)
+    {
+        if (string.IsNullOrEmpty(template)) return;
+        try
+        {
+            var dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "LlamaChat");
+            System.IO.Directory.CreateDirectory(dir);
+            var path = System.IO.Path.Combine(dir, "last-template.jinja");
+            System.IO.File.WriteAllText(path, template);
+        }
+        catch { }
     }
 
     /// <summary>Drop the KV cache. Called when switching conversations.</summary>
@@ -91,7 +114,17 @@ public sealed class ChatSession : IDisposable
         using var llamaSampler = SamplerFactory.Build(_model, _model.Vocab, sampler);
         var generator = new LlamaGenerator(_context, llamaSampler);
 
-        var extractor = generation.ExtractReasoning ? new ReasoningExtractor() : null;
+        // Qwen3 / DeepSeek-R1 templates pre-open a <think> block at the end of
+        // the assistant prefix, so the stream arrives already inside reasoning.
+        // Prime the extractor to match. The "</think>\n\n" guard avoids the
+        // no-thinking case (enable_thinking=false renders an already-closed
+        // pair and we should stay in Content mode).
+        var startInReasoning =
+            prompt.EndsWith("<think>\n", StringComparison.Ordinal) &&
+            !prompt.EndsWith("</think>\n\n", StringComparison.Ordinal);
+        var extractor = generation.ExtractReasoning
+            ? new ReasoningExtractor(startInReasoning)
+            : null;
 
         var sw = Stopwatch.StartNew();
         var promptStartTicks = sw.ElapsedTicks;

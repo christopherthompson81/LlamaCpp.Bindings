@@ -24,6 +24,12 @@
             <TextBox Grid.Column="1" Text="{Binding Name}" />
         </Grid>
 
+        <TextBlock Classes="section" Text="System prompt" />
+        <TextBox Text="{Binding SystemPrompt}"
+                 AcceptsReturn="True" TextWrapping="Wrap"
+                 MinHeight="80" MaxHeight="240"
+                 PlaceholderText="Optional. Prepended as a system-role turn at the start of every reply." />
+
         <TextBlock Classes="section" Text="Model" />
         <Grid Classes="row" ColumnDefinitions="130,*,Auto">
             <TextBlock Grid.Column="0" Text="Model path" VerticalAlignment="Center" />

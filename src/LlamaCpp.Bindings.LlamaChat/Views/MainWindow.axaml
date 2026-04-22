@@ -151,7 +151,7 @@
             <!-- ================= Main (messages + compose) ================= -->
             <Grid Grid.Column="1" RowDefinitions="*,Auto" Margin="16,12,16,12">
 
-                <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Row="0" Name="ChatScroll" VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding SelectedConversation.Messages}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="vm:MessageViewModel">
@@ -173,7 +173,7 @@
                                             </Expander>
                                             <views:MarkdownView Markdown="{Binding Content}" />
                                             <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
-                                                       IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                       IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).AppSettings.ShowMessageStats}" />
 
                                             <!-- Action bar -->
                                             <StackPanel Orientation="Horizontal" Spacing="2" Margin="-6,4,-6,-4"

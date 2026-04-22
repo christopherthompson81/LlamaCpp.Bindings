@@ -10,6 +10,7 @@ namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 public partial class SettingsWindowViewModel : ObservableObject
 {
     public ObservableCollection<ProfileEditorViewModel> Profiles { get; }
+    public AppSettingsViewModel AppSettings { get; }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(DeleteProfileCommand), nameof(DuplicateProfileCommand))]
@@ -17,9 +18,12 @@ public partial class SettingsWindowViewModel : ObservableObject
 
     [ObservableProperty] private string _status = string.Empty;
 
-    public SettingsWindowViewModel(ObservableCollection<ProfileEditorViewModel> profiles)
+    public SettingsWindowViewModel(
+        ObservableCollection<ProfileEditorViewModel> profiles,
+        AppSettingsViewModel appSettings)
     {
         Profiles = profiles;
+        AppSettings = appSettings;
         SelectedProfile = profiles.Count > 0 ? profiles[0] : null;
     }
 
@@ -68,12 +72,20 @@ public partial class SettingsWindowViewModel : ObservableObject
         try
         {
             ProfileStore.Save(Profiles.Select(p => p.ToProfile()));
-            Status = $"Saved {Profiles.Count} profile(s) to {ProfileStore.StorePath}";
+            AppSettingsStore.Save(AppSettings.ToModel());
+            Status = $"Saved {Profiles.Count} profile(s) + app settings.";
         }
         catch (System.Exception ex)
         {
             Status = $"Save failed: {ex.Message}";
         }
+    }
+
+    [RelayCommand]
+    private void ResetSamplerDefaults()
+    {
+        SelectedProfile?.ResetSamplerDefaults();
+        Status = "Reset sampling to defaults.";
     }
 
     private bool HasSelection() => SelectedProfile is not null;

@@ -123,18 +123,18 @@ src/
 
 ### 6. Chat settings
 
-- [ ] **Settings sidebar panel** — `DialogChatSettings.svelte`, `ChatSettings.svelte` — modal dialog with tabbed sections, icon+title nav on left, content on right
-- [ ] **General tab** — `ChatSettings.svelte` section 1 — Theme, API Key, System Message, paste-long-text-to-file threshold, continue button toggle, PDF-as-image, title confirmation
-- [ ] **Display tab** — section 2 — show message stats, show thought-in-progress, disable auto-scroll, code block theme, copy attachments as plain text
-- [ ] **Sampling tab** — section 3 (icon: Funnel) — Temperature, Top-P, Top-K, Min-P, TFS-Z (tail-free sampling), Typical-P, frequency penalty, presence penalty, repeat penalty, repeat penalty range
-- [ ] **Advanced tab** — section 4 (icon: Code) — Seed, dynamic temperature, tokens to keep, penalty prompt, ignore EOS token, mirostat mode/tau/eta
-- [ ] **Tools/MCP tab** — section 5 (icon: MCP logo) — MCP server list, add/remove servers, connection status, resource browser
-- [ ] **System prompt tab** — shortcut link or separate editing modal, defaults from `config.systemMessage`
-- [ ] **Response format tab** — Not visible in current sampling/advanced tabs; may be server-specific
-- [ ] **Parameter sync source indicator** — `ChatSettingsParameterSourceIndicator.svelte` — badge showing "Server default", "User override", or "Session", tooltip explains inheritance
-- [ ] **Reset to defaults** — Settings page footer with reset buttons per section or global reset
-- [ ] **Settings persistence** — `settingsStore.svelte.ts`, localStorage key `config_v1` — auto-saves on change, loads on init
-- [ ] **User overrides tracking** — `settingsStore.svelte.ts` — tracks which settings have been manually changed (Set<string>) for UI indicators
+- [x] **Settings sidebar panel** — `SettingsWindow.axaml` — modal `ShowDialog(owner)`, left-placed tab strip with Profiles + Display. Header with "Settings" title, footer with Save/Close + status line.
+- [~] **General tab** — N/A shape. Theme/API-key/paste-threshold/PDF-as-image are web-only concerns; System Message promoted to its own section inside ProfileEditorView (per-profile instead of global). "Continue button" deferred with continue-generation itself.
+- [x] **Display tab** — three toggles, all wired: `AutoScroll`, `ShowMessageStats`, `ShowReasoningInProgress`. Code-block theme and copy-as-plain-text deferred until we add the code-block toolbar. `AppSettings` record + `AppSettingsStore` persist to `app-settings.json` alongside profiles.
+- [x] **Sampling tab** — already implemented in `Views/SamplerPanelView.axaml` (embedded inside ProfileEditorView): temperature + dynatemp, top-k/p, min-p, typical, top-n-σ, XTC, DRY, repetition/frequency/presence penalties.
+- [x] **Advanced tab** — merged with Sampling: seed, dynamic-temp range/exponent, mirostat v1/v2 + tau/eta, grammar (GBNF). "Tokens to keep" + "ignore EOS" deferred (both require LlamaGenerator API extensions).
+- [ ] **Tools/MCP tab** — deferred. MCP client support is a phase-2 item in `docs/webui_parity_investigation.md`.
+- [x] **System prompt** — per-profile multi-line TextBox at the top of the profile editor. Prepended to every transcript as a `TurnRole.System` turn when that profile is loaded.
+- [ ] **Response format tab** — deferred. GBNF slot exists on the profile; JSON-schema → GBNF conversion + preset templates is a separate task.
+- [ ] **Parameter sync source indicator** — N/A for the desktop model. Settings are local-only; there's no server-default/session-override hierarchy to visualise.
+- [x] **Reset to defaults** — `ResetSamplerDefaults` command on the Profiles tab footer restores `SamplerSettings.Default` + fresh `GenerationSettings` on the current profile. Load settings and system prompt are preserved.
+- [x] **Settings persistence** — three stores: `ProfileStore` (profiles.json), `AppSettingsStore` (app-settings.json), `ConversationStore` (conversations.json) — all under `$XDG_CONFIG_HOME/LlamaChat/`. Auto-save on dialog close; explicit Save button covers the in-dialog case.
+- [ ] **User overrides tracking** — deferred. Not meaningful without a server-default baseline to diff against.
 
 ### 7. Tool calling / MCP
 

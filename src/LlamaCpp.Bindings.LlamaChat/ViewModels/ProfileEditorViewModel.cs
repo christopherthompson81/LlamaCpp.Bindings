@@ -11,6 +11,7 @@ namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 public partial class ProfileEditorViewModel : ObservableObject
 {
     [ObservableProperty] private string _name = "New profile";
+    [ObservableProperty] private string _systemPrompt = string.Empty;
 
     // --- Load settings ---
     [ObservableProperty] private string _modelPath = string.Empty;
@@ -31,6 +32,7 @@ public partial class ProfileEditorViewModel : ObservableObject
     public ProfileEditorViewModel(ModelProfile profile)
     {
         Name = profile.Name;
+        SystemPrompt = profile.SystemPrompt;
         ModelPath = profile.Load.ModelPath;
         ContextSize = profile.Load.ContextSize;
         GpuLayerCount = profile.Load.GpuLayerCount;
@@ -59,10 +61,15 @@ public partial class ProfileEditorViewModel : ObservableObject
     public ModelProfile ToProfile() => new()
     {
         Name = Name,
+        SystemPrompt = SystemPrompt,
         Load = SnapshotLoad(),
         Sampler = SamplerPanel.SnapshotSampler(),
         Generation = SamplerPanel.SnapshotGeneration(),
     };
+
+    /// <summary>Reset the Sampling sub-panel to code defaults. Load settings are preserved.</summary>
+    public void ResetSamplerDefaults() =>
+        SamplerPanel.LoadFrom(SamplerSettings.Default, new GenerationSettings());
 
     public override string ToString() => Name;
 }

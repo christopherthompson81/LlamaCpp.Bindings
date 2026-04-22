@@ -1,22 +1,36 @@
+using System;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using LlamaCpp.Bindings.LlamaChat.ViewModels;
 
 namespace LlamaCpp.Bindings.LlamaChat.Views;
 
 public partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    private MainWindowViewModel? _vm;
+    private ConversationViewModel? _subscribedConv;
+    private readonly DispatcherTimer _streamScrollTimer;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        // While the assistant is streaming, poll the scroll-to-end every
+        // 100ms. Simpler than subscribing to PropertyChanged on the last
+        // assistant message's Content — and since the visual cost is trivial,
+        // not worth the per-event bookkeeping.
+        _streamScrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _streamScrollTimer.Tick += (_, _) => ScrollToEndIfEnabled();
+
+        DataContextChanged += OnDataContextChanged;
+    }
 
     // --- Compose (Enter sends; Shift+Enter newline) ---------------------
-
-    // Enter sends; Shift+Enter inserts a newline. The compose TextBox has
-    // AcceptsReturn="False" so its class handler never consumes Enter before
-    // us — we'd otherwise be shadowed because TextBox marks Enter handled
-    // during its own OnKeyDown before bubbling to attached handlers. We
-    // emulate Shift+Enter's newline ourselves by splicing at the caret.
     private void OnComposeKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || sender is not TextBox box) return;
@@ -40,10 +54,6 @@ public partial class MainWindow : Window
     }
 
     // --- Sidebar Ctrl+K focus-search ------------------------------------
-
-    // Handled here rather than in Window.KeyBindings because focusing a named
-    // element is a view-layer concern that shouldn't leak into the VM.
-    // Listens on the Window so the shortcut works regardless of current focus.
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.K && (e.KeyModifiers & KeyModifiers.Control) != 0)
@@ -61,9 +71,6 @@ public partial class MainWindow : Window
     }
 
     // --- Sidebar inline rename ------------------------------------------
-
-    // Focus + select-all when the rename TextBox first appears so the user
-    // can just start typing. AttachedToVisualTree fires once, after layout.
     private void OnRenameAttached(object? sender, VisualTreeAttachmentEventArgs e)
     {
         if (sender is TextBox box && box.IsVisible)
@@ -73,8 +80,6 @@ public partial class MainWindow : Window
         }
     }
 
-    // Enter / Escape commit or abort rename; click-away is handled by
-    // OnRenameLostFocus below.
     private void OnRenameKeyDown(object? sender, KeyEventArgs e)
     {
         if (sender is not TextBox { DataContext: ConversationViewModel conv }) return;
@@ -100,5 +105,58 @@ public partial class MainWindow : Window
         {
             vm.EndRenameCommand.Execute(conv);
         }
+    }
+
+    // --- Auto-scroll plumbing -------------------------------------------
+
+    private void OnDataContextChanged(object? sender, EventArgs e)
+    {
+        if (_vm is not null) _vm.PropertyChanged -= OnVmPropertyChanged;
+        HookConversation(null);
+
+        _vm = DataContext as MainWindowViewModel;
+        if (_vm is null) return;
+
+        _vm.PropertyChanged += OnVmPropertyChanged;
+        HookConversation(_vm.SelectedConversation);
+    }
+
+    private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(MainWindowViewModel.SelectedConversation):
+                HookConversation(_vm?.SelectedConversation);
+                break;
+            case nameof(MainWindowViewModel.IsGenerating):
+                if (_vm?.IsGenerating == true) _streamScrollTimer.Start();
+                else _streamScrollTimer.Stop();
+                break;
+        }
+    }
+
+    private void HookConversation(ConversationViewModel? conv)
+    {
+        if (_subscribedConv is not null)
+            _subscribedConv.Messages.CollectionChanged -= OnMessagesChanged;
+        _subscribedConv = conv;
+        if (conv is not null)
+            conv.Messages.CollectionChanged += OnMessagesChanged;
+        // Switching conversation jumps the scroll to the bottom so you land
+        // on the latest message in the newly-selected chat.
+        Dispatcher.UIThread.Post(ScrollToEndIfEnabled, DispatcherPriority.Background);
+    }
+
+    private void OnMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Add)
+            Dispatcher.UIThread.Post(ScrollToEndIfEnabled, DispatcherPriority.Background);
+    }
+
+    private void ScrollToEndIfEnabled()
+    {
+        if (_vm?.AppSettings.AutoScroll != true) return;
+        var scroll = this.FindControl<ScrollViewer>("ChatScroll");
+        scroll?.ScrollToEnd();
     }
 }

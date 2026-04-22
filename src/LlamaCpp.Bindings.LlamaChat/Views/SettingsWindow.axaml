@@ -5,11 +5,11 @@
         xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
         xmlns:v="using:LlamaCpp.Bindings.LlamaChat.Views"
         mc:Ignorable="d"
-        d:DesignWidth="900" d:DesignHeight="700"
+        d:DesignWidth="960" d:DesignHeight="720"
         x:Class="LlamaCpp.Bindings.LlamaChat.Views.SettingsWindow"
         x:DataType="vm:SettingsWindowViewModel"
         Title="Settings"
-        Width="900" Height="700" MinWidth="600" MinHeight="400"
+        Width="960" Height="720" MinWidth="640" MinHeight="440"
         WindowStartupLocation="CenterOwner">
 
     <Grid RowDefinitions="Auto,*,Auto">
@@ -19,50 +19,93 @@
             <TextBlock Text="Settings" Classes="h2" />
         </Border>
 
-        <!-- Body: profile list | editor -->
-        <Grid Grid.Row="1" ColumnDefinitions="260,*" Margin="16">
+        <!-- Body: tabbed -->
+        <TabControl Grid.Row="1" TabStripPlacement="Left" Margin="8,8,8,0">
 
-            <Border Grid.Column="0"
-                    Background="{DynamicResource Sidebar}"
-                    BorderBrush="{DynamicResource SidebarBorder}"
-                    BorderThickness="1"
-                    CornerRadius="{DynamicResource RadiusLg}">
-                <Grid RowDefinitions="Auto,*,Auto">
-                    <TextBlock Grid.Row="0" Text="Profiles" Classes="section" Margin="14,12,14,6" />
-                    <ListBox Grid.Row="1" Margin="6"
-                             ItemsSource="{Binding Profiles}"
-                             SelectedItem="{Binding SelectedProfile}">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate DataType="vm:ProfileEditorViewModel">
-                                <TextBlock Text="{Binding Name}" />
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="6">
-                        <Button Content="Add" Classes="sm outline"
-                                Command="{Binding AddProfileCommand}" />
-                        <Button Content="Duplicate" Classes="sm outline"
-                                Command="{Binding DuplicateProfileCommand}" />
-                        <Button Content="Delete" Classes="sm destructive"
-                                Command="{Binding DeleteProfileCommand}" />
-                    </StackPanel>
+            <!-- ===== Profiles ===== -->
+            <TabItem Header="Profiles">
+                <Grid ColumnDefinitions="260,*" Margin="8">
+
+                    <Border Grid.Column="0"
+                            Background="{DynamicResource Sidebar}"
+                            BorderBrush="{DynamicResource SidebarBorder}"
+                            BorderThickness="1"
+                            CornerRadius="{DynamicResource RadiusLg}">
+                        <Grid RowDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Row="0" Text="Profiles" Classes="section"
+                                       Margin="14,12,14,6" />
+                            <ListBox Grid.Row="1" Margin="6"
+                                     ItemsSource="{Binding Profiles}"
+                                     SelectedItem="{Binding SelectedProfile}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate DataType="vm:ProfileEditorViewModel">
+                                        <TextBlock Text="{Binding Name}" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="6">
+                                <Button Content="Add" Classes="sm outline"
+                                        Command="{Binding AddProfileCommand}" />
+                                <Button Content="Duplicate" Classes="sm outline"
+                                        Command="{Binding DuplicateProfileCommand}" />
+                                <Button Content="Delete" Classes="sm destructive"
+                                        Command="{Binding DeleteProfileCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Column="1" Margin="16,0,0,0" Classes="card">
+                        <Grid RowDefinitions="*,Auto">
+                            <ScrollViewer Grid.Row="0">
+                                <ContentControl Content="{Binding SelectedProfile}">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate DataType="vm:ProfileEditorViewModel">
+                                            <v:ProfileEditorView />
+                                        </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+                            </ScrollViewer>
+                            <StackPanel Grid.Row="1" Orientation="Horizontal"
+                                        HorizontalAlignment="Right" Margin="0,12,0,0" Spacing="6">
+                                <Button Content="Reset sampling" Classes="sm outline"
+                                        Command="{Binding ResetSamplerDefaultsCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
                 </Grid>
-            </Border>
+            </TabItem>
 
-            <Border Grid.Column="1" Margin="16,0,0,0"
-                    Classes="card">
-                <ScrollViewer>
-                    <ContentControl Content="{Binding SelectedProfile}">
-                        <ContentControl.ContentTemplate>
-                            <DataTemplate DataType="vm:ProfileEditorViewModel">
-                                <v:ProfileEditorView />
-                            </DataTemplate>
-                        </ContentControl.ContentTemplate>
-                    </ContentControl>
-                </ScrollViewer>
-            </Border>
+            <!-- ===== Display ===== -->
+            <TabItem Header="Display">
+                <Border Classes="card" Margin="8">
+                    <StackPanel DataContext="{Binding AppSettings}" Spacing="14">
+                        <TextBlock Text="Display" Classes="h3" />
 
-        </Grid>
+                        <StackPanel Spacing="6">
+                            <CheckBox Content="Auto-scroll new messages"
+                                      IsChecked="{Binding AutoScroll}" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Keep the chat pinned to the newest content as it streams. Turn off to scroll freely mid-response." />
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <CheckBox Content="Show message stats"
+                                      IsChecked="{Binding ShowMessageStats}" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Token count and tokens-per-second shown under each assistant reply." />
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <CheckBox Content="Expand reasoning during streaming"
+                                      IsChecked="{Binding ShowReasoningInProgress}" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Auto-open the &lt;think&gt; panel while a reply is mid-stream so you can watch the trace as it appears." />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
+        </TabControl>
 
         <!-- Footer -->
         <Border Grid.Row="2" Classes="statusbar" Padding="20,12">
@@ -75,6 +118,5 @@
                         Click="OnCloseClicked" />
             </Grid>
         </Border>
-
     </Grid>
 </Window>

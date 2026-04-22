@@ -19,10 +19,21 @@ internal sealed class ReasoningExtractor
 
     private enum Mode { Content, Reasoning }
 
-    private Mode _mode = Mode.Content;
+    private Mode _mode;
     private readonly StringBuilder _pending = new();
 
     public readonly record struct Emission(string Content, string Reasoning);
+
+    /// <summary>
+    /// Construct an extractor that starts in the given mode. Pass
+    /// <paramref name="startInReasoning"/> = true for models whose chat
+    /// template ends the assistant-turn prefix with an *open* <c>&lt;think&gt;</c>
+    /// block (Qwen3 family, DeepSeek R1, etc.) — the stream arrives already
+    /// inside the reasoning block, and we need to wait for <c>&lt;/think&gt;</c>
+    /// before routing bytes to the visible content channel.
+    /// </summary>
+    public ReasoningExtractor(bool startInReasoning = false) =>
+        _mode = startInReasoning ? Mode.Reasoning : Mode.Content;
 
     /// <summary>
     /// Push a piece of streamed text. Returns what should be appended to the

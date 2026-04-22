@@ -24,4 +24,10 @@
     <ProjectReference Include="..\LlamaCpp.Bindings\LlamaCpp.Bindings.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="TestData\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

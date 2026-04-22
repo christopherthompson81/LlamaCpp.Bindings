@@ -90,10 +90,17 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private const int MaxLogLines = 40;
 
     // ============================================================
+    // App settings (global preferences)
+    // ============================================================
+    public AppSettingsViewModel AppSettings { get; }
+
+    // ============================================================
     // Construction
     // ============================================================
     public MainWindowViewModel()
     {
+        AppSettings = new AppSettingsViewModel(AppSettingsStore.Load());
+
         Profiles = new ObservableCollection<ProfileEditorViewModel>(
             ProfileStore.Load().Select(p => new ProfileEditorViewModel(p)));
         SelectedProfile = Profiles.FirstOrDefault();
@@ -127,6 +134,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private void RebuildFilteredConversations()
     {
+        // ObservableCollection.Clear() forces the sidebar ListBox to push
+        // null back through its SelectedItem TwoWay binding, which would
+        // nuke SelectedConversation mid-send and blank out the chat area.
+        // Save here, restore at the end.
+        var saved = SelectedConversation;
+
         FilteredConversations.Clear();
         IEnumerable<ConversationViewModel> source = Conversations
             .OrderByDescending(c => c.UpdatedAt);
@@ -138,6 +151,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 c.Preview.Contains(q, StringComparison.OrdinalIgnoreCase));
         }
         foreach (var c in source) FilteredConversations.Add(c);
+
+        if (saved is not null && FilteredConversations.Contains(saved))
+        {
+            SelectedConversation = saved;
+        }
     }
 
     // ============================================================
@@ -286,10 +304,71 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     {
         if (Session is null || _activeLoadedProfile is null) return;
 
-        var assistant = new MessageViewModel { Role = "assistant", IsStreaming = true };
+        var assistant = new MessageViewModel
+        {
+            Role = "assistant",
+            IsStreaming = true,
+            // Auto-open the <think> panel at creation time if the user has
+            // opted into watching reasoning trace live. Not re-evaluated after
+            // Done, so the user's manual toggle during/after streaming wins.
+            IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
+        };
         conv.Messages.Add(assistant);
         conv.UpdatedAt = DateTimeOffset.UtcNow;
         RebuildFilteredConversations();
+
+        // Batch content + reasoning updates at ~30 fps. We accumulate on the
+        // pool thread (the consumer of Session.StreamAssistantReplyAsync runs
+        // there thanks to ConfigureAwait(false) below) and only marshal to
+        // the UI thread at flush time via Dispatcher.Post at Background
+        // priority — so the decode loop is never blocked on UI thread work.
+        // Dispatcher.Post is FIFO at the same priority, which lets us use
+        // InvokeAsync(Background) at Done time to guarantee all prior
+        // flushes have been applied before the Done-handler runs.
+        const int FlushEveryMs = 33;
+        var pendingContent = new System.Text.StringBuilder();
+        var pendingReasoning = new System.Text.StringBuilder();
+        var lastFlushTicks = Environment.TickCount;
+
+        // Drain the pending StringBuilders by posting a UI-thread action that
+        // mutates assistant.Content / assistant.Reasoning. Fire-and-forget:
+        // the pool thread returns immediately, decode continues.
+        void PostFlush()
+        {
+            if (pendingContent.Length == 0 && pendingReasoning.Length == 0)
+            {
+                lastFlushTicks = Environment.TickCount;
+                return;
+            }
+
+            // Snapshot + clear on pool thread — pendingContent is owned by
+            // this task, no lock needed.
+            string? contentSnap = null, reasoningSnap = null;
+            if (pendingContent.Length > 0)
+            {
+                contentSnap = pendingContent.ToString();
+                pendingContent.Clear();
+            }
+            if (pendingReasoning.Length > 0)
+            {
+                reasoningSnap = pendingReasoning.ToString();
+                pendingReasoning.Clear();
+            }
+            lastFlushTicks = Environment.TickCount;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (contentSnap is not null) assistant.Content += contentSnap;
+                if (reasoningSnap is not null)
+                    assistant.Reasoning = (assistant.Reasoning ?? string.Empty) + reasoningSnap;
+            }, DispatcherPriority.Background);
+        }
+
+        void TryFlush()
+        {
+            if (Environment.TickCount - lastFlushTicks < FlushEveryMs) return;
+            PostFlush();
+        }
 
         IsGenerating = true;
         StatusText = "Generating...";
@@ -300,57 +379,121 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
             var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
 
-            // Feed everything except the empty assistant placeholder to the model.
-            var transcript = conv.Messages
+            // Feed everything except the empty assistant placeholder to the
+            // model, prepending the active profile's system prompt if any.
+            var transcript = new List<ChatTurn>();
+            if (!string.IsNullOrWhiteSpace(_activeLoadedProfile.SystemPrompt))
+            {
+                transcript.Add(new ChatTurn(
+                    Id: Guid.NewGuid(),
+                    Role: TurnRole.System,
+                    Content: _activeLoadedProfile.SystemPrompt,
+                    State: TurnState.Complete,
+                    CreatedAt: DateTimeOffset.UtcNow));
+            }
+            transcript.AddRange(conv.Messages
                 .Take(conv.Messages.Count - 1)
                 .Select(m => new ChatTurn(
                     Id: Guid.NewGuid(),
                     Role: m.IsUser ? TurnRole.User : TurnRole.Assistant,
                     Content: m.Content,
                     State: TurnState.Complete,
-                    CreatedAt: DateTimeOffset.UtcNow))
-                .ToList();
+                    CreatedAt: DateTimeOffset.UtcNow)));
 
-            await foreach (var evt in Session.StreamAssistantReplyAsync(
-                               transcript, sampler, gen, _generationCts.Token))
+            // .ConfigureAwait(false): each MoveNextAsync resumes on a pool
+            // thread rather than posting back to the UI Dispatcher. That
+            // eliminates a pool→UI→pool round-trip per token, which is
+            // ~0.5-1 ms of Dispatcher-queue latency on hot paths — the
+            // suspected source of the 8 tok/s gap vs. llama-server at this
+            // workload size.
+            await foreach (var evt in Session
+                .StreamAssistantReplyAsync(transcript, sampler, gen, _generationCts.Token)
+                .ConfigureAwait(false))
             {
                 switch (evt)
                 {
                     case StreamEvent.Content c:
-                        assistant.Content += c.Text;
+                        pendingContent.Append(c.Text);
+                        TryFlush();
                         break;
                     case StreamEvent.Reasoning r:
-                        assistant.Reasoning = (assistant.Reasoning ?? string.Empty) + r.Text;
+                        pendingReasoning.Append(r.Text);
+                        TryFlush();
                         break;
                     case StreamEvent.Done d:
-                        assistant.IsStreaming = false;
-                        var tps = d.GenerationTime.TotalSeconds > 0
-                            ? d.CompletionTokens / d.GenerationTime.TotalSeconds : 0;
-                        assistant.StatsSummary = $"{d.CompletionTokens} tok · {tps:F1} tok/s";
-                        StatusText = $"Done — {assistant.StatsSummary}";
+                        // Force-post the final flush, then InvokeAsync the
+                        // Done-handler at the same Background priority. FIFO
+                        // semantics guarantee the Done handler runs after all
+                        // queued flushes have drained.
+                        PostFlush();
+                        var doneData = d;
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        {
+                            assistant.IsStreaming = false;
+                            var tps = doneData.GenerationTime.TotalSeconds > 0
+                                ? doneData.CompletionTokens / doneData.GenerationTime.TotalSeconds : 0;
+                            assistant.StatsSummary = $"{doneData.CompletionTokens} tok · {tps:F1} tok/s";
+                            StatusText = $"Done — {assistant.StatsSummary}";
+                        }, DispatcherPriority.Background);
                         break;
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            assistant.IsStreaming = false;
-            StatusText = "Cancelled.";
-            if (string.IsNullOrEmpty(assistant.Content)) assistant.Content = "(cancelled)";
+            PostFlush();
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                assistant.IsStreaming = false;
+                StatusText = "Cancelled.";
+                if (string.IsNullOrEmpty(assistant.Content)) assistant.Content = "(cancelled)";
+            }, DispatcherPriority.Background);
         }
         catch (Exception ex)
         {
-            assistant.IsStreaming = false;
-            StatusText = $"Error: {ex.Message}";
-            if (string.IsNullOrEmpty(assistant.Content)) assistant.Content = $"(error: {ex.Message})";
+            PostFlush();
+
+            // Dump the full exception (type + message + full stack trace) to a
+            // sibling of the app's other config files. Writing a file is safe
+            // from any thread — only touching VM state needs the UI thread.
+            try
+            {
+                var dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "LlamaChat");
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(
+                    Path.Combine(dir, "last-error.log"),
+                    $"{DateTime.Now:o}\n" +
+                    $"{ex.GetType().FullName}: {ex.Message}\n\n" +
+                    $"{ex}\n");
+            }
+            catch { /* ignore log-write failures */ }
+            System.Diagnostics.Debug.WriteLine($"[error] {ex}");
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                assistant.IsStreaming = false;
+                StatusText = $"Error: {ex.GetType().Name} — {ex.Message} (see ~/.config/LlamaChat/last-error.log)";
+                if (string.IsNullOrEmpty(assistant.Content))
+                {
+                    assistant.Content = $"(error: {ex.GetType().Name}: {ex.Message})";
+                }
+            }, DispatcherPriority.Background);
         }
         finally
         {
+            // We arrive here from whichever thread the try/catch last ran on —
+            // pool during streaming, UI after InvokeAsync drained. Marshal all
+            // VM-observable writes explicitly so we don't depend on state.
             _generationCts?.Dispose();
             _generationCts = null;
-            IsGenerating = false;
-            conv.UpdatedAt = DateTimeOffset.UtcNow;
-            SaveConversations();
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                IsGenerating = false;
+                conv.UpdatedAt = DateTimeOffset.UtcNow;
+                SaveConversations();
+            }, DispatcherPriority.Background);
         }
     }
 
@@ -471,11 +614,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task OpenSettingsAsync()
     {
-        var vm = new SettingsWindowViewModel(Profiles);
+        var vm = new SettingsWindowViewModel(Profiles, AppSettings);
         await DialogService.ShowSettingsAsync(vm);
 
-        try { ProfileStore.Save(Profiles.Select(p => p.ToProfile())); }
-        catch { /* non-fatal; user can re-save from the dialog */ }
+        // Persist both stores. Silent catch: neither is fatal, and the
+        // Settings window's explicit Save button covers the intentional case.
+        try { ProfileStore.Save(Profiles.Select(p => p.ToProfile())); } catch { }
+        try { AppSettingsStore.Save(AppSettings.ToModel()); } catch { }
 
         if (SelectedProfile is not null && !Profiles.Contains(SelectedProfile))
         {
