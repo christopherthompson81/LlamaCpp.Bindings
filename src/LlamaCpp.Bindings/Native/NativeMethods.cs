@@ -198,6 +198,53 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.I1)]
     internal static partial bool llama_vocab_is_eog(IntPtr vocab, int token);
 
+    // ----- Vocab advanced (Tier 1 expansion) -----
+
+    [LibraryImport(LibName)]
+    internal static partial llama_vocab_type llama_vocab_type(IntPtr vocab);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_vocab_get_text(IntPtr vocab, int token);
+
+    [LibraryImport(LibName)]
+    internal static partial float llama_vocab_get_score(IntPtr vocab, int token);
+
+    [LibraryImport(LibName)]
+    internal static partial llama_token_attr llama_vocab_get_attr(IntPtr vocab, int token);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_vocab_is_control(IntPtr vocab, int token);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_vocab_mask(IntPtr vocab);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_vocab_get_add_bos(IntPtr vocab);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_vocab_get_add_eos(IntPtr vocab);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_vocab_get_add_sep(IntPtr vocab);
+
+    // FIM (fill-in-the-middle) tokens for code-completion models.
+    [LibraryImport(LibName)]
+    internal static partial int llama_vocab_fim_pre(IntPtr vocab);
+    [LibraryImport(LibName)]
+    internal static partial int llama_vocab_fim_suf(IntPtr vocab);
+    [LibraryImport(LibName)]
+    internal static partial int llama_vocab_fim_mid(IntPtr vocab);
+    [LibraryImport(LibName)]
+    internal static partial int llama_vocab_fim_pad(IntPtr vocab);
+    [LibraryImport(LibName)]
+    internal static partial int llama_vocab_fim_rep(IntPtr vocab);
+    [LibraryImport(LibName)]
+    internal static partial int llama_vocab_fim_sep(IntPtr vocab);
+
     // ----- Tokenization (Phase 2) -----
     //
     // Return: number of tokens on success, or a negative count indicating the

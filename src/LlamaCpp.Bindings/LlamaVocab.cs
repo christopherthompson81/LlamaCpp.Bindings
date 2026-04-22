@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using LlamaCpp.Bindings.Native;
 
@@ -41,6 +42,46 @@ public sealed class LlamaVocab
     /// <summary>Padding token, or null if absent.</summary>
     public int? Pad { get; }
 
+    /// <summary>Mask token for models that use MLM-style training (BERT family), or null.</summary>
+    public int? Mask { get; }
+
+    /// <summary>
+    /// Fill-in-the-middle prefix marker token (code-completion models).
+    /// Null for chat/general-purpose models.
+    /// </summary>
+    public int? FimPrefix { get; }
+
+    /// <summary>Fill-in-the-middle suffix marker token, or null.</summary>
+    public int? FimSuffix { get; }
+
+    /// <summary>Fill-in-the-middle middle-section marker token, or null.</summary>
+    public int? FimMiddle { get; }
+
+    /// <summary>Fill-in-the-middle padding token, or null.</summary>
+    public int? FimPad { get; }
+
+    /// <summary>Fill-in-the-middle repository-separator token (used by multi-file FIM models), or null.</summary>
+    public int? FimRep { get; }
+
+    /// <summary>Fill-in-the-middle inter-file separator token, or null.</summary>
+    public int? FimSep { get; }
+
+    /// <summary>Tokenizer family (SPM / BPE / WPM / UGM / RWKV / PLaMo2).</summary>
+    public LlamaVocabType VocabType { get; }
+
+    /// <summary>
+    /// Whether the tokenizer is configured to auto-prepend BOS during <c>Tokenize</c>
+    /// when <c>addSpecial</c> is true. Qwen3 for example has BOS in the vocab but
+    /// this flag is false (it does NOT auto-prepend).
+    /// </summary>
+    public bool AddsBosAutomatically { get; }
+
+    /// <summary>Whether <c>Tokenize(addSpecial: true)</c> appends EOS.</summary>
+    public bool AddsEosAutomatically { get; }
+
+    /// <summary>Whether <c>Tokenize(addSpecial: true)</c> inserts a separator token.</summary>
+    public bool AddsSepAutomatically { get; }
+
     internal LlamaVocab(LlamaModel owner, IntPtr vocab)
     {
         _owner = owner;
@@ -53,6 +94,18 @@ public sealed class LlamaVocab
         Newline   = NullIfSentinel(NativeMethods.llama_vocab_nl(vocab));
         Separator = NullIfSentinel(NativeMethods.llama_vocab_sep(vocab));
         Pad       = NullIfSentinel(NativeMethods.llama_vocab_pad(vocab));
+        Mask      = NullIfSentinel(NativeMethods.llama_vocab_mask(vocab));
+        FimPrefix = NullIfSentinel(NativeMethods.llama_vocab_fim_pre(vocab));
+        FimSuffix = NullIfSentinel(NativeMethods.llama_vocab_fim_suf(vocab));
+        FimMiddle = NullIfSentinel(NativeMethods.llama_vocab_fim_mid(vocab));
+        FimPad    = NullIfSentinel(NativeMethods.llama_vocab_fim_pad(vocab));
+        FimRep    = NullIfSentinel(NativeMethods.llama_vocab_fim_rep(vocab));
+        FimSep    = NullIfSentinel(NativeMethods.llama_vocab_fim_sep(vocab));
+
+        VocabType            = (LlamaVocabType)NativeMethods.llama_vocab_type(vocab);
+        AddsBosAutomatically = NativeMethods.llama_vocab_get_add_bos(vocab);
+        AddsEosAutomatically = NativeMethods.llama_vocab_get_add_eos(vocab);
+        AddsSepAutomatically = NativeMethods.llama_vocab_get_add_sep(vocab);
     }
 
     private static int? NullIfSentinel(int token) => token == LLAMA_TOKEN_NULL ? null : token;
@@ -63,6 +116,50 @@ public sealed class LlamaVocab
     /// terminators, not just EOS. Use this (not an <c>== Eos</c> comparison) to
     /// decide when to stop a generation loop.
     /// </summary>
+    /// <summary>
+    /// The raw textual piece associated with a token id, as the tokenizer
+    /// stored it. Unlike <see cref="TokenToPiece"/> this is the tokenizer's
+    /// internal form — may include leading spaces, byte-fallback escapes
+    /// (<c>&lt;0x20&gt;</c>), or special-marker text. Useful for tokenizer
+    /// debugging; for user-visible output use <c>TokenToPiece</c>.
+    /// </summary>
+    public string? GetTokenText(int token)
+    {
+        EnsureOwnerAlive();
+        var ptr = NativeMethods.llama_vocab_get_text(_vocab, token);
+        return ptr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(ptr);
+    }
+
+    /// <summary>
+    /// Tokenizer-assigned score for <paramref name="token"/> (used by SPM-family
+    /// tokenizers to rank merges). Returns 0 for tokenizers that don't score.
+    /// </summary>
+    public float GetTokenScore(int token)
+    {
+        EnsureOwnerAlive();
+        return NativeMethods.llama_vocab_get_score(_vocab, token);
+    }
+
+    /// <summary>
+    /// Attribute flags for <paramref name="token"/> — control, user-defined,
+    /// byte-fallback, lstrip/rstrip behaviour, etc. Combines via bitwise OR.
+    /// </summary>
+    public LlamaTokenAttributes GetTokenAttributes(int token)
+    {
+        EnsureOwnerAlive();
+        return (LlamaTokenAttributes)NativeMethods.llama_vocab_get_attr(_vocab, token);
+    }
+
+    /// <summary>
+    /// Shortcut for <c>(GetTokenAttributes(token) &amp; Control) != 0</c> — true
+    /// for special/control tokens (BOS, EOS, &lt;|im_start|&gt;, etc.).
+    /// </summary>
+    public bool IsControlToken(int token)
+    {
+        EnsureOwnerAlive();
+        return NativeMethods.llama_vocab_is_control(_vocab, token);
+    }
+
     public bool IsEndOfGeneration(int token)
     {
         EnsureOwnerAlive();
@@ -222,4 +319,46 @@ public sealed class LlamaVocab
         // predictable ObjectDisposedException instead.
         _owner.EnsureNotDisposed();
     }
+}
+
+/// <summary>
+/// Tokenizer family encoded in the GGUF. Determines tokenization semantics
+/// (how text maps to tokens).
+/// </summary>
+public enum LlamaVocabType
+{
+    None   = 0,
+    /// <summary>SentencePiece, byte-level BPE with byte fallback (LLaMA family).</summary>
+    Spm    = 1,
+    /// <summary>GPT-2 style byte-level BPE (Qwen, Mistral, many OSS models).</summary>
+    Bpe    = 2,
+    /// <summary>WordPiece (BERT family).</summary>
+    Wpm    = 3,
+    /// <summary>Unigram (T5 family).</summary>
+    Ugm    = 4,
+    /// <summary>RWKV's greedy tokenizer.</summary>
+    Rwkv   = 5,
+    /// <summary>PLaMo-2 (Aho-Corasick with dynamic programming).</summary>
+    Plamo2 = 6,
+}
+
+/// <summary>
+/// Per-token attribute flags. A token may carry several simultaneously
+/// (e.g., a special control token that left-strips whitespace).
+/// </summary>
+[Flags]
+public enum LlamaTokenAttributes
+{
+    Undefined   = 0,
+    Unknown     = 1 << 0,
+    Unused      = 1 << 1,
+    Normal      = 1 << 2,
+    Control     = 1 << 3,
+    UserDefined = 1 << 4,
+    /// <summary>Byte-fallback token (e.g. <c>&lt;0xFF&gt;</c>).</summary>
+    Byte        = 1 << 5,
+    Normalized  = 1 << 6,
+    LStrip      = 1 << 7,
+    RStrip      = 1 << 8,
+    SingleWord  = 1 << 9,
 }
