@@ -75,6 +75,11 @@ public class GenerationTests
         var prompt = BuildPrompt(_fx.Model, "Write the word 'cat' exactly once.");
         const uint Seed = 42;
 
+        // Both runs must start from identical KV state. The original version
+        // only reset *between* runs; under Qwen3 the model converged anyway,
+        // but under any other model the leftover state from prior tests
+        // diverged the two outputs and the equality assertion fired.
+        _fx.ResetContextFor(prompt);
         var run1 = await Collect(_fx.Model, _fx.Context, prompt, () =>
             new LlamaSamplerBuilder()
                 .WithTopK(40).WithTopP(0.9f).WithMinP(0.05f).WithTemperature(0.7f)
@@ -82,7 +87,6 @@ public class GenerationTests
             maxTokens: 30);
 
         _fx.ResetContextFor(prompt);
-
         var run2 = await Collect(_fx.Model, _fx.Context, prompt, () =>
             new LlamaSamplerBuilder()
                 .WithTopK(40).WithTopP(0.9f).WithMinP(0.05f).WithTemperature(0.7f)
@@ -205,12 +209,17 @@ public sealed class GpuGenerationFixture : IDisposable
 
     public LlamaModel? Model { get; }
     public LlamaContext? Context { get; private set; }
+    public ModelCapabilities Capabilities { get; }
 
     public GpuGenerationFixture()
     {
         var path = Environment.GetEnvironmentVariable("LLAMACPP_TEST_MODEL");
         if (string.IsNullOrWhiteSpace(path)) path = DefaultModelPath;
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path))
+        {
+            Capabilities = ModelCapabilities.Empty;
+            return;
+        }
 
         LlamaBackend.Initialize();
         Model = new LlamaModel(path, new LlamaModelParameters
@@ -219,6 +228,7 @@ public sealed class GpuGenerationFixture : IDisposable
             UseMmap = true,
         });
         Context = BuildContext();
+        Capabilities = ModelCapabilities.Probe(Model);
     }
 
     public void SkipMessage()

@@ -8,15 +8,30 @@ public class ChatTemplateTests : IClassFixture<ModelFixture>
     [Fact]
     public void Model_Exposes_Embedded_Chat_Template()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
-        var tmpl = _fx.Model.GetChatTemplate();
-        Assert.False(string.IsNullOrWhiteSpace(tmpl),
-            "Qwen3-class chat model should ship a chat template in GGUF metadata.");
-        // Qwen uses <|im_start|>/<|im_end|> ChatML-style tokens — the template
-        // should reference at least one of them.
+        if (_fx.Capabilities.SkipUnlessLoaded()) return;
+        // Universal: any modern chat model ships a chat template in GGUF metadata.
+        // (Pure base / completion / embedding models can lack one — that's why
+        // we only assert this once the fixture says one exists.)
+        if (!_fx.Capabilities.HasChatTemplate)
+        {
+            Console.WriteLine($"SKIP: {_fx.Capabilities.DisplayLabel} ships no chat template.");
+            return;
+        }
+        var tmpl = _fx.Model!.GetChatTemplate();
+        Assert.False(string.IsNullOrWhiteSpace(tmpl));
+    }
+
+    [Fact]
+    public void Qwen_Chat_Template_Uses_ChatML_Markers()
+    {
+        if (_fx.Capabilities.SkipUnlessFamily("qwen2", "qwen3")) return;
+        // Qwen uses <|im_start|>/<|im_end|> ChatML-style tokens. Pinned so a
+        // future llama.cpp change to chat-template extraction would surface here.
+        var tmpl = _fx.Model!.GetChatTemplate();
+        Assert.False(string.IsNullOrWhiteSpace(tmpl));
         Assert.True(tmpl!.Contains("im_start", StringComparison.Ordinal) ||
                     tmpl.Contains("im_end", StringComparison.Ordinal),
-            $"Unexpected chat template shape: {tmpl[..Math.Min(200, tmpl.Length)]}");
+            $"Unexpected Qwen chat template shape: {tmpl[..Math.Min(200, tmpl.Length)]}");
     }
 
     [Fact]

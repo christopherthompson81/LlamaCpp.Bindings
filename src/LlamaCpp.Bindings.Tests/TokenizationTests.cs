@@ -34,20 +34,24 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     }
 
     [Fact]
-    public void Tokenize_Roundtrip_Matches_Input()
+    public void Tokenize_Roundtrip_Preserves_Content()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
-        var v = _fx.Model.Vocab;
+        if (_fx.Capabilities.SkipUnlessLoaded()) return;
+        var v = _fx.Model!.Vocab;
 
+        // Tokenizer families differ in the edge: Qwen BPE round-trips ASCII
+        // verbatim, LLaMA SentencePiece adds a leading space on detokenize
+        // (encoded implicitly into the first token). Token-sequence stability
+        // under a second round trip is NOT a universal property — on LLaMA,
+        // tokenize("X") ≠ tokenize(" X"). The universal property is that
+        // the detokenized string equals the input or " " + input.
         const string text = "Hello, world! How are you?";
         var tokens = v.Tokenize(text, addSpecial: false, parseSpecial: false);
         Assert.NotEmpty(tokens);
 
-        // Detokenize should reproduce the input (allowing for leading whitespace
-        // normalization that some tokenizers add). Qwen3 uses BPE without extra
-        // space-prefix tricks, so we expect an exact match for ASCII input.
-        var roundTripped = v.Detokenize(tokens);
-        Assert.Equal(text, roundTripped);
+        var roundtripped = v.Detokenize(tokens);
+        Assert.True(roundtripped == text || roundtripped == " " + text,
+            $"expected '{text}' or ' {text}'; got '{roundtripped}'");
     }
 
     [Fact]
@@ -115,18 +119,22 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void Tokenize_Handles_Long_Input_Needing_Retry()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
-        var v = _fx.Model.Vocab;
+        if (_fx.Capabilities.SkipUnlessLoaded()) return;
+        var v = _fx.Model!.Vocab;
 
-        // Use a short repeating token to force a many-token output well above
-        // the 16-token minimum initial buffer, and also a non-ASCII character
-        // to exercise multi-byte UTF-8 handling.
+        // The point of this test is that the managed Tokenize() correctly
+        // handles the "buffer too small, retry with reported size" path:
+        // a many-token output well above the 16-token initial buffer, plus
+        // a multi-byte UTF-8 character.
         var text = string.Concat(Enumerable.Repeat("naïve rendering ", 500));
         var tokens = v.Tokenize(text, addSpecial: false, parseSpecial: false);
         Assert.True(tokens.Length > 100);
 
-        var roundTripped = v.Detokenize(tokens);
-        Assert.Equal(text, roundTripped);
+        // Content roundtrip; LLaMA-family tokenizers may add a single leading
+        // space, see Tokenize_Roundtrip_Preserves_Content.
+        var roundtripped = v.Detokenize(tokens);
+        Assert.True(roundtripped == text || roundtripped == " " + text,
+            $"long-input roundtrip mismatch (showing first 80 chars): expected '{text[..80]}...' or ' {text[..80]}...'; got '{roundtripped[..Math.Min(80, roundtripped.Length)]}...'");
     }
 }
 
@@ -139,12 +147,17 @@ public sealed class ModelFixture : IDisposable
     private const string DefaultModelPath = "/mnt/data/models/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf";
 
     public LlamaModel? Model { get; }
+    public ModelCapabilities Capabilities { get; }
 
     public ModelFixture()
     {
         var path = Environment.GetEnvironmentVariable("LLAMACPP_TEST_MODEL");
         if (string.IsNullOrWhiteSpace(path)) path = DefaultModelPath;
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path))
+        {
+            Capabilities = ModelCapabilities.Empty;
+            return;
+        }
 
         LlamaBackend.Initialize();
         Model = new LlamaModel(path, new LlamaModelParameters
@@ -154,6 +167,7 @@ public sealed class ModelFixture : IDisposable
             GpuLayerCount = 0,
             UseMmap = true,
         });
+        Capabilities = ModelCapabilities.Probe(Model);
     }
 
     public void SkipMessage()

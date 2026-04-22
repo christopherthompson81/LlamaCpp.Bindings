@@ -28,12 +28,12 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void AddsBos_Matches_Previously_Observed_Qwen_Behaviour()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
+        if (_fx.Capabilities.SkipUnlessFamily("qwen2", "qwen3")) return;
         // Qwen's tokenizer_config has add_bos_token=false even though BOS exists
         // in the vocab. We already observed this during Phase 2 testing — this
         // test pins that observation so a future llama.cpp change would surface
         // it via a test failure.
-        var v = _fx.Model.Vocab;
+        var v = _fx.Model!.Vocab;
         Assert.NotNull(v.Bos);
         Assert.False(v.AddsBosAutomatically,
             "Qwen's tokenizer_config has add_bos_token=false; if this fires, either the model changed or llama.cpp's reading of the config did.");

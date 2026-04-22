@@ -108,10 +108,11 @@ public class MultiTurnChatTests
         Assert.True(posAfterTurn2 > posAfterTurn1,
             "Turn 2 should have advanced the position counter beyond turn 1.");
 
-        // If history was preserved, "pineapple" shows up (case may vary). This is
-        // a behavioural test on a real model, so it's a soft assertion with a
-        // helpful failure message rather than a hard contract — models can and
-        // do occasionally dodge prompts like this.
+        // The qualitative recall check needs a model competent enough to
+        // actually retrieve the codeword. Sub-3B models often hallucinate
+        // here even with perfect KV preservation; the binding-level property
+        // (position counter advances) above is the model-agnostic check.
+        if (_fx.Capabilities.SkipUnlessMinParameters(3_000_000_000)) return;
         Assert.True(
             answer.Contains("pineapple", StringComparison.OrdinalIgnoreCase),
             $"Expected the model to remember the codeword across turns without KV re-processing.\nAnswer was: {answer}");
