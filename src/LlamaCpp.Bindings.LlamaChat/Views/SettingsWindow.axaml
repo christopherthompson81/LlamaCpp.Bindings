@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
+        xmlns:v="using:LlamaCpp.Bindings.LlamaChat.Views"
+        mc:Ignorable="d"
+        d:DesignWidth="900" d:DesignHeight="700"
+        x:Class="LlamaCpp.Bindings.LlamaChat.Views.SettingsWindow"
+        x:DataType="vm:SettingsWindowViewModel"
+        Title="Settings"
+        Width="900" Height="700" MinWidth="600" MinHeight="400"
+        WindowStartupLocation="CenterOwner">
+
+    <TabControl TabStripPlacement="Left" Margin="8">
+
+        <TabItem Header="Profiles">
+            <Grid ColumnDefinitions="240,*" RowDefinitions="*,Auto" Margin="8">
+                <!-- Profile list -->
+                <Border Grid.Row="0" Grid.Column="0"
+                        BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1"
+                        CornerRadius="4" Padding="0">
+                    <Grid RowDefinitions="*,Auto">
+                        <ListBox Grid.Row="0" ItemsSource="{Binding Profiles}"
+                                 SelectedItem="{Binding SelectedProfile}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="vm:ProfileEditorViewModel">
+                                    <TextBlock Text="{Binding Name}" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4">
+                            <Button Content="Add" Command="{Binding AddProfileCommand}" Margin="0,0,4,0" />
+                            <Button Content="Duplicate" Command="{Binding DuplicateProfileCommand}" Margin="0,0,4,0" />
+                            <Button Content="Delete" Command="{Binding DeleteProfileCommand}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Editor -->
+                <Border Grid.Row="0" Grid.Column="1" Margin="8,0,0,0"
+                        BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1"
+                        CornerRadius="4" Padding="12">
+                    <ScrollViewer>
+                        <ContentControl Content="{Binding SelectedProfile}">
+                            <ContentControl.ContentTemplate>
+                                <DataTemplate DataType="vm:ProfileEditorViewModel">
+                                    <v:ProfileEditorView />
+                                </DataTemplate>
+                            </ContentControl.ContentTemplate>
+                        </ContentControl>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- Footer -->
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal"
+                            HorizontalAlignment="Right" Margin="0,8,0,0" Spacing="8">
+                    <TextBlock Text="{Binding Status}" VerticalAlignment="Center" Opacity="0.7" />
+                    <Button Content="Save" Command="{Binding SaveCommand}" />
+                    <Button Content="Close" Click="OnCloseClicked" />
+                </StackPanel>
+            </Grid>
+        </TabItem>
+
+    </TabControl>
+</Window>

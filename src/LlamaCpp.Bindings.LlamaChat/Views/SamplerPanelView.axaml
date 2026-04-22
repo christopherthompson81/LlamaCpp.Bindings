@@ -1,0 +1,156 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
+             xmlns:m="using:LlamaCpp.Bindings.LlamaChat.Models"
+             xmlns:sys="using:System"
+             mc:Ignorable="d"
+             x:Class="LlamaCpp.Bindings.LlamaChat.Views.SamplerPanelView"
+             x:DataType="vm:SamplerPanelViewModel">
+
+    <UserControl.Resources>
+        <x:Double x:Key="LabelWidth">130</x:Double>
+    </UserControl.Resources>
+
+    <UserControl.Styles>
+        <Style Selector="TextBlock.section">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="0,10,0,4" />
+        </Style>
+        <Style Selector="Grid.row">
+            <Setter Property="Margin" Value="0,2" />
+        </Style>
+    </UserControl.Styles>
+
+    <StackPanel Spacing="2">
+
+        <TextBlock Classes="section" Text="Generation" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Max tokens" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding MaxTokens}" Minimum="1" Increment="64" />
+        </Grid>
+        <CheckBox Content="Extract &lt;think&gt; as reasoning" IsChecked="{Binding ExtractReasoning}" />
+
+        <TextBlock Classes="section" Text="Temperature" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Temperature" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding Temperature}" Minimum="0" Increment="0.05" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Dynatemp range" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding DynaTempRange}" Minimum="0" Increment="0.05" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Dynatemp exp" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding DynaTempExponent}" Minimum="0" Increment="0.1" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Seed" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding Seed}" Minimum="0" Increment="1" FormatString="F0" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="Truncation" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <CheckBox Grid.Column="0" Content="top-k" IsChecked="{Binding TopKEnabled}" />
+            <NumericUpDown Grid.Column="1" Value="{Binding TopK}" Minimum="1" Increment="1"
+                           IsEnabled="{Binding TopKEnabled}" FormatString="F0" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <CheckBox Grid.Column="0" Content="top-p" IsChecked="{Binding TopPEnabled}" />
+            <NumericUpDown Grid.Column="1" Value="{Binding TopP}" Minimum="0" Maximum="1" Increment="0.01"
+                           IsEnabled="{Binding TopPEnabled}" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <CheckBox Grid.Column="0" Content="min-p" IsChecked="{Binding MinPEnabled}" />
+            <NumericUpDown Grid.Column="1" Value="{Binding MinP}" Minimum="0" Maximum="1" Increment="0.01"
+                           IsEnabled="{Binding MinPEnabled}" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <CheckBox Grid.Column="0" Content="typical" IsChecked="{Binding TypicalEnabled}" />
+            <NumericUpDown Grid.Column="1" Value="{Binding Typical}" Minimum="0" Maximum="1" Increment="0.01"
+                           IsEnabled="{Binding TypicalEnabled}" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <CheckBox Grid.Column="0" Content="top-n-σ" IsChecked="{Binding TopNSigmaEnabled}" />
+            <NumericUpDown Grid.Column="1" Value="{Binding TopNSigma}" Minimum="0" Increment="0.1"
+                           IsEnabled="{Binding TopNSigmaEnabled}" FormatString="F2" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="XTC" />
+        <CheckBox Content="Enabled" IsChecked="{Binding XtcEnabled}" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Probability" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding XtcProbability}" Minimum="0" Maximum="1" Increment="0.05"
+                           IsEnabled="{Binding XtcEnabled}" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Threshold" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding XtcThreshold}" Minimum="0" Maximum="1" Increment="0.01"
+                           IsEnabled="{Binding XtcEnabled}" FormatString="F2" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="DRY (0 = off)" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Multiplier" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding DryMultiplier}" Minimum="0" Increment="0.1" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Base" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding DryBase}" Minimum="0" Increment="0.05" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Allowed length" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding DryAllowedLength}" Minimum="0" Increment="1" FormatString="F0" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Look-back" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding DryPenaltyLastN}" Minimum="-1" Increment="16" FormatString="F0" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="Repetition penalty" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Last N" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding PenaltyLastN}" Minimum="-1" Increment="16" FormatString="F0" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Repeat" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding PenaltyRepeat}" Minimum="0" Increment="0.05" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Frequency" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding PenaltyFrequency}" Minimum="0" Increment="0.05" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Presence" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding PenaltyPresence}" Minimum="0" Increment="0.05" FormatString="F2" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="Terminal" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Mirostat" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="1" SelectedItem="{Binding Mirostat}">
+                <ComboBox.Items>
+                    <m:MirostatMode>Off</m:MirostatMode>
+                    <m:MirostatMode>V1</m:MirostatMode>
+                    <m:MirostatMode>V2</m:MirostatMode>
+                </ComboBox.Items>
+            </ComboBox>
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="τ (tau)" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding MirostatTau}" Minimum="0" Increment="0.5" FormatString="F2" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="η (eta)" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding MirostatEta}" Minimum="0" Increment="0.05" FormatString="F2" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="Grammar (GBNF)" />
+        <TextBox Text="{Binding Grammar}" AcceptsReturn="True" TextWrapping="Wrap"
+                 MinHeight="80" MaxHeight="200" FontFamily="Consolas,Menlo,monospace"
+                 PlaceholderText="Paste a GBNF grammar to constrain output..." />
+
+    </StackPanel>
+</UserControl>

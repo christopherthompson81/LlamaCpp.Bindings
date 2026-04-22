@@ -1,0 +1,74 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
+             xmlns:v="using:LlamaCpp.Bindings.LlamaChat.Views"
+             xmlns:bindings="using:LlamaCpp.Bindings"
+             mc:Ignorable="d"
+             x:Class="LlamaCpp.Bindings.LlamaChat.Views.ProfileEditorView"
+             x:DataType="vm:ProfileEditorViewModel">
+
+    <UserControl.Styles>
+        <Style Selector="TextBlock.section">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="0,10,0,4" />
+        </Style>
+        <Style Selector="Grid.row">
+            <Setter Property="Margin" Value="0,2" />
+        </Style>
+    </UserControl.Styles>
+
+    <StackPanel Spacing="2">
+
+        <TextBlock Classes="section" Text="Identity" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Profile name" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" Text="{Binding Name}" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="Model" />
+        <Grid Classes="row" ColumnDefinitions="130,*,Auto">
+            <TextBlock Grid.Column="0" Text="Model path" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" Text="{Binding ModelPath}" PlaceholderText="Path to .gguf" />
+            <Button Grid.Column="2" Content="Browse..." Margin="4,0,0,0"
+                    Command="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).BrowseModelPathCommand}" />
+        </Grid>
+
+        <TextBlock Classes="section" Text="Load" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Context size" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding ContextSize}" Minimum="128" Increment="512" FormatString="F0" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="GPU layers" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding GpuLayerCount}" Minimum="-1" Increment="1" FormatString="F0" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Logical batch" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding LogicalBatchSize}" Minimum="32" Increment="64" FormatString="F0" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Physical batch" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="1" Value="{Binding PhysicalBatchSize}" Minimum="32" Increment="64" FormatString="F0" />
+        </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Flash attention" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="1" SelectedItem="{Binding FlashAttention}">
+                <ComboBox.Items>
+                    <bindings:LlamaFlashAttention>Auto</bindings:LlamaFlashAttention>
+                    <bindings:LlamaFlashAttention>Disabled</bindings:LlamaFlashAttention>
+                    <bindings:LlamaFlashAttention>Enabled</bindings:LlamaFlashAttention>
+                </ComboBox.Items>
+            </ComboBox>
+        </Grid>
+        <CheckBox Content="mmap" IsChecked="{Binding UseMmap}" />
+        <CheckBox Content="mlock" IsChecked="{Binding UseMlock}" />
+        <CheckBox Content="offload KQV" IsChecked="{Binding OffloadKQV}" />
+
+        <TextBlock Classes="section" Text="Sampling" />
+        <v:SamplerPanelView DataContext="{Binding SamplerPanel}" />
+
+    </StackPanel>
+</UserControl>

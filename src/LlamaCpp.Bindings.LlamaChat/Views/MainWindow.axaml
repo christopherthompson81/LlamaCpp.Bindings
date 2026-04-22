@@ -1,0 +1,112 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
+        mc:Ignorable="d"
+        d:DesignWidth="1100" d:DesignHeight="800"
+        x:Class="LlamaCpp.Bindings.LlamaChat.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="LlamaChat"
+        Width="1100" Height="800"
+        MinWidth="700" MinHeight="450">
+
+    <DockPanel>
+        <!-- Menu bar -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Load" Command="{Binding LoadCommand}" InputGesture="Ctrl+L" />
+                <MenuItem Header="_Unload" Command="{Binding UnloadCommand}" />
+                <Separator />
+                <MenuItem Header="E_xit" Command="{Binding ExitCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Chat">
+                <MenuItem Header="_Clear conversation" Command="{Binding ClearConversationCommand}" />
+                <MenuItem Header="Cancel generation" Command="{Binding CancelCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Settings">
+                <MenuItem Header="_Preferences..." Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
+            </MenuItem>
+        </Menu>
+
+        <!-- Toolbar: active profile + model actions -->
+        <Border DockPanel.Dock="Top" Padding="12,6"
+                Background="{DynamicResource SystemChromeMediumColor}"
+                BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,240,Auto,Auto,Auto,*">
+                <TextBlock Grid.Column="0" Text="Profile:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <ComboBox Grid.Column="1"
+                          ItemsSource="{Binding Profiles}"
+                          SelectedItem="{Binding SelectedProfile}"
+                          IsEnabled="{Binding !IsModelLoaded}"
+                          HorizontalAlignment="Stretch">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate DataType="vm:ProfileEditorViewModel">
+                            <TextBlock Text="{Binding Name}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Grid.Column="2" Content="Load" Margin="6,0,0,0"
+                        Command="{Binding LoadCommand}" />
+                <Button Grid.Column="3" Content="Unload" Margin="4,0,0,0"
+                        Command="{Binding UnloadCommand}" />
+                <Button Grid.Column="4" Content="Settings..." Margin="4,0,0,0"
+                        Command="{Binding OpenSettingsCommand}" />
+                <TextBlock Grid.Column="5" Text="{Binding ModelSummary}"
+                           VerticalAlignment="Center" Margin="16,0,0,0"
+                           TextTrimming="CharacterEllipsis" Opacity="0.8" />
+            </Grid>
+        </Border>
+
+        <!-- Status bar -->
+        <Border DockPanel.Dock="Bottom" Padding="12,4"
+                Background="{DynamicResource SystemChromeLowColor}"
+                BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,1,0,0">
+            <TextBlock Text="{Binding StatusText}" FontSize="11" />
+        </Border>
+
+        <!-- Conversation -->
+        <Grid RowDefinitions="*,Auto" Margin="12">
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Messages}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:MessageViewModel">
+                            <Border Margin="0,4" Padding="12,8" CornerRadius="8"
+                                    Background="{DynamicResource SystemChromeLowColor}">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{Binding Role}" FontWeight="Bold"
+                                               FontSize="12" Opacity="0.8" />
+                                    <Expander Header="Reasoning"
+                                              IsVisible="{Binding HasReasoning}"
+                                              IsExpanded="{Binding IsReasoningExpanded}">
+                                        <SelectableTextBlock Text="{Binding Reasoning}"
+                                                             FontSize="12" Opacity="0.75"
+                                                             TextWrapping="Wrap" />
+                                    </Expander>
+                                    <SelectableTextBlock Text="{Binding Content}"
+                                                         TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding StatsSummary}"
+                                               FontSize="11" Opacity="0.6"
+                                               IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- Compose bar -->
+            <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,8,0,0">
+                <TextBox Grid.Column="0" Text="{Binding UserInput, Mode=TwoWay}"
+                         PlaceholderText="Type a message, Shift+Enter for newline..."
+                         AcceptsReturn="False" TextWrapping="Wrap"
+                         MinHeight="48" MaxHeight="180"
+                         KeyDown="OnComposeKeyDown" />
+                <Button Grid.Column="1" Content="Send" Margin="6,0,0,0"
+                        Command="{Binding SendCommand}" IsDefault="True" />
+                <Button Grid.Column="2" Content="Cancel" Margin="4,0,0,0"
+                        Command="{Binding CancelCommand}" />
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>
