@@ -303,6 +303,63 @@ public sealed class LlamaVocab
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Native bulk detokenize with explicit special-token handling. Different
+    /// from the <see cref="Detokenize(ReadOnlySpan{int}, bool)"/> overload:
+    /// uses llama.cpp's <c>llama_detokenize</c> which applies BOS/EOS stripping
+    /// and special-token reverse-parsing in one call.
+    /// </summary>
+    /// <param name="tokens">Tokens to render.</param>
+    /// <param name="removeSpecial">
+    /// If true, strip automatically-added BOS/EOS/SEP tokens (mirror of the
+    /// <c>addSpecial</c> parameter on <see cref="Tokenize"/>).
+    /// </param>
+    /// <param name="unparseSpecial">
+    /// If true, render special tokens as their textual form (<c>&lt;|im_end|&gt;</c>
+    /// etc.) rather than as empty strings.
+    /// </param>
+    public unsafe string DetokenizeNative(
+        ReadOnlySpan<int> tokens,
+        bool removeSpecial = true,
+        bool unparseSpecial = false)
+    {
+        if (tokens.IsEmpty) return string.Empty;
+        EnsureOwnerAlive();
+
+        // Probe size with a stack buffer; retry heap if needed.
+        const int StackBuf = 512;
+        Span<byte> buf = stackalloc byte[StackBuf];
+        int needed;
+        fixed (int* tokPtr = tokens)
+        fixed (byte* bufPtr = buf)
+        {
+            needed = NativeMethods.llama_detokenize(
+                _vocab, tokPtr, tokens.Length, bufPtr, StackBuf,
+                removeSpecial, unparseSpecial);
+        }
+        if (needed >= 0)
+        {
+            return Encoding.UTF8.GetString(buf[..needed]);
+        }
+
+        // Negative return = -required size. Retry heap.
+        var heap = new byte[-needed];
+        fixed (int* tokPtr = tokens)
+        fixed (byte* bufPtr = heap)
+        {
+            int written = NativeMethods.llama_detokenize(
+                _vocab, tokPtr, tokens.Length, bufPtr, heap.Length,
+                removeSpecial, unparseSpecial);
+            if (written < 0)
+            {
+                throw new LlamaException(
+                    nameof(NativeMethods.llama_detokenize), written,
+                    "llama_detokenize failed after retry.");
+            }
+            return Encoding.UTF8.GetString(heap, 0, written);
+        }
+    }
+
     internal IntPtr Handle
     {
         get

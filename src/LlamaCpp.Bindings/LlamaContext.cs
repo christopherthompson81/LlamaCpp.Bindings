@@ -252,6 +252,107 @@ public sealed class LlamaContext : IDisposable
         NativeMethods.llama_memory_breakdown_print(_handle.DangerousHandle);
     }
 
+    // ----- Runtime settings + mid-flight getters (Tier 1 expansion) -----
+
+    /// <summary>
+    /// Current decode-thread count. Returns the value set at construction
+    /// (<see cref="LlamaContextParameters.ThreadCount"/>) unless later
+    /// overridden via <see cref="SetThreadCounts"/>.
+    /// </summary>
+    public int ThreadCount
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return NativeMethods.llama_n_threads(_handle.DangerousHandle);
+        }
+    }
+
+    /// <summary>Thread count used for prompt/batch processing.</summary>
+    public int BatchThreadCount
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return NativeMethods.llama_n_threads_batch(_handle.DangerousHandle);
+        }
+    }
+
+    /// <summary>Live update to the context's thread counts. Takes effect on the next decode.</summary>
+    public void SetThreadCounts(int generationThreads, int batchThreads)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_set_n_threads(_handle.DangerousHandle, generationThreads, batchThreads);
+    }
+
+    /// <summary>Pooling strategy for embedding extraction.</summary>
+    public LlamaPoolingType PoolingType
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return (LlamaPoolingType)NativeMethods.llama_pooling_type(_handle.DangerousHandle);
+        }
+    }
+
+    /// <summary>
+    /// Per-sequence context length. For single-sequence contexts this is the
+    /// same as <see cref="ContextSize"/>; for multi-sequence contexts this
+    /// tells you how much context each sequence gets.
+    /// </summary>
+    public int SequenceContextSize
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return (int)NativeMethods.llama_n_ctx_seq(_handle.DangerousHandle);
+        }
+    }
+
+    /// <summary>
+    /// Toggle the embeddings-output mode on this live context. When enabled,
+    /// <c>llama_decode</c> makes embeddings available (via functions we haven't
+    /// bound yet — see issue "Embeddings support" in the Tier-2 tracker).
+    /// </summary>
+    public void SetEmbeddingsMode(bool enabled)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_set_embeddings(_handle.DangerousHandle, enabled);
+    }
+
+    /// <summary>
+    /// Toggle causal attention. Default is <c>true</c> (standard left-to-right
+    /// generation). Setting <c>false</c> is only meaningful for non-generative
+    /// workflows (bidirectional encoder-style models).
+    /// </summary>
+    public void SetCausalAttention(bool enabled)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_set_causal_attn(_handle.DangerousHandle, enabled);
+    }
+
+    /// <summary>
+    /// Flag the context as "warming up" — llama.cpp uses this to skip certain
+    /// optimisations that expect a real workload. Useful when doing a quick
+    /// dummy decode to pre-allocate buffers.
+    /// </summary>
+    public void SetWarmup(bool enabled)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_set_warmup(_handle.DangerousHandle, enabled);
+    }
+
+    /// <summary>
+    /// Block until all pending async native work on this context has finished.
+    /// Useful right before calling <see cref="GetPerformance"/> or other code
+    /// that needs a stable snapshot.
+    /// </summary>
+    public void Synchronize()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        NativeMethods.llama_synchronize(_handle.DangerousHandle);
+    }
+
     // ----- Performance (Tier 1 expansion) -----
 
     /// <summary>

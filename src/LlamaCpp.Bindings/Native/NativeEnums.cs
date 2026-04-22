@@ -132,3 +132,13 @@ internal enum ggml_log_level : int
     GGML_LOG_LEVEL_ERROR = 4,
     GGML_LOG_LEVEL_CONT  = 5,
 }
+
+// From ggml-cpu.h — consumed by llama_numa_init.
+internal enum ggml_numa_strategy : int
+{
+    GGML_NUMA_STRATEGY_DISABLED   = 0,
+    GGML_NUMA_STRATEGY_DISTRIBUTE = 1,
+    GGML_NUMA_STRATEGY_ISOLATE    = 2,
+    GGML_NUMA_STRATEGY_NUMACTL    = 3,
+    GGML_NUMA_STRATEGY_MIRROR     = 4,
+}

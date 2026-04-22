@@ -150,6 +150,59 @@ public static class LlamaBackend
         EnsureInitialized();
         return (int)NativeMethods.llama_max_devices();
     }
+
+    /// <summary>Max sequences the native build will allow in a single batch.</summary>
+    public static int MaxParallelSequences()
+    {
+        EnsureInitialized();
+        return (int)NativeMethods.llama_max_parallel_sequences();
+    }
+
+    /// <summary>True if this native build was compiled with RPC support.</summary>
+    public static bool SupportsRpc()
+    {
+        EnsureInitialized();
+        return NativeMethods.llama_supports_rpc();
+    }
+
+    /// <summary>
+    /// Backend identification string (e.g. <c>"AVX = 1 | AVX2 = 1 | ... | CUDA = 1"</c>).
+    /// Useful in bug reports and "what does this machine support" UIs.
+    /// </summary>
+    public static string SystemInfo()
+    {
+        EnsureInitialized();
+        var ptr = NativeMethods.llama_print_system_info();
+        return ptr == IntPtr.Zero
+            ? string.Empty
+            : System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ptr) ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Initialise NUMA support. Call once on a NUMA system before loading
+    /// models. Has no effect on non-NUMA systems.
+    /// </summary>
+    public static void InitializeNuma(LlamaNumaStrategy strategy)
+    {
+        EnsureInitialized();
+        NativeMethods.llama_numa_init((ggml_numa_strategy)strategy);
+    }
+}
+
+/// <summary>
+/// NUMA memory placement strategy for CPU inference on multi-socket systems.
+/// </summary>
+public enum LlamaNumaStrategy
+{
+    Disabled   = 0,
+    /// <summary>Spread allocations across NUMA nodes.</summary>
+    Distribute = 1,
+    /// <summary>Pin each worker to a single node.</summary>
+    Isolate    = 2,
+    /// <summary>Let the system NUMA policy decide (honour <c>numactl</c> if set).</summary>
+    Numactl    = 3,
+    /// <summary>Duplicate model weights on every NUMA node — more memory, less cross-node traffic.</summary>
+    Mirror     = 4,
 }
 
 /// <summary>Log level passed to a <see cref="LlamaBackend.Initialize"/> sink.</summary>

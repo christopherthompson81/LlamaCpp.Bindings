@@ -483,4 +483,58 @@ internal static partial class NativeMethods
     // Prints a per-device memory breakdown via llama.cpp's log sink. Diagnostic.
     [LibraryImport(LibName)]
     internal static partial void llama_memory_breakdown_print(IntPtr ctx);
+
+    // ----- Capability / misc (Tier 1 expansion) -----
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_numa_init(ggml_numa_strategy strategy);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_supports_rpc();
+
+    [LibraryImport(LibName)]
+    internal static partial nuint llama_max_parallel_sequences();
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_print_system_info();
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_flash_attn_type_name(llama_flash_attn_type type);
+
+    [LibraryImport(LibName)]
+    internal static partial uint llama_n_ctx_seq(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_n_threads(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_n_threads_batch(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static partial llama_pooling_type llama_pooling_type(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_set_embeddings(IntPtr ctx, [MarshalAs(UnmanagedType.I1)] bool embeddings);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_set_causal_attn(IntPtr ctx, [MarshalAs(UnmanagedType.I1)] bool causal_attn);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_set_warmup(IntPtr ctx, [MarshalAs(UnmanagedType.I1)] bool warmup);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_synchronize(IntPtr ctx);
+
+    // Proper bulk detokenize with special-token handling.
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_detokenize(
+        IntPtr vocab,
+        int* tokens, int n_tokens,
+        byte* text, int text_len_max,
+        [MarshalAs(UnmanagedType.I1)] bool remove_special,
+        [MarshalAs(UnmanagedType.I1)] bool unparse_special);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_chat_builtin_templates(IntPtr* output, nuint len);
 }

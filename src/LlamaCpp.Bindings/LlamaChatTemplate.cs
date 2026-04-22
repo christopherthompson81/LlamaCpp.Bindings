@@ -30,6 +30,46 @@ public readonly record struct ChatMessage(string Role, string Content);
 public static class LlamaChatTemplate
 {
     /// <summary>
+    /// Names of chat templates llama.cpp can apply by name (Llama 2/3, ChatML,
+    /// Mistral, Gemma, Qwen, etc.). Pass one of these to
+    /// <see cref="Apply"/> as the template, or use a model's own embedded
+    /// template via <see cref="LlamaModel.GetChatTemplate"/>.
+    /// </summary>
+    public static IReadOnlyList<string> BuiltInTemplateNames()
+    {
+        LlamaBackend.EnsureInitialized();
+
+        // First call with len=0 returns the number of templates available.
+        int count;
+        unsafe
+        {
+            count = NativeMethods.llama_chat_builtin_templates(null, 0);
+        }
+        if (count <= 0) return Array.Empty<string>();
+
+        var ptrs = new IntPtr[count];
+        unsafe
+        {
+            fixed (IntPtr* buf = ptrs)
+            {
+                int written = NativeMethods.llama_chat_builtin_templates(buf, (nuint)count);
+                if (written < 0)
+                {
+                    throw new LlamaException(
+                        nameof(NativeMethods.llama_chat_builtin_templates), written,
+                        "llama_chat_builtin_templates failed.");
+                }
+            }
+        }
+        var names = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            names[i] = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ptrs[i]) ?? string.Empty;
+        }
+        return names;
+    }
+
+    /// <summary>
     /// Apply a chat template to a conversation.
     /// </summary>
     /// <param name="template">

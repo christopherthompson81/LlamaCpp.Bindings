@@ -101,3 +101,22 @@ public enum LlamaFlashAttention
     Disabled = 0,
     Enabled  = 1,
 }
+
+/// <summary>
+/// How embedding outputs are pooled across a sequence. Only relevant when
+/// the context is configured for embeddings (<see cref="LlamaContextParameters.Embeddings"/>
+/// or <see cref="LlamaContext.SetEmbeddingsMode"/>).
+/// </summary>
+public enum LlamaPoolingType
+{
+    Unspecified = -1,
+    /// <summary>No pooling — per-token embeddings are returned.</summary>
+    None = 0,
+    Mean = 1,
+    /// <summary>Use the [CLS] token's embedding.</summary>
+    Cls  = 2,
+    /// <summary>Use the last token's embedding.</summary>
+    Last = 3,
+    /// <summary>Ranking head — used by reranker models.</summary>
+    Rank = 4,
+}
