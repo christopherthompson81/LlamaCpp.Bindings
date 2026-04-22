@@ -383,6 +383,34 @@ internal static partial class NativeMethods
         float penalty_freq,
         float penalty_present);
 
+    // ----- Advanced samplers (Tier 2) -----
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_init_xtc(float p, float t, nuint min_keep, uint seed);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_init_top_n_sigma(float n);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_init_mirostat(int n_vocab, uint seed, float tau, float eta, int m);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_init_mirostat_v2(uint seed, float tau, float eta);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial IntPtr llama_sampler_init_dry(
+        IntPtr vocab,
+        int n_ctx_train,
+        float dry_multiplier, float dry_base,
+        int dry_allowed_length, int dry_penalty_last_n,
+        IntPtr* seq_breakers, nuint num_breakers);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_init_adaptive_p(float target, float decay, uint seed);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_sampler_init_infill(IntPtr vocab);
+
     // ----- Sampler introspection (Tier 1 expansion) -----
     //
     // llama_sampler_chain_get returns a pointer INTO the chain; the pointer

@@ -297,6 +297,153 @@ public sealed class LlamaSamplerBuilder
     }
 
     /// <summary>
+    /// Extended temperature with dynamic stretch — llama.cpp's <c>temp_ext</c>.
+    /// <paramref name="delta"/> controls how much the temperature adapts to
+    /// the entropy of the current distribution; <paramref name="exponent"/>
+    /// shapes the curve. When <paramref name="delta"/> is 0, behaves like
+    /// plain <see cref="WithTemperature"/>.
+    /// </summary>
+    public LlamaSamplerBuilder WithExtendedTemperature(float temperature, float delta, float exponent)
+    {
+        ThrowIfTerminalAdded();
+        _pending.Add(NativeMethods.llama_sampler_init_temp_ext(temperature, delta, exponent));
+        return this;
+    }
+
+    /// <summary>
+    /// XTC (Exclude Top Choices) sampler — when the top candidate exceeds
+    /// <paramref name="probability"/>, its probability mass above
+    /// <paramref name="threshold"/> is redistributed to lower-ranked tokens.
+    /// Encourages less-predictable output without overall flattening.
+    /// </summary>
+    public LlamaSamplerBuilder WithXtc(float probability, float threshold, int minKeep = 1, uint seed = 0)
+    {
+        ThrowIfTerminalAdded();
+        _pending.Add(NativeMethods.llama_sampler_init_xtc(probability, threshold, (nuint)minKeep, seed));
+        return this;
+    }
+
+    /// <summary>
+    /// Top-nσ sampling — keeps only tokens whose logit is within n standard
+    /// deviations of the max logit. Described in Top-nσ: Not All Logits
+    /// Are You Need (arXiv:2411.07641).
+    /// </summary>
+    public LlamaSamplerBuilder WithTopNSigma(float n)
+    {
+        ThrowIfTerminalAdded();
+        _pending.Add(NativeMethods.llama_sampler_init_top_n_sigma(n));
+        return this;
+    }
+
+    /// <summary>
+    /// DRY (Don't Repeat Yourself) repetition avoidance. More sophisticated
+    /// than plain repetition penalty — targets multi-token repeated patterns.
+    /// </summary>
+    /// <param name="vocab">Required — DRY tokenises its sequence breakers.</param>
+    /// <param name="contextTrainSize">Training context size of the model (from <see cref="LlamaModel.TrainingContextSize"/>).</param>
+    /// <param name="multiplier">Penalty strength. <c>0.8</c> is a typical default.</param>
+    /// <param name="dryBase">Penalty curve base. <c>1.75</c> is a typical default.</param>
+    /// <param name="allowedLength">Pattern length tolerated before penalty kicks in.</param>
+    /// <param name="penaltyLastN">Look-back window. <c>-1</c> = full context.</param>
+    /// <param name="sequenceBreakers">Strings that reset DRY's internal pattern tracker (e.g., newline, period). Null = defaults.</param>
+    public LlamaSamplerBuilder WithDry(
+        LlamaVocab vocab,
+        int contextTrainSize,
+        float multiplier = 0.8f,
+        float dryBase = 1.75f,
+        int allowedLength = 2,
+        int penaltyLastN = -1,
+        IReadOnlyList<string>? sequenceBreakers = null)
+    {
+        ArgumentNullException.ThrowIfNull(vocab);
+        ThrowIfTerminalAdded();
+
+        var breakers = sequenceBreakers ?? Array.Empty<string>();
+        var handles = new IntPtr[breakers.Count];
+        try
+        {
+            for (int i = 0; i < breakers.Count; i++)
+            {
+                handles[i] = Marshal.StringToCoTaskMemUTF8(breakers[i]);
+            }
+            unsafe
+            {
+                fixed (IntPtr* ptrArr = handles)
+                {
+                    var sub = NativeMethods.llama_sampler_init_dry(
+                        vocab.Handle, contextTrainSize,
+                        multiplier, dryBase, allowedLength, penaltyLastN,
+                        ptrArr, (nuint)breakers.Count);
+                    _pending.Add(sub);
+                }
+            }
+        }
+        finally
+        {
+            // llama.cpp copies the breaker strings internally; safe to release now.
+            foreach (var h in handles)
+            {
+                if (h != IntPtr.Zero) Marshal.FreeCoTaskMem(h);
+            }
+        }
+        return this;
+    }
+
+    /// <summary>
+    /// FIM (fill-in-the-middle) infill sampler — used after top_k+top_p for
+    /// code-completion tasks. Does not apply to chat/instruct models.
+    /// Requires a model with FIM tokens defined.
+    /// </summary>
+    public LlamaSamplerBuilder WithInfill(LlamaVocab vocab)
+    {
+        ArgumentNullException.ThrowIfNull(vocab);
+        ThrowIfTerminalAdded();
+        _pending.Add(NativeMethods.llama_sampler_init_infill(vocab.Handle));
+        return this;
+    }
+
+    /// <summary>
+    /// Terminal Mirostat v1 sampler — adaptive perplexity control (see
+    /// arXiv:2007.14966). Targets a specific "surprise" level across
+    /// generation. Prefer <see cref="WithMirostatV2"/> unless you specifically
+    /// need v1's <c>m</c> parameter.
+    /// </summary>
+    public LlamaSamplerBuilder WithMirostat(int vocabSize, uint seed, float tau, float eta, int m = 100)
+    {
+        ThrowIfTerminalAdded();
+        _pending.Add(NativeMethods.llama_sampler_init_mirostat(vocabSize, seed, tau, eta, m));
+        _hasTerminal = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Terminal Mirostat v2 sampler — simpler and usually preferred over v1.
+    /// Default parameters (τ=5, η=0.1) are a reasonable starting point.
+    /// </summary>
+    public LlamaSamplerBuilder WithMirostatV2(uint seed, float tau = 5.0f, float eta = 0.1f)
+    {
+        ThrowIfTerminalAdded();
+        _pending.Add(NativeMethods.llama_sampler_init_mirostat_v2(seed, tau, eta));
+        _hasTerminal = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Terminal adaptive-p sampler — maintains an EMA of selected-token
+    /// probabilities and steers toward a target probability. Use with only
+    /// mild prior truncation (e.g., min-p). See upstream PR ggml-org/llama.cpp#17927.
+    /// </summary>
+    /// <param name="target">Target probability (0..1). Negative = disabled.</param>
+    /// <param name="decay">EMA decay (0..0.99). Higher = longer memory.</param>
+    public LlamaSamplerBuilder WithAdaptiveP(float target, float decay, uint seed)
+    {
+        ThrowIfTerminalAdded();
+        _pending.Add(NativeMethods.llama_sampler_init_adaptive_p(target, decay, seed));
+        _hasTerminal = true;
+        return this;
+    }
+
+    /// <summary>
     /// Repetition / frequency / presence penalties. <paramref name="lastN"/>
     /// is the look-back window (<c>-1</c> = context size, <c>0</c> = disable).
     /// Values of 1.0 / 0.0 / 0.0 are the "off" defaults.
