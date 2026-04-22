@@ -1,0 +1,23 @@
+# Pinned llama.cpp version — matches third_party/llama.cpp/include/llama.h.pinned
+# and the native libraries copied into runtimes/<rid>/native/.
+#
+# This project does not follow the upstream release-tag cadence directly; we pin
+# to the commit that was built locally on the dev workstation. The release-mode
+# workflow in tools/fetch-binaries.py (--tag b####) still works for future
+# migrations to a prebuilt release.
+
+git_describe = b8610-10-g1d6d4cf7a
+git_commit   = 1d6d4cf7a
+git_date     = 2026-04-01
+soversion    = 0.0.8620   # from libllama.so.0.0.8620
+header_date  = 2026-04-01  # last modification to include/llama.h in the local checkout
+
+# Source of this build:
+#   /home/chris/Programming/llama.cpp  (local CUDA build, build_cuda/bin)
+#
+# Why not the upstream prebuilt? llama.cpp does not publish Linux CUDA binaries
+# (see tools/fetch-binaries.py: scanned releases b2000..b8875, none exist).
+#
+# Why not the latest tag? b8875 removes llama_params_fit() and
+# llama_memory_breakdown_print(), which we intend to use for the hardware-based
+# auto-configuration heuristic. See docs/kickoff.md "Open questions".

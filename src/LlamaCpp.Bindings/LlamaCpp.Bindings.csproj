@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>LlamaCpp.Bindings</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Ship native binaries alongside the managed DLL, under runtimes/<rid>/native/.
+         This is the path the .NET native-library resolver probes by default.
+         Link= preserves the `runtimes/` prefix that Include='..\..\runtimes\**' otherwise collapses away. -->
+    <None Include="$(MSBuildThisFileDirectory)..\..\runtimes\**\*.*"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\runtimes')"
+          Link="runtimes\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Pack="true"
+          PackagePath="runtimes"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

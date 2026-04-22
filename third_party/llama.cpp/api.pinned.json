@@ -1,0 +1,4826 @@
+{
+  "functions": [
+    {
+      "name": "llama_flash_attn_type_name",
+      "return_type": "const char *",
+      "params": [
+        {
+          "name": "flash_attn_type",
+          "type": "enum llama_flash_attn_type"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_default_params",
+      "return_type": "struct llama_model_params",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_context_default_params",
+      "return_type": "struct llama_context_params",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_chain_default_params",
+      "return_type": "struct llama_sampler_chain_params",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_quantize_default_params",
+      "return_type": "struct llama_model_quantize_params",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_backend_init",
+      "return_type": "void",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_backend_free",
+      "return_type": "void",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_numa_init",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "numa",
+          "type": "enum ggml_numa_strategy"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_attach_threadpool",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "threadpool",
+          "type": "ggml_threadpool_t"
+        },
+        {
+          "name": "threadpool_batch",
+          "type": "ggml_threadpool_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_detach_threadpool",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_init_from_user",
+      "return_type": "struct llama_model *",
+      "params": [
+        {
+          "name": "metadata",
+          "type": "struct gguf_context *"
+        },
+        {
+          "name": "set_tensor_data",
+          "type": "llama_model_set_tensor_data_t"
+        },
+        {
+          "name": "set_tensor_data_ud",
+          "type": "void *"
+        },
+        {
+          "name": "params",
+          "type": "struct llama_model_params"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_load_model_from_file",
+      "return_type": "struct llama_model *",
+      "params": [
+        {
+          "name": "path_model",
+          "type": "const char *"
+        },
+        {
+          "name": "params",
+          "type": "struct llama_model_params"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_model_load_from_file",
+      "return_type": "struct llama_model *",
+      "params": [
+        {
+          "name": "path_model",
+          "type": "const char *"
+        },
+        {
+          "name": "params",
+          "type": "struct llama_model_params"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_load_from_file_ptr",
+      "return_type": "struct llama_model *",
+      "params": [
+        {
+          "name": "file",
+          "type": "FILE *"
+        },
+        {
+          "name": "params",
+          "type": "struct llama_model_params"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_load_from_splits",
+      "return_type": "struct llama_model *",
+      "params": [
+        {
+          "name": "paths",
+          "type": "const char **"
+        },
+        {
+          "name": "n_paths",
+          "type": "size_t"
+        },
+        {
+          "name": "params",
+          "type": "struct llama_model_params"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_save_to_file",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        },
+        {
+          "name": "path_model",
+          "type": "const char *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_free_model",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "model",
+          "type": "struct llama_model *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_model_free",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "model",
+          "type": "struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_init_from_model",
+      "return_type": "struct llama_context *",
+      "params": [
+        {
+          "name": "model",
+          "type": "struct llama_model *"
+        },
+        {
+          "name": "params",
+          "type": "struct llama_context_params"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_new_context_with_model",
+      "return_type": "struct llama_context *",
+      "params": [
+        {
+          "name": "model",
+          "type": "struct llama_model *"
+        },
+        {
+          "name": "params",
+          "type": "struct llama_context_params"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_free",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_params_fit",
+      "return_type": "enum llama_params_fit_status",
+      "params": [
+        {
+          "name": "path_model",
+          "type": "const char *"
+        },
+        {
+          "name": "mparams",
+          "type": "struct llama_model_params *"
+        },
+        {
+          "name": "cparams",
+          "type": "struct llama_context_params *"
+        },
+        {
+          "name": "tensor_split",
+          "type": "float *"
+        },
+        {
+          "name": "tensor_buft_overrides",
+          "type": "struct llama_model_tensor_buft_override *"
+        },
+        {
+          "name": "margins",
+          "type": "size_t *"
+        },
+        {
+          "name": "n_ctx_min",
+          "type": "uint32_t"
+        },
+        {
+          "name": "log_level",
+          "type": "enum ggml_log_level"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_time_us",
+      "return_type": "int64_t",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_max_devices",
+      "return_type": "size_t",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_max_parallel_sequences",
+      "return_type": "size_t",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_max_tensor_buft_overrides",
+      "return_type": "size_t",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_supports_mmap",
+      "return_type": "_Bool",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_supports_mlock",
+      "return_type": "_Bool",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_supports_gpu_offload",
+      "return_type": "_Bool",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_supports_rpc",
+      "return_type": "_Bool",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_ctx",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_ctx_seq",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_batch",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_ubatch",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_seq_max",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_ctx_train",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_n_embd",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_n_layer",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_n_head",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_n_vocab",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_get_model",
+      "return_type": "const struct llama_model *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_memory",
+      "return_type": "llama_memory_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_pooling_type",
+      "return_type": "enum llama_pooling_type",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_get_vocab",
+      "return_type": "const struct llama_vocab *",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_rope_type",
+      "return_type": "enum llama_rope_type",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_ctx_train",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_embd",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_embd_inp",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_embd_out",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_layer",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_head",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_head_kv",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_swa",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_rope_freq_scale_train",
+      "return_type": "float",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_cls_out",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_cls_label",
+      "return_type": "const char *",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        },
+        {
+          "name": "i",
+          "type": "uint32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_type",
+      "return_type": "enum llama_vocab_type",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_n_tokens",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_meta_val_str",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        },
+        {
+          "name": "key",
+          "type": "const char *"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "buf_size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_meta_count",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_meta_key_str",
+      "return_type": "const char *",
+      "params": [
+        {
+          "name": "key",
+          "type": "enum llama_model_meta_key"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_meta_key_by_index",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "buf_size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_meta_val_str_by_index",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "buf_size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_desc",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "buf_size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_size",
+      "return_type": "uint64_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_chat_template",
+      "return_type": "const char *",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        },
+        {
+          "name": "name",
+          "type": "const char *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_n_params",
+      "return_type": "uint64_t",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_has_encoder",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_has_decoder",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_decoder_start_token",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_is_recurrent",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_is_hybrid",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_is_diffusion",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "model",
+          "type": "const struct llama_model *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_model_quantize",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "fname_inp",
+          "type": "const char *"
+        },
+        {
+          "name": "fname_out",
+          "type": "const char *"
+        },
+        {
+          "name": "params",
+          "type": "const llama_model_quantize_params *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_lora_init",
+      "return_type": "struct llama_adapter_lora *",
+      "params": [
+        {
+          "name": "model",
+          "type": "struct llama_model *"
+        },
+        {
+          "name": "path_lora",
+          "type": "const char *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_meta_val_str",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "adapter",
+          "type": "const struct llama_adapter_lora *"
+        },
+        {
+          "name": "key",
+          "type": "const char *"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "buf_size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_meta_count",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "adapter",
+          "type": "const struct llama_adapter_lora *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_meta_key_by_index",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "adapter",
+          "type": "const struct llama_adapter_lora *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "buf_size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_meta_val_str_by_index",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "adapter",
+          "type": "const struct llama_adapter_lora *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "buf_size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_lora_free",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "adapter",
+          "type": "struct llama_adapter_lora *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_get_alora_n_invocation_tokens",
+      "return_type": "uint64_t",
+      "params": [
+        {
+          "name": "adapter",
+          "type": "const struct llama_adapter_lora *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_adapter_get_alora_invocation_tokens",
+      "return_type": "const llama_token *",
+      "params": [
+        {
+          "name": "adapter",
+          "type": "const struct llama_adapter_lora *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_adapters_lora",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "adapters",
+          "type": "struct llama_adapter_lora **"
+        },
+        {
+          "name": "n_adapters",
+          "type": "size_t"
+        },
+        {
+          "name": "scales",
+          "type": "float *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_adapter_cvec",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "data",
+          "type": "const float *"
+        },
+        {
+          "name": "len",
+          "type": "size_t"
+        },
+        {
+          "name": "n_embd",
+          "type": "int32_t"
+        },
+        {
+          "name": "il_start",
+          "type": "int32_t"
+        },
+        {
+          "name": "il_end",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_clear",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "data",
+          "type": "_Bool"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_seq_rm",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "p0",
+          "type": "llama_pos"
+        },
+        {
+          "name": "p1",
+          "type": "llama_pos"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_seq_cp",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "seq_id_src",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "seq_id_dst",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "p0",
+          "type": "llama_pos"
+        },
+        {
+          "name": "p1",
+          "type": "llama_pos"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_seq_keep",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_seq_add",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "p0",
+          "type": "llama_pos"
+        },
+        {
+          "name": "p1",
+          "type": "llama_pos"
+        },
+        {
+          "name": "delta",
+          "type": "llama_pos"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_seq_div",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "p0",
+          "type": "llama_pos"
+        },
+        {
+          "name": "p1",
+          "type": "llama_pos"
+        },
+        {
+          "name": "d",
+          "type": "int"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_seq_pos_min",
+      "return_type": "llama_pos",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_seq_pos_max",
+      "return_type": "llama_pos",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_can_shift",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "mem",
+          "type": "llama_memory_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_get_size",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_state_size",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_state_get_data",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "dst",
+          "type": "uint8_t *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_copy_state_data",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "dst",
+          "type": "uint8_t *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_state_set_data",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "src",
+          "type": "const uint8_t *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_state_data",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "src",
+          "type": "const uint8_t *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_state_load_file",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "path_session",
+          "type": "const char *"
+        },
+        {
+          "name": "tokens_out",
+          "type": "llama_token *"
+        },
+        {
+          "name": "n_token_capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "n_token_count_out",
+          "type": "size_t *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_load_session_file",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "path_session",
+          "type": "const char *"
+        },
+        {
+          "name": "tokens_out",
+          "type": "llama_token *"
+        },
+        {
+          "name": "n_token_capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "n_token_count_out",
+          "type": "size_t *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_state_save_file",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "path_session",
+          "type": "const char *"
+        },
+        {
+          "name": "tokens",
+          "type": "const llama_token *"
+        },
+        {
+          "name": "n_token_count",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_save_session_file",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "path_session",
+          "type": "const char *"
+        },
+        {
+          "name": "tokens",
+          "type": "const llama_token *"
+        },
+        {
+          "name": "n_token_count",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_state_seq_get_size",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_seq_get_data",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "dst",
+          "type": "uint8_t *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_seq_set_data",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "src",
+          "type": "const uint8_t *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "dest_seq_id",
+          "type": "llama_seq_id"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_seq_save_file",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "filepath",
+          "type": "const char *"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "tokens",
+          "type": "const llama_token *"
+        },
+        {
+          "name": "n_token_count",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_seq_load_file",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "filepath",
+          "type": "const char *"
+        },
+        {
+          "name": "dest_seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "tokens_out",
+          "type": "llama_token *"
+        },
+        {
+          "name": "n_token_capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "n_token_count_out",
+          "type": "size_t *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_seq_get_size_ext",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "flags",
+          "type": "llama_state_seq_flags"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_seq_get_data_ext",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "dst",
+          "type": "uint8_t *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "flags",
+          "type": "llama_state_seq_flags"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_state_seq_set_data_ext",
+      "return_type": "size_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "src",
+          "type": "const uint8_t *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "dest_seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "flags",
+          "type": "llama_state_seq_flags"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_batch_get_one",
+      "return_type": "struct llama_batch",
+      "params": [
+        {
+          "name": "tokens",
+          "type": "llama_token *"
+        },
+        {
+          "name": "n_tokens",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_batch_init",
+      "return_type": "struct llama_batch",
+      "params": [
+        {
+          "name": "n_tokens",
+          "type": "int32_t"
+        },
+        {
+          "name": "embd",
+          "type": "int32_t"
+        },
+        {
+          "name": "n_seq_max",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_batch_free",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "batch",
+          "type": "struct llama_batch"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_encode",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "batch",
+          "type": "struct llama_batch"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_decode",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "batch",
+          "type": "struct llama_batch"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_n_threads",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "n_threads",
+          "type": "int32_t"
+        },
+        {
+          "name": "n_threads_batch",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_threads",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_n_threads_batch",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_embeddings",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "embeddings",
+          "type": "_Bool"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_causal_attn",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "causal_attn",
+          "type": "_Bool"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_warmup",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "warmup",
+          "type": "_Bool"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_abort_callback",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "abort_callback",
+          "type": "ggml_abort_callback"
+        },
+        {
+          "name": "abort_callback_data",
+          "type": "void *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_synchronize",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_logits",
+      "return_type": "float *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_logits_ith",
+      "return_type": "float *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_embeddings",
+      "return_type": "float *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_embeddings_ith",
+      "return_type": "float *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_embeddings_seq",
+      "return_type": "float *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_sampled_token_ith",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_sampled_probs_ith",
+      "return_type": "float *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_sampled_probs_count_ith",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_sampled_logits_ith",
+      "return_type": "float *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_sampled_logits_count_ith",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_sampled_candidates_ith",
+      "return_type": "llama_token *",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_get_sampled_candidates_count_ith",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_get_text",
+      "return_type": "const char *",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_get_score",
+      "return_type": "float",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_get_attr",
+      "return_type": "enum llama_token_attr",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_is_eog",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_is_control",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_bos",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_eos",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_eot",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_sep",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_nl",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_pad",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_mask",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_get_add_bos",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_get_add_eos",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_get_add_sep",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_fim_pre",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_fim_suf",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_fim_mid",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_fim_pad",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_fim_rep",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_vocab_fim_sep",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_token_get_text",
+      "return_type": "const char *",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_get_score",
+      "return_type": "float",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_get_attr",
+      "return_type": "enum llama_token_attr",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_is_eog",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_is_control",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_bos",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_eos",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_eot",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_cls",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_sep",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_nl",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_pad",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_add_bos_token",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_add_eos_token",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_fim_pre",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_fim_suf",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_fim_mid",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_fim_pad",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_fim_rep",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_token_fim_sep",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_vocab_cls",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_tokenize",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "text",
+          "type": "const char *"
+        },
+        {
+          "name": "text_len",
+          "type": "int32_t"
+        },
+        {
+          "name": "tokens",
+          "type": "llama_token *"
+        },
+        {
+          "name": "n_tokens_max",
+          "type": "int32_t"
+        },
+        {
+          "name": "add_special",
+          "type": "_Bool"
+        },
+        {
+          "name": "parse_special",
+          "type": "_Bool"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_token_to_piece",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "length",
+          "type": "int32_t"
+        },
+        {
+          "name": "lstrip",
+          "type": "int32_t"
+        },
+        {
+          "name": "special",
+          "type": "_Bool"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_detokenize",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "tokens",
+          "type": "const llama_token *"
+        },
+        {
+          "name": "n_tokens",
+          "type": "int32_t"
+        },
+        {
+          "name": "text",
+          "type": "char *"
+        },
+        {
+          "name": "text_len_max",
+          "type": "int32_t"
+        },
+        {
+          "name": "remove_special",
+          "type": "_Bool"
+        },
+        {
+          "name": "unparse_special",
+          "type": "_Bool"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_chat_apply_template",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "tmpl",
+          "type": "const char *"
+        },
+        {
+          "name": "chat",
+          "type": "const struct llama_chat_message *"
+        },
+        {
+          "name": "n_msg",
+          "type": "size_t"
+        },
+        {
+          "name": "add_ass",
+          "type": "_Bool"
+        },
+        {
+          "name": "buf",
+          "type": "char *"
+        },
+        {
+          "name": "length",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_chat_builtin_templates",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "output",
+          "type": "const char **"
+        },
+        {
+          "name": "len",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_set_sampler",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id"
+        },
+        {
+          "name": "smpl",
+          "type": "struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "iface",
+          "type": "struct llama_sampler_i *"
+        },
+        {
+          "name": "ctx",
+          "type": "llama_sampler_context_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_name",
+      "return_type": "const char *",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "const struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_accept",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "struct llama_sampler *"
+        },
+        {
+          "name": "token",
+          "type": "llama_token"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_apply",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "struct llama_sampler *"
+        },
+        {
+          "name": "cur_p",
+          "type": "llama_token_data_array *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_reset",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_clone",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "const struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_free",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_chain_init",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "params",
+          "type": "struct llama_sampler_chain_params"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_chain_add",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "chain",
+          "type": "struct llama_sampler *"
+        },
+        {
+          "name": "smpl",
+          "type": "struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_chain_get",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "chain",
+          "type": "struct llama_sampler *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_chain_n",
+      "return_type": "int",
+      "params": [
+        {
+          "name": "chain",
+          "type": "const struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_chain_remove",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "chain",
+          "type": "struct llama_sampler *"
+        },
+        {
+          "name": "i",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_greedy",
+      "return_type": "struct llama_sampler *",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_dist",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "seed",
+          "type": "uint32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_top_k",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "k",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_top_p",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "p",
+          "type": "float"
+        },
+        {
+          "name": "min_keep",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_min_p",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "p",
+          "type": "float"
+        },
+        {
+          "name": "min_keep",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_typical",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "p",
+          "type": "float"
+        },
+        {
+          "name": "min_keep",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_temp",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "t",
+          "type": "float"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_temp_ext",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "t",
+          "type": "float"
+        },
+        {
+          "name": "delta",
+          "type": "float"
+        },
+        {
+          "name": "exponent",
+          "type": "float"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_xtc",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "p",
+          "type": "float"
+        },
+        {
+          "name": "t",
+          "type": "float"
+        },
+        {
+          "name": "min_keep",
+          "type": "size_t"
+        },
+        {
+          "name": "seed",
+          "type": "uint32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_top_n_sigma",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "n",
+          "type": "float"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_mirostat",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "n_vocab",
+          "type": "int32_t"
+        },
+        {
+          "name": "seed",
+          "type": "uint32_t"
+        },
+        {
+          "name": "tau",
+          "type": "float"
+        },
+        {
+          "name": "eta",
+          "type": "float"
+        },
+        {
+          "name": "m",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_mirostat_v2",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "seed",
+          "type": "uint32_t"
+        },
+        {
+          "name": "tau",
+          "type": "float"
+        },
+        {
+          "name": "eta",
+          "type": "float"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_grammar",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "grammar_str",
+          "type": "const char *"
+        },
+        {
+          "name": "grammar_root",
+          "type": "const char *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_grammar_lazy",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "grammar_str",
+          "type": "const char *"
+        },
+        {
+          "name": "grammar_root",
+          "type": "const char *"
+        },
+        {
+          "name": "trigger_words",
+          "type": "const char **"
+        },
+        {
+          "name": "num_trigger_words",
+          "type": "size_t"
+        },
+        {
+          "name": "trigger_tokens",
+          "type": "const llama_token *"
+        },
+        {
+          "name": "num_trigger_tokens",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": true
+    },
+    {
+      "name": "llama_sampler_init_grammar_lazy_patterns",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "grammar_str",
+          "type": "const char *"
+        },
+        {
+          "name": "grammar_root",
+          "type": "const char *"
+        },
+        {
+          "name": "trigger_patterns",
+          "type": "const char **"
+        },
+        {
+          "name": "num_trigger_patterns",
+          "type": "size_t"
+        },
+        {
+          "name": "trigger_tokens",
+          "type": "const llama_token *"
+        },
+        {
+          "name": "num_trigger_tokens",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_penalties",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "penalty_last_n",
+          "type": "int32_t"
+        },
+        {
+          "name": "penalty_repeat",
+          "type": "float"
+        },
+        {
+          "name": "penalty_freq",
+          "type": "float"
+        },
+        {
+          "name": "penalty_present",
+          "type": "float"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_dry",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        },
+        {
+          "name": "n_ctx_train",
+          "type": "int32_t"
+        },
+        {
+          "name": "dry_multiplier",
+          "type": "float"
+        },
+        {
+          "name": "dry_base",
+          "type": "float"
+        },
+        {
+          "name": "dry_allowed_length",
+          "type": "int32_t"
+        },
+        {
+          "name": "dry_penalty_last_n",
+          "type": "int32_t"
+        },
+        {
+          "name": "seq_breakers",
+          "type": "const char **"
+        },
+        {
+          "name": "num_breakers",
+          "type": "size_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_adaptive_p",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "target",
+          "type": "float"
+        },
+        {
+          "name": "decay",
+          "type": "float"
+        },
+        {
+          "name": "seed",
+          "type": "uint32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_logit_bias",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "n_vocab",
+          "type": "int32_t"
+        },
+        {
+          "name": "n_logit_bias",
+          "type": "int32_t"
+        },
+        {
+          "name": "logit_bias",
+          "type": "const llama_logit_bias *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_init_infill",
+      "return_type": "struct llama_sampler *",
+      "params": [
+        {
+          "name": "vocab",
+          "type": "const struct llama_vocab *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_get_seed",
+      "return_type": "uint32_t",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "const struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_sampler_sample",
+      "return_type": "llama_token",
+      "params": [
+        {
+          "name": "smpl",
+          "type": "struct llama_sampler *"
+        },
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "idx",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_split_path",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "split_path",
+          "type": "char *"
+        },
+        {
+          "name": "maxlen",
+          "type": "size_t"
+        },
+        {
+          "name": "path_prefix",
+          "type": "const char *"
+        },
+        {
+          "name": "split_no",
+          "type": "int32_t"
+        },
+        {
+          "name": "split_count",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_split_prefix",
+      "return_type": "int32_t",
+      "params": [
+        {
+          "name": "split_prefix",
+          "type": "char *"
+        },
+        {
+          "name": "maxlen",
+          "type": "size_t"
+        },
+        {
+          "name": "split_path",
+          "type": "const char *"
+        },
+        {
+          "name": "split_no",
+          "type": "int32_t"
+        },
+        {
+          "name": "split_count",
+          "type": "int32_t"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_print_system_info",
+      "return_type": "const char *",
+      "params": [],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_log_get",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "log_callback",
+          "type": "ggml_log_callback *"
+        },
+        {
+          "name": "user_data",
+          "type": "void **"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_log_set",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "log_callback",
+          "type": "ggml_log_callback"
+        },
+        {
+          "name": "user_data",
+          "type": "void *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_perf_context",
+      "return_type": "struct llama_perf_context_data",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_perf_context_print",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_perf_context_reset",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_perf_sampler",
+      "return_type": "struct llama_perf_sampler_data",
+      "params": [
+        {
+          "name": "chain",
+          "type": "const struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_perf_sampler_print",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "chain",
+          "type": "const struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_perf_sampler_reset",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "chain",
+          "type": "struct llama_sampler *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_memory_breakdown_print",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "ctx",
+          "type": "const struct llama_context *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_opt_param_filter_all",
+      "return_type": "_Bool",
+      "params": [
+        {
+          "name": "tensor",
+          "type": "const struct ggml_tensor *"
+        },
+        {
+          "name": "userdata",
+          "type": "void *"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_opt_init",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "lctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "model",
+          "type": "struct llama_model *"
+        },
+        {
+          "name": "lopt_params",
+          "type": "struct llama_opt_params"
+        }
+      ],
+      "is_deprecated": false
+    },
+    {
+      "name": "llama_opt_epoch",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "lctx",
+          "type": "struct llama_context *"
+        },
+        {
+          "name": "dataset",
+          "type": "ggml_opt_dataset_t"
+        },
+        {
+          "name": "result_train",
+          "type": "ggml_opt_result_t"
+        },
+        {
+          "name": "result_eval",
+          "type": "ggml_opt_result_t"
+        },
+        {
+          "name": "idata_split",
+          "type": "int64_t"
+        },
+        {
+          "name": "callback_train",
+          "type": "ggml_opt_epoch_callback"
+        },
+        {
+          "name": "callback_eval",
+          "type": "ggml_opt_epoch_callback"
+        }
+      ],
+      "is_deprecated": false
+    }
+  ],
+  "structs": [
+    {
+      "name": "llama_vocab",
+      "is_opaque": true,
+      "size": null,
+      "fields": []
+    },
+    {
+      "name": "llama_model",
+      "is_opaque": true,
+      "size": null,
+      "fields": []
+    },
+    {
+      "name": "llama_context",
+      "is_opaque": true,
+      "size": null,
+      "fields": []
+    },
+    {
+      "name": "llama_sampler",
+      "is_opaque": false,
+      "size": 16,
+      "fields": [
+        {
+          "name": "iface",
+          "type": "struct llama_sampler_i *",
+          "offset_bits": 0
+        },
+        {
+          "name": "ctx",
+          "type": "llama_sampler_context_t",
+          "offset_bits": 64
+        }
+      ]
+    },
+    {
+      "name": "llama_memory_i",
+      "is_opaque": true,
+      "size": null,
+      "fields": []
+    },
+    {
+      "name": "llama_token_data",
+      "is_opaque": false,
+      "size": 12,
+      "fields": [
+        {
+          "name": "id",
+          "type": "llama_token",
+          "offset_bits": 0
+        },
+        {
+          "name": "logit",
+          "type": "float",
+          "offset_bits": 32
+        },
+        {
+          "name": "p",
+          "type": "float",
+          "offset_bits": 64
+        }
+      ]
+    },
+    {
+      "name": "llama_token_data_array",
+      "is_opaque": false,
+      "size": 32,
+      "fields": [
+        {
+          "name": "data",
+          "type": "llama_token_data *",
+          "offset_bits": 0
+        },
+        {
+          "name": "size",
+          "type": "size_t",
+          "offset_bits": 64
+        },
+        {
+          "name": "selected",
+          "type": "int64_t",
+          "offset_bits": 128
+        },
+        {
+          "name": "sorted",
+          "type": "_Bool",
+          "offset_bits": 192
+        }
+      ]
+    },
+    {
+      "name": "llama_batch",
+      "is_opaque": false,
+      "size": 56,
+      "fields": [
+        {
+          "name": "n_tokens",
+          "type": "int32_t",
+          "offset_bits": 0
+        },
+        {
+          "name": "token",
+          "type": "llama_token *",
+          "offset_bits": 64
+        },
+        {
+          "name": "embd",
+          "type": "float *",
+          "offset_bits": 128
+        },
+        {
+          "name": "pos",
+          "type": "llama_pos *",
+          "offset_bits": 192
+        },
+        {
+          "name": "n_seq_id",
+          "type": "int32_t *",
+          "offset_bits": 256
+        },
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id **",
+          "offset_bits": 320
+        },
+        {
+          "name": "logits",
+          "type": "int8_t *",
+          "offset_bits": 384
+        }
+      ]
+    },
+    {
+      "name": "llama_model_kv_override",
+      "is_opaque": false,
+      "size": 264,
+      "fields": [
+        {
+          "name": "tag",
+          "type": "enum llama_model_kv_override_type",
+          "offset_bits": 0
+        },
+        {
+          "name": "key",
+          "type": "char[128]",
+          "offset_bits": 32
+        }
+      ]
+    },
+    {
+      "name": "llama_model_tensor_buft_override",
+      "is_opaque": false,
+      "size": 16,
+      "fields": [
+        {
+          "name": "pattern",
+          "type": "const char *",
+          "offset_bits": 0
+        },
+        {
+          "name": "buft",
+          "type": "ggml_backend_buffer_type_t",
+          "offset_bits": 64
+        }
+      ]
+    },
+    {
+      "name": "llama_model_params",
+      "is_opaque": false,
+      "size": 72,
+      "fields": [
+        {
+          "name": "devices",
+          "type": "ggml_backend_dev_t *",
+          "offset_bits": 0
+        },
+        {
+          "name": "tensor_buft_overrides",
+          "type": "const struct llama_model_tensor_buft_override *",
+          "offset_bits": 64
+        },
+        {
+          "name": "n_gpu_layers",
+          "type": "int32_t",
+          "offset_bits": 128
+        },
+        {
+          "name": "split_mode",
+          "type": "enum llama_split_mode",
+          "offset_bits": 160
+        },
+        {
+          "name": "main_gpu",
+          "type": "int32_t",
+          "offset_bits": 192
+        },
+        {
+          "name": "tensor_split",
+          "type": "const float *",
+          "offset_bits": 256
+        },
+        {
+          "name": "progress_callback",
+          "type": "llama_progress_callback",
+          "offset_bits": 320
+        },
+        {
+          "name": "progress_callback_user_data",
+          "type": "void *",
+          "offset_bits": 384
+        },
+        {
+          "name": "kv_overrides",
+          "type": "const struct llama_model_kv_override *",
+          "offset_bits": 448
+        },
+        {
+          "name": "vocab_only",
+          "type": "_Bool",
+          "offset_bits": 512
+        },
+        {
+          "name": "use_mmap",
+          "type": "_Bool",
+          "offset_bits": 520
+        },
+        {
+          "name": "use_direct_io",
+          "type": "_Bool",
+          "offset_bits": 528
+        },
+        {
+          "name": "use_mlock",
+          "type": "_Bool",
+          "offset_bits": 536
+        },
+        {
+          "name": "check_tensors",
+          "type": "_Bool",
+          "offset_bits": 544
+        },
+        {
+          "name": "use_extra_bufts",
+          "type": "_Bool",
+          "offset_bits": 552
+        },
+        {
+          "name": "no_host",
+          "type": "_Bool",
+          "offset_bits": 560
+        },
+        {
+          "name": "no_alloc",
+          "type": "_Bool",
+          "offset_bits": 568
+        }
+      ]
+    },
+    {
+      "name": "llama_sampler_seq_config",
+      "is_opaque": false,
+      "size": 16,
+      "fields": [
+        {
+          "name": "seq_id",
+          "type": "llama_seq_id",
+          "offset_bits": 0
+        },
+        {
+          "name": "sampler",
+          "type": "struct llama_sampler *",
+          "offset_bits": 64
+        }
+      ]
+    },
+    {
+      "name": "llama_context_params",
+      "is_opaque": false,
+      "size": 136,
+      "fields": [
+        {
+          "name": "n_ctx",
+          "type": "uint32_t",
+          "offset_bits": 0
+        },
+        {
+          "name": "n_batch",
+          "type": "uint32_t",
+          "offset_bits": 32
+        },
+        {
+          "name": "n_ubatch",
+          "type": "uint32_t",
+          "offset_bits": 64
+        },
+        {
+          "name": "n_seq_max",
+          "type": "uint32_t",
+          "offset_bits": 96
+        },
+        {
+          "name": "n_threads",
+          "type": "int32_t",
+          "offset_bits": 128
+        },
+        {
+          "name": "n_threads_batch",
+          "type": "int32_t",
+          "offset_bits": 160
+        },
+        {
+          "name": "rope_scaling_type",
+          "type": "enum llama_rope_scaling_type",
+          "offset_bits": 192
+        },
+        {
+          "name": "pooling_type",
+          "type": "enum llama_pooling_type",
+          "offset_bits": 224
+        },
+        {
+          "name": "attention_type",
+          "type": "enum llama_attention_type",
+          "offset_bits": 256
+        },
+        {
+          "name": "flash_attn_type",
+          "type": "enum llama_flash_attn_type",
+          "offset_bits": 288
+        },
+        {
+          "name": "rope_freq_base",
+          "type": "float",
+          "offset_bits": 320
+        },
+        {
+          "name": "rope_freq_scale",
+          "type": "float",
+          "offset_bits": 352
+        },
+        {
+          "name": "yarn_ext_factor",
+          "type": "float",
+          "offset_bits": 384
+        },
+        {
+          "name": "yarn_attn_factor",
+          "type": "float",
+          "offset_bits": 416
+        },
+        {
+          "name": "yarn_beta_fast",
+          "type": "float",
+          "offset_bits": 448
+        },
+        {
+          "name": "yarn_beta_slow",
+          "type": "float",
+          "offset_bits": 480
+        },
+        {
+          "name": "yarn_orig_ctx",
+          "type": "uint32_t",
+          "offset_bits": 512
+        },
+        {
+          "name": "defrag_thold",
+          "type": "float",
+          "offset_bits": 544
+        },
+        {
+          "name": "cb_eval",
+          "type": "ggml_backend_sched_eval_callback",
+          "offset_bits": 576
+        },
+        {
+          "name": "cb_eval_user_data",
+          "type": "void *",
+          "offset_bits": 640
+        },
+        {
+          "name": "type_k",
+          "type": "enum ggml_type",
+          "offset_bits": 704
+        },
+        {
+          "name": "type_v",
+          "type": "enum ggml_type",
+          "offset_bits": 736
+        },
+        {
+          "name": "abort_callback",
+          "type": "ggml_abort_callback",
+          "offset_bits": 768
+        },
+        {
+          "name": "abort_callback_data",
+          "type": "void *",
+          "offset_bits": 832
+        },
+        {
+          "name": "embeddings",
+          "type": "_Bool",
+          "offset_bits": 896
+        },
+        {
+          "name": "offload_kqv",
+          "type": "_Bool",
+          "offset_bits": 904
+        },
+        {
+          "name": "no_perf",
+          "type": "_Bool",
+          "offset_bits": 912
+        },
+        {
+          "name": "op_offload",
+          "type": "_Bool",
+          "offset_bits": 920
+        },
+        {
+          "name": "swa_full",
+          "type": "_Bool",
+          "offset_bits": 928
+        },
+        {
+          "name": "kv_unified",
+          "type": "_Bool",
+          "offset_bits": 936
+        },
+        {
+          "name": "samplers",
+          "type": "struct llama_sampler_seq_config *",
+          "offset_bits": 960
+        },
+        {
+          "name": "n_samplers",
+          "type": "size_t",
+          "offset_bits": 1024
+        }
+      ]
+    },
+    {
+      "name": "llama_model_tensor_override",
+      "is_opaque": false,
+      "size": 16,
+      "fields": [
+        {
+          "name": "pattern",
+          "type": "const char *",
+          "offset_bits": 0
+        },
+        {
+          "name": "type",
+          "type": "enum ggml_type",
+          "offset_bits": 64
+        }
+      ]
+    },
+    {
+      "name": "llama_model_imatrix_data",
+      "is_opaque": false,
+      "size": 24,
+      "fields": [
+        {
+          "name": "name",
+          "type": "const char *",
+          "offset_bits": 0
+        },
+        {
+          "name": "data",
+          "type": "const float *",
+          "offset_bits": 64
+        },
+        {
+          "name": "size",
+          "type": "size_t",
+          "offset_bits": 128
+        }
+      ]
+    },
+    {
+      "name": "llama_model_quantize_params",
+      "is_opaque": false,
+      "size": 56,
+      "fields": [
+        {
+          "name": "nthread",
+          "type": "int32_t",
+          "offset_bits": 0
+        },
+        {
+          "name": "ftype",
+          "type": "enum llama_ftype",
+          "offset_bits": 32
+        },
+        {
+          "name": "output_tensor_type",
+          "type": "enum ggml_type",
+          "offset_bits": 64
+        },
+        {
+          "name": "token_embedding_type",
+          "type": "enum ggml_type",
+          "offset_bits": 96
+        },
+        {
+          "name": "allow_requantize",
+          "type": "_Bool",
+          "offset_bits": 128
+        },
+        {
+          "name": "quantize_output_tensor",
+          "type": "_Bool",
+          "offset_bits": 136
+        },
+        {
+          "name": "only_copy",
+          "type": "_Bool",
+          "offset_bits": 144
+        },
+        {
+          "name": "pure",
+          "type": "_Bool",
+          "offset_bits": 152
+        },
+        {
+          "name": "keep_split",
+          "type": "_Bool",
+          "offset_bits": 160
+        },
+        {
+          "name": "dry_run",
+          "type": "_Bool",
+          "offset_bits": 168
+        },
+        {
+          "name": "imatrix",
+          "type": "const struct llama_model_imatrix_data *",
+          "offset_bits": 192
+        },
+        {
+          "name": "kv_overrides",
+          "type": "const struct llama_model_kv_override *",
+          "offset_bits": 256
+        },
+        {
+          "name": "tt_overrides",
+          "type": "const struct llama_model_tensor_override *",
+          "offset_bits": 320
+        },
+        {
+          "name": "prune_layers",
+          "type": "const int32_t *",
+          "offset_bits": 384
+        }
+      ]
+    },
+    {
+      "name": "llama_logit_bias",
+      "is_opaque": false,
+      "size": 8,
+      "fields": [
+        {
+          "name": "token",
+          "type": "llama_token",
+          "offset_bits": 0
+        },
+        {
+          "name": "bias",
+          "type": "float",
+          "offset_bits": 32
+        }
+      ]
+    },
+    {
+      "name": "llama_sampler_chain_params",
+      "is_opaque": false,
+      "size": 1,
+      "fields": [
+        {
+          "name": "no_perf",
+          "type": "_Bool",
+          "offset_bits": 0
+        }
+      ]
+    },
+    {
+      "name": "llama_chat_message",
+      "is_opaque": false,
+      "size": 16,
+      "fields": [
+        {
+          "name": "role",
+          "type": "const char *",
+          "offset_bits": 0
+        },
+        {
+          "name": "content",
+          "type": "const char *",
+          "offset_bits": 64
+        }
+      ]
+    },
+    {
+      "name": "llama_adapter_lora",
+      "is_opaque": true,
+      "size": null,
+      "fields": []
+    },
+    {
+      "name": "llama_sampler_data",
+      "is_opaque": false,
+      "size": 32,
+      "fields": [
+        {
+          "name": "logits",
+          "type": "struct ggml_tensor *",
+          "offset_bits": 0
+        },
+        {
+          "name": "probs",
+          "type": "struct ggml_tensor *",
+          "offset_bits": 64
+        },
+        {
+          "name": "sampled",
+          "type": "struct ggml_tensor *",
+          "offset_bits": 128
+        },
+        {
+          "name": "candidates",
+          "type": "struct ggml_tensor *",
+          "offset_bits": 192
+        }
+      ]
+    },
+    {
+      "name": "llama_sampler_i",
+      "is_opaque": false,
+      "size": 80,
+      "fields": [
+        {
+          "name": "name",
+          "type": "const char *(*)(const struct llama_sampler *)",
+          "offset_bits": 0
+        },
+        {
+          "name": "accept",
+          "type": "void (*)(struct llama_sampler *, llama_token)",
+          "offset_bits": 64
+        },
+        {
+          "name": "apply",
+          "type": "void (*)(struct llama_sampler *, llama_token_data_array *)",
+          "offset_bits": 128
+        },
+        {
+          "name": "reset",
+          "type": "void (*)(struct llama_sampler *)",
+          "offset_bits": 192
+        },
+        {
+          "name": "clone",
+          "type": "struct llama_sampler *(*)(const struct llama_sampler *)",
+          "offset_bits": 256
+        },
+        {
+          "name": "free",
+          "type": "void (*)(struct llama_sampler *)",
+          "offset_bits": 320
+        },
+        {
+          "name": "backend_init",
+          "type": "_Bool (*)(struct llama_sampler *, ggml_backend_buffer_type_t)",
+          "offset_bits": 384
+        },
+        {
+          "name": "backend_accept",
+          "type": "void (*)(struct llama_sampler *, struct ggml_context *, struct ggml_cgraph *, struct ggml_tensor *)",
+          "offset_bits": 448
+        },
+        {
+          "name": "backend_apply",
+          "type": "void (*)(struct llama_sampler *, struct ggml_context *, struct ggml_cgraph *, struct llama_sampler_data *)",
+          "offset_bits": 512
+        },
+        {
+          "name": "backend_set_input",
+          "type": "void (*)(struct llama_sampler *)",
+          "offset_bits": 576
+        }
+      ]
+    },
+    {
+      "name": "llama_perf_context_data",
+      "is_opaque": false,
+      "size": 48,
+      "fields": [
+        {
+          "name": "t_start_ms",
+          "type": "double",
+          "offset_bits": 0
+        },
+        {
+          "name": "t_load_ms",
+          "type": "double",
+          "offset_bits": 64
+        },
+        {
+          "name": "t_p_eval_ms",
+          "type": "double",
+          "offset_bits": 128
+        },
+        {
+          "name": "t_eval_ms",
+          "type": "double",
+          "offset_bits": 192
+        },
+        {
+          "name": "n_p_eval",
+          "type": "int32_t",
+          "offset_bits": 256
+        },
+        {
+          "name": "n_eval",
+          "type": "int32_t",
+          "offset_bits": 288
+        },
+        {
+          "name": "n_reused",
+          "type": "int32_t",
+          "offset_bits": 320
+        }
+      ]
+    },
+    {
+      "name": "llama_perf_sampler_data",
+      "is_opaque": false,
+      "size": 16,
+      "fields": [
+        {
+          "name": "t_sample_ms",
+          "type": "double",
+          "offset_bits": 0
+        },
+        {
+          "name": "n_sample",
+          "type": "int32_t",
+          "offset_bits": 64
+        }
+      ]
+    },
+    {
+      "name": "llama_opt_params",
+      "is_opaque": false,
+      "size": 48,
+      "fields": [
+        {
+          "name": "n_ctx_train",
+          "type": "uint32_t",
+          "offset_bits": 0
+        },
+        {
+          "name": "param_filter",
+          "type": "llama_opt_param_filter",
+          "offset_bits": 64
+        },
+        {
+          "name": "param_filter_ud",
+          "type": "void *",
+          "offset_bits": 128
+        },
+        {
+          "name": "get_opt_pars",
+          "type": "ggml_opt_get_optimizer_params",
+          "offset_bits": 192
+        },
+        {
+          "name": "get_opt_pars_ud",
+          "type": "void *",
+          "offset_bits": 256
+        },
+        {
+          "name": "optimizer_type",
+          "type": "enum ggml_opt_optimizer_type",
+          "offset_bits": 320
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "llama_vocab_type",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_VOCAB_TYPE_NONE",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_VOCAB_TYPE_SPM",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_VOCAB_TYPE_BPE",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_VOCAB_TYPE_WPM",
+          "value": 3
+        },
+        {
+          "name": "LLAMA_VOCAB_TYPE_UGM",
+          "value": 4
+        },
+        {
+          "name": "LLAMA_VOCAB_TYPE_RWKV",
+          "value": 5
+        },
+        {
+          "name": "LLAMA_VOCAB_TYPE_PLAMO2",
+          "value": 6
+        }
+      ]
+    },
+    {
+      "name": "llama_rope_type",
+      "underlying": "int",
+      "values": [
+        {
+          "name": "LLAMA_ROPE_TYPE_NONE",
+          "value": -1
+        },
+        {
+          "name": "LLAMA_ROPE_TYPE_NORM",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_ROPE_TYPE_NEOX",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_ROPE_TYPE_MROPE",
+          "value": 8
+        },
+        {
+          "name": "LLAMA_ROPE_TYPE_IMROPE",
+          "value": 40
+        },
+        {
+          "name": "LLAMA_ROPE_TYPE_VISION",
+          "value": 24
+        }
+      ]
+    },
+    {
+      "name": "llama_token_type",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_TOKEN_TYPE_UNDEFINED",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_TOKEN_TYPE_NORMAL",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_TOKEN_TYPE_UNKNOWN",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_TOKEN_TYPE_CONTROL",
+          "value": 3
+        },
+        {
+          "name": "LLAMA_TOKEN_TYPE_USER_DEFINED",
+          "value": 4
+        },
+        {
+          "name": "LLAMA_TOKEN_TYPE_UNUSED",
+          "value": 5
+        },
+        {
+          "name": "LLAMA_TOKEN_TYPE_BYTE",
+          "value": 6
+        }
+      ]
+    },
+    {
+      "name": "llama_token_attr",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_TOKEN_ATTR_UNDEFINED",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_UNKNOWN",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_UNUSED",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_NORMAL",
+          "value": 4
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_CONTROL",
+          "value": 8
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_USER_DEFINED",
+          "value": 16
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_BYTE",
+          "value": 32
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_NORMALIZED",
+          "value": 64
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_LSTRIP",
+          "value": 128
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_RSTRIP",
+          "value": 256
+        },
+        {
+          "name": "LLAMA_TOKEN_ATTR_SINGLE_WORD",
+          "value": 512
+        }
+      ]
+    },
+    {
+      "name": "llama_ftype",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_FTYPE_ALL_F32",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_F16",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q4_0",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q4_1",
+          "value": 3
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q8_0",
+          "value": 7
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q5_0",
+          "value": 8
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q5_1",
+          "value": 9
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q2_K",
+          "value": 10
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q3_K_S",
+          "value": 11
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q3_K_M",
+          "value": 12
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q3_K_L",
+          "value": 13
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q4_K_S",
+          "value": 14
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q4_K_M",
+          "value": 15
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q5_K_S",
+          "value": 16
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q5_K_M",
+          "value": 17
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q6_K",
+          "value": 18
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ2_XXS",
+          "value": 19
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ2_XS",
+          "value": 20
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_Q2_K_S",
+          "value": 21
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ3_XS",
+          "value": 22
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ3_XXS",
+          "value": 23
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ1_S",
+          "value": 24
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ4_NL",
+          "value": 25
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ3_S",
+          "value": 26
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ3_M",
+          "value": 27
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ2_S",
+          "value": 28
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ2_M",
+          "value": 29
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ4_XS",
+          "value": 30
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_IQ1_M",
+          "value": 31
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_BF16",
+          "value": 32
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_TQ1_0",
+          "value": 36
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_TQ2_0",
+          "value": 37
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_MXFP4_MOE",
+          "value": 38
+        },
+        {
+          "name": "LLAMA_FTYPE_MOSTLY_NVFP4",
+          "value": 39
+        },
+        {
+          "name": "LLAMA_FTYPE_GUESSED",
+          "value": 1024
+        }
+      ]
+    },
+    {
+      "name": "llama_rope_scaling_type",
+      "underlying": "int",
+      "values": [
+        {
+          "name": "LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED",
+          "value": -1
+        },
+        {
+          "name": "LLAMA_ROPE_SCALING_TYPE_NONE",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_ROPE_SCALING_TYPE_LINEAR",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_ROPE_SCALING_TYPE_YARN",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_ROPE_SCALING_TYPE_LONGROPE",
+          "value": 3
+        },
+        {
+          "name": "LLAMA_ROPE_SCALING_TYPE_MAX_VALUE",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "name": "llama_pooling_type",
+      "underlying": "int",
+      "values": [
+        {
+          "name": "LLAMA_POOLING_TYPE_UNSPECIFIED",
+          "value": -1
+        },
+        {
+          "name": "LLAMA_POOLING_TYPE_NONE",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_POOLING_TYPE_MEAN",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_POOLING_TYPE_CLS",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_POOLING_TYPE_LAST",
+          "value": 3
+        },
+        {
+          "name": "LLAMA_POOLING_TYPE_RANK",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "name": "llama_attention_type",
+      "underlying": "int",
+      "values": [
+        {
+          "name": "LLAMA_ATTENTION_TYPE_UNSPECIFIED",
+          "value": -1
+        },
+        {
+          "name": "LLAMA_ATTENTION_TYPE_CAUSAL",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_ATTENTION_TYPE_NON_CAUSAL",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "name": "llama_flash_attn_type",
+      "underlying": "int",
+      "values": [
+        {
+          "name": "LLAMA_FLASH_ATTN_TYPE_AUTO",
+          "value": -1
+        },
+        {
+          "name": "LLAMA_FLASH_ATTN_TYPE_DISABLED",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_FLASH_ATTN_TYPE_ENABLED",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "name": "llama_split_mode",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_SPLIT_MODE_NONE",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_SPLIT_MODE_LAYER",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_SPLIT_MODE_ROW",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "name": "llama_model_kv_override_type",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_KV_OVERRIDE_TYPE_INT",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_KV_OVERRIDE_TYPE_FLOAT",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_KV_OVERRIDE_TYPE_BOOL",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_KV_OVERRIDE_TYPE_STR",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "name": "llama_model_meta_key",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_TOP_K",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_TOP_P",
+          "value": 2
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_MIN_P",
+          "value": 3
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_XTC_PROBABILITY",
+          "value": 4
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_XTC_THRESHOLD",
+          "value": 5
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_TEMP",
+          "value": 6
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N",
+          "value": 7
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT",
+          "value": 8
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT",
+          "value": 9
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU",
+          "value": 10
+        },
+        {
+          "name": "LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA",
+          "value": 11
+        }
+      ]
+    },
+    {
+      "name": "llama_params_fit_status",
+      "underlying": "unsigned int",
+      "values": [
+        {
+          "name": "LLAMA_PARAMS_FIT_STATUS_SUCCESS",
+          "value": 0
+        },
+        {
+          "name": "LLAMA_PARAMS_FIT_STATUS_FAILURE",
+          "value": 1
+        },
+        {
+          "name": "LLAMA_PARAMS_FIT_STATUS_ERROR",
+          "value": 2
+        }
+      ]
+    }
+  ],
+  "typedefs": [
+    {
+      "name": "llama_memory_t",
+      "underlying": "struct llama_memory_i *"
+    },
+    {
+      "name": "llama_pos",
+      "underlying": "int32_t"
+    },
+    {
+      "name": "llama_token",
+      "underlying": "int32_t"
+    },
+    {
+      "name": "llama_seq_id",
+      "underlying": "int32_t"
+    },
+    {
+      "name": "llama_token_data",
+      "underlying": "struct llama_token_data"
+    },
+    {
+      "name": "llama_token_data_array",
+      "underlying": "struct llama_token_data_array"
+    },
+    {
+      "name": "llama_progress_callback",
+      "underlying": "_Bool (*)(float, void *)"
+    },
+    {
+      "name": "llama_batch",
+      "underlying": "struct llama_batch"
+    },
+    {
+      "name": "llama_model_quantize_params",
+      "underlying": "struct llama_model_quantize_params"
+    },
+    {
+      "name": "llama_logit_bias",
+      "underlying": "struct llama_logit_bias"
+    },
+    {
+      "name": "llama_sampler_chain_params",
+      "underlying": "struct llama_sampler_chain_params"
+    },
+    {
+      "name": "llama_chat_message",
+      "underlying": "struct llama_chat_message"
+    },
+    {
+      "name": "llama_model_set_tensor_data_t",
+      "underlying": "void (*)(struct ggml_tensor *, void *)"
+    },
+    {
+      "name": "llama_state_seq_flags",
+      "underlying": "uint32_t"
+    },
+    {
+      "name": "llama_sampler_context_t",
+      "underlying": "void *"
+    },
+    {
+      "name": "llama_opt_param_filter",
+      "underlying": "_Bool (*)(const struct ggml_tensor *, void *)"
+    }
+  ],
+  "source": "third_party/llama.cpp/include/llama.h.pinned"
+}
