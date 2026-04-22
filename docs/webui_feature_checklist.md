@@ -1,6 +1,13 @@
 # llama-server webui — feature + theming burn-down
 
-Reference snapshot of llama.cpp/tools/server/webui as of commit `1d6d4cf7a5361046f778414c5b1f5ecbc07eeb77`, to match in LlamaCpp.Bindings.LlamaChat. Each item is a checkbox; check off as we implement.
+Reference snapshot of llama.cpp/tools/server/webui as of commit `1d6d4cf7a5361046f778414c5b1f5ecbc07eeb77`, to match in LlamaCpp.Bindings.LlamaChat.
+
+**State legend**
+
+- `- [x]` **done** — implemented and wired up.
+- `- [ ]` **TODO** — actionable now. No precursor needed.
+- `- [~]` **deferred** — needs a precursor first (multimodal bindings, MCP client, tree-shaped transcript, etc.). The precursor is called out in the item's annotation.
+- `- [-]` **N/A** — doesn't translate to a desktop Avalonia app (hash routing, mobile breakpoints, server-side knobs, in-browser-only concerns).
 
 ## Source layout
 
@@ -47,16 +54,16 @@ src/
 
 ### 1. App shell
 
-- [ ] **Hash-based routing** — N/A (desktop single-window app; no URL routing). Deep-links to specific conversations could be simulated later if we add IPC.
+- [-] **Hash-based routing** — N/A (desktop single-window app; no URL routing). Deep-links to specific conversations could be simulated later if we add IPC.
 - [x] **Global keyboard shortcuts** — `Window.KeyBindings` in `MainWindow.axaml` + `OnKeyDown` override in code-behind. Ctrl+N / Ctrl+Shift+O new chat, Ctrl+K focuses search, Ctrl+B toggles sidebar, Ctrl+L loads, Ctrl+, settings. Ctrl+Shift+E (edit title) deferred — use context menu "Rename" or F2 instead.
 - [x] **Sidebar layout with collapse** — left-pinned Border bound to `IsSidebarVisible`; Ctrl+B toggles. Fixed 280px width (no responsive breakpoints in desktop).
-- [ ] **Mobile detection hook** — N/A.
-- [ ] **Responsive breakpoint** — N/A.
+- [-] **Mobile detection hook** — N/A.
+- [-] **Responsive breakpoint** — N/A.
 - [x] **Header region** — toolbar row below menu shows Profile combo + Load/Unload/Settings + live `ModelSummary` (filename · ctx · layers · template). Serves as the `ChatScreenHeader` equivalent.
 - [x] **Sidebar header/footer slots** — RowDefinitions="Auto,Auto,*" lays out New button + Search + list; footer slot free for future (model-status pill, etc.).
 - [x] **Main content inset** — main area uses `Margin="16,12,16,12"` for consistent gutter against the sidebar.
-- [ ] **Tooltip provider context** — deferred along with tooltips themselves.
-- [ ] **Error boundary** — deferred. Avalonia propagates to `Dispatcher.UnhandledException`; for now generation/load errors are caught in-VM and shown in the status bar.
+- [~] **Tooltip provider context** — deferred. Waits on a tooltip component pass; no visible tooltips in the app yet.
+- [~] **Error boundary** — deferred. Generation/load errors are caught in-VM and surfaced to the status bar + `last-error.log`; a proper boundary wrapping the whole app would catch view-tree exceptions too.
 
 ### 2. Conversation list
 
@@ -64,12 +71,12 @@ src/
 - [x] **Create new conversation** — `NewConversationCommand` (Ctrl+N / Ctrl+Shift+O, File menu item). Auto-selects the new one.
 - [x] **Rename conversation** — inline edit in sidebar (right-click → Rename or F2-style — currently via context menu). Commit on Enter/LostFocus via `EndRenameCommand`; Escape cancels.
 - [x] **Delete conversation** — right-click → Delete, or Chat menu. No confirmation yet — deferred.
-- [ ] **Conversation tree/forking** — deferred. Model supports adding a `ForkedFrom` field later; UI would need tree rendering.
+- [~] **Conversation tree/forking** — deferred. Needs `Conversation` refactored from a flat `Turns` list to a tree with `parentId` on each turn, plus sibling-nav UI.
 - [x] **Search conversations** — case-insensitive substring on Title + Preview, live-filtered as user types. Ctrl+K focuses the search box.
 - [x] **Active conversation highlight** — `ListBox.SelectedItem` bound to `SelectedConversation`; styled via existing `ListBoxItem:selected` accent from Theme/Controls.
 - [x] **Conversation preview text** — `ConversationViewModel.Preview` — first user message truncated to 80 chars, rendered below the title in the sidebar.
-- [ ] **Pinned/recent grouping** — deferred. Current sort is pure recency; pins would need a bool field + a second list section.
-- [ ] **Export/import conversations** — deferred. JSON is already the on-disk format so import/export is basically a file-copy dialog.
+- [ ] **Pinned/recent grouping** — add a `Pinned` bool to `Conversation` and render two groups in the sidebar. Small.
+- [ ] **Export/import conversations** — JSON is already the on-disk format, so a File menu item opening `StorageProvider.OpenFilePickerAsync` + `SaveFilePickerAsync` is the whole feature.
 
 ### 3. Message rendering
 
@@ -80,17 +87,17 @@ src/
   - `UseTaskLists()` — `[ ]` / `[x]` rendered with `☐`/`☑` glyph markers
 - [x] **Block-level coverage** — paragraphs, ATX headings (h1-h3 distinct sizes, h4+ body-weight), bullet/ordered lists with configurable start index, blockquotes (3px left border + 85% opacity), fenced + indented code blocks, thematic breaks, pipe tables (bordered Grid).
 - [x] **Inline-level coverage** — Literal, CodeInline (monospace run w/ CodeBackground), EmphasisInline (bold/italic), strikethrough via `TextDecorations`, LinkInline + AutolinkInline (coloured Ring + underline — inert in v1), LineBreak, HtmlInline (raw tag shown as text = no HTML passthrough), HtmlEntityInline.
-- [ ] **KaTeX math rendering** — deferred. Strategy: keep a LaTeX→SkiaSharp or LaTeX→bitmap converter and replace `$...$` spans with `InlineUIContainer` holding the bitmap.
-- [ ] **Syntax highlighting** — deferred. Candidates: `ColorCode.Universal` (NuGet, language-aware tokeniser) or `TextMateSharp` (grammar-based, matches VS Code). Code blocks currently render plain monospace on `CodeBackground`.
-- [ ] **Code-block copy button** — deferred. Place a ghost-variant icon button in the code-block header (language row); uses `TopLevel.Clipboard`.
-- [ ] **Code-block preview/expand dialog** — deferred.
+- [~] **KaTeX math rendering** — deferred. Needs a LaTeX renderer; strategy: LaTeX→SkiaSharp or LaTeX→bitmap, then replace `$...$` spans with an `InlineUIContainer` holding the bitmap.
+- [x] **Syntax highlighting** — `Services/CodeHighlighter.cs` wraps `ColorCode.Core`'s `LanguageParser` into a `(Text, Scope)` token stream; `MarkdownRenderer.BuildCodeBlock` emits a `Run` per token with Foreground bound to a `Syntax*` theme brush (`SyntaxKeyword` / `String` / `Comment` / `Number` / `Type` / `Operator` / `Preprocessor` / `Tag`). GitHub Light/Dark palettes in `Theme/Tokens.axaml`. Languages covered: C#, C++, CSS, F#, HTML, Java, JS/TS/JSON, Python, PHP, PowerShell, SQL, XML/XAML, Markdown, Haskell, MATLAB, VB.NET, Fortran — everything ColorCode.Core ships. Rust/Go/Ruby/YAML/bash fall through to plain text.
+- [x] **Code-block copy button** — ghost+sm `Copy` button in the code-block header row. Uses `DialogService.CopyToClipboardAsync`.
+- [x] **Code-block preview/expand dialog** — `Views/CodePreviewDialog.cs` — modal window (1000×700, centre-of-owner) that re-renders the same highlighted block at full size, with a footer Copy + Close and Escape-to-close. "Expand" button in each code block opens it.
 - [x] **Incomplete code block / mid-stream robustness** — `Markdown.Parse` is wrapped in `try`; if parsing fails (e.g. unclosed fence mid-stream) we fall back to showing the raw text in a `TextBlock` instead of leaving the bubble blank. Markdig actually tolerates most mid-stream cases — the try is belt-and-braces.
-- [ ] **Image display from attachments** — deferred with multimodal input.
-- [ ] **Image error fallback** — deferred with the above.
+- [~] **Image display from attachments** — deferred. Precursor: `mtmd_*`/`clip_*` native bindings (see `docs/webui_parity_investigation.md` gap #1).
+- [~] **Image error fallback** — deferred, with images.
 - [x] **GFM tables** — rendered as a bordered Grid with Auto columns. Header row detected via Markdig's `TableRow.IsHeader`, emitted SemiBold.
-- [ ] **Footnotes** — deferred (not in v1 `MarkdownPipelineBuilder` extensions; webui doesn't support them either).
-- [ ] **Mermaid diagrams** — deferred (no equivalent native renderer; would need a SkiaSharp implementation).
-- [ ] **Streaming cursor/indicator** — deferred (no blinking caret yet; `IsStreaming` flag is available in the VM for when we add one).
+- [~] **Footnotes** — deferred. Not in our `MarkdownPipelineBuilder` extensions; webui doesn't support them either. Low priority.
+- [~] **Mermaid diagrams** — deferred. Would need a SkiaSharp implementation of Mermaid's graph layout engine; nontrivial.
+- [x] **Streaming cursor/indicator** — `MarkdownView` exposes an `IsStreaming` StyledProperty; bubble template binds it from `MessageViewModel.IsStreaming`. When true, an `InlineUIContainer(TextBlock.cursor)` carrying `▌` is appended to the live tail. Blink animation (1s cycle, opacity 1 → 0.2 → 1) lives on the `TextBlock.cursor` style in `Theme/Controls.axaml`.
 - [x] **HTML sanitisation** — inert by construction: `HtmlInline` renders the raw tag string as literal text, so injected `<script>` etc. never becomes a control.
 - [x] **Streaming-safe re-render throttling** — `MarkdownView` coalesces property changes through a 40ms `DispatcherTimer` debounce to avoid thrashing the layout pass on every decoded token (~8ms intervals at 120 tok/s → ~4-5 tokens per render).
 
@@ -99,27 +106,27 @@ src/
 - [x] **Copy message** — `CopyMessageCommand` → `DialogService.CopyToClipboardAsync` (wraps `Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync`). Button bound in the bubble template.
 - [x] **Edit message** — inline edit surface (TextBox + Save / Cancel) replaces the read-only bubble body while `MessageViewModel.IsEditing`. On Save: user message → truncate downstream + regenerate; assistant message → overwrite in place. `EditDraft` is the buffer; `Content` only commits on Save.
 - [x] **Regenerate response** — `RegenerateMessageCommand` truncates the transcript starting at the target message (or right after, if the target was a user turn), `ClearKv()`s the session, and re-enters `GenerateAssistantReplyAsync`. Extracted from `SendAsync` so both share the same streaming path.
-- [ ] **Continue generation** — deferred. Needs `LlamaGenerator` support for resuming from a position in an already-decoded transcript (we re-prefill each turn today — see `docs/webui_parity_investigation.md` Run 1 item 6 "Prefix-cache reuse").
+- [~] **Continue generation** — deferred. Precursor: `LlamaGenerator` support for resuming from a position in an already-decoded transcript (we re-prefill each turn today — see `docs/webui_parity_investigation.md` Run 1 item 6 "Prefix-cache reuse").
 - [x] **Delete message** — `DeleteMessageCommand` removes the single clicked message (not downstream) and clears the KV cache. No confirmation dialog yet.
-- [ ] **Branch navigation** — deferred. Conversation is currently a flat list; branching needs a tree-shaped transcript with `parentId` on each turn plus sibling nav controls.
-- [ ] **Fork conversation** — deferred (straightforward wrapper once branching or a simple "duplicate up to here" command lands).
-- [ ] **Message deletion dialog** — deferred (we delete immediately; add confirmation once there's a "delete downstream" variant to choose).
+- [~] **Branch navigation** — deferred. Precursor: tree-shaped transcript with `parentId` on each turn.
+- [~] **Fork conversation** — deferred. Trivial wrapper once branching or a "duplicate-up-to-here" command lands.
+- [ ] **Message deletion dialog** — actionable now. Small confirm dialog offering "just this" vs "this + downstream".
 
 ### 5. Compose
 
-- [ ] **Textarea input** — `ChatFormTextarea.svelte` — `field-sizing-content` for auto-height, min-height 16, Tailwind classes, backdrop blur
-- [ ] **File attachment picker** — `ChatFormFileInputInvisible.svelte`, `ChatFormActionAttachmentsDropdown.svelte` — file input `accept="*/*"`, accepts images, audio, PDF, text files
-- [ ] **Attachment preview** — `ChatAttachmentsList.svelte`, `ChatAttachmentThumbnailImage.svelte`, `ChatAttachmentThumbnailFile.svelte` — shows image thumbnails or file icons, remove button per attachment
-- [ ] **Attachment list modal** — `DialogChatAttachmentsViewAll.svelte` — full list of uploaded files with preview modals
-- [ ] **Audio recording** — `ChatFormActionRecord.svelte` — uses Web Audio API, `AudioRecorder` + `convertToWav()` utilities, streams to uploaded files
-- [ ] **Drag-and-drop file upload** — `ChatScreenDragOverlay.svelte`, `ChatScreen.svelte` — overlay during drag, drop handler validates file types and modalities
-- [ ] **Paste handling** — `ChatForm.svelte` — clipboard paste triggers file upload or text insertion, uses `parseClipboardContent()` utility
-- [ ] **MCP prompt picker** — `ChatFormPromptPicker.svelte`, `ChatFormPromptPickerArgumentForm.svelte` — dropdown to select MCP prompts, shows arguments form with inputs, inserts prompt text
-- [ ] **MCP resource picker** — `ChatFormResourcePicker.svelte`, `ChatFormResourcePicker/ChatFormResourcePickerArgumentForm.svelte` — browse/select MCP resources from server, inserts resource reference
-- [ ] **Slash command support** — Not explicitly found; prompt picker prefixed with `/prompt:` may serve as command-like interface
-- [ ] **Token count display** — `ChatScreenProcessingInfo.svelte` — shows estimated token count during typing, updated in header
-- [ ] **Send button state** — `ChatFormActionSubmit.svelte` — enabled/disabled based on text length and loading state, shows spinner during submission
-- [ ] **Stop generation button** — `ChatFormActionSubmit.svelte` — changes to "Stop" during streaming, calls `chatStore.stopMessage()`
+- [x] **Textarea input** — the compose TextBox in `MainWindow.axaml` with `MinHeight=56 MaxHeight=200 TextWrapping=Wrap AcceptsReturn=False` + custom Enter/Shift+Enter handling. Webui's auto-height sizing via `field-sizing: content` would be a polish pass; the fixed min/max is serviceable.
+- [~] **File attachment picker** — deferred. Precursor: multimodal (`mtmd_*`) bindings.
+- [~] **Attachment preview** — deferred (with multimodal).
+- [~] **Attachment list modal** — deferred (with multimodal).
+- [~] **Audio recording** — deferred. Precursor: multimodal bindings + NAudio/CoreAudio capture.
+- [~] **Drag-and-drop file upload** — deferred (with multimodal).
+- [~] **Paste handling (files)** — deferred (with multimodal). Plain-text paste already works via default `TextBox` behaviour.
+- [~] **MCP prompt picker** — deferred. Precursor: MCP client.
+- [~] **MCP resource picker** — deferred (with MCP).
+- [ ] **Slash command support** — actionable. Intercept leading `/` in compose and show a small popup with `/clear`, `/reset`, `/system ...` etc. Low priority, no blocker.
+- [ ] **Token count display** — actionable now. Call `model.Vocab.Tokenize(UserInput, false, true)` on `UserInput` change (debounced) and show count in the compose area.
+- [x] **Send button state** — disabled/enabled bound to `CanSend` (checks input length, not generating, not busy, model loaded, conversation selected). Spinner during submission is a small polish todo.
+- [ ] **Stop generation button** — actionable. Merge Send + Cancel into one toggle that shows "Send" when idle and "Stop" during `IsGenerating`. Currently we have two separate buttons side-by-side.
 
 ### 6. Chat settings
 
@@ -128,70 +135,76 @@ src/
 - [x] **Display tab** — three toggles, all wired: `AutoScroll`, `ShowMessageStats`, `ShowReasoningInProgress`. Code-block theme and copy-as-plain-text deferred until we add the code-block toolbar. `AppSettings` record + `AppSettingsStore` persist to `app-settings.json` alongside profiles.
 - [x] **Sampling tab** — already implemented in `Views/SamplerPanelView.axaml` (embedded inside ProfileEditorView): temperature + dynatemp, top-k/p, min-p, typical, top-n-σ, XTC, DRY, repetition/frequency/presence penalties.
 - [x] **Advanced tab** — merged with Sampling: seed, dynamic-temp range/exponent, mirostat v1/v2 + tau/eta, grammar (GBNF). "Tokens to keep" + "ignore EOS" deferred (both require LlamaGenerator API extensions).
-- [ ] **Tools/MCP tab** — deferred. MCP client support is a phase-2 item in `docs/webui_parity_investigation.md`.
+- [~] **Tools/MCP tab** — deferred. Precursor: MCP client support (phase-2 item in `docs/webui_parity_investigation.md`).
 - [x] **System prompt** — per-profile multi-line TextBox at the top of the profile editor. Prepended to every transcript as a `TurnRole.System` turn when that profile is loaded.
-- [ ] **Response format tab** — deferred. GBNF slot exists on the profile; JSON-schema → GBNF conversion + preset templates is a separate task.
-- [ ] **Parameter sync source indicator** — N/A for the desktop model. Settings are local-only; there's no server-default/session-override hierarchy to visualise.
+- [~] **Response format tab** — deferred. Precursor: JSON-schema → GBNF converter + preset templates. Raw GBNF slot already exists on the profile.
+- [-] **Parameter sync source indicator** — N/A. Settings are local-only; there's no server-default/session-override hierarchy to visualise.
 - [x] **Reset to defaults** — `ResetSamplerDefaults` command on the Profiles tab footer restores `SamplerSettings.Default` + fresh `GenerationSettings` on the current profile. Load settings and system prompt are preserved.
 - [x] **Settings persistence** — three stores: `ProfileStore` (profiles.json), `AppSettingsStore` (app-settings.json), `ConversationStore` (conversations.json) — all under `$XDG_CONFIG_HOME/LlamaChat/`. Auto-save on dialog close; explicit Save button covers the in-dialog case.
-- [ ] **User overrides tracking** — deferred. Not meaningful without a server-default baseline to diff against.
+- [-] **User overrides tracking** — N/A. Not meaningful without a server-default baseline to diff against.
 
 ### 7. Tool calling / MCP
 
-- [ ] **MCP server add** — `McpServersSettings.svelte`, `McpServerForm.svelte` — form: URL input, optional headers textarea, add button, validation
-- [ ] **MCP server list** — `McpServersSettings.svelte` — displays all servers as cards, sorted by recency, loading skeletons during health check
-- [ ] **MCP server enable/disable** — `McpServerCard.svelte`, `McpServerCardHeader.svelte` — toggle switch per server, persists to conversation config
-- [ ] **MCP server delete** — `McpServerCard.svelte`, `McpServerCardDeleteDialog.svelte` — delete button, confirmation modal with description
-- [ ] **MCP server edit** — `McpServerCard.svelte`, `McpServerCardEditForm.svelte` — edit URL/headers inline, save/cancel buttons
-- [ ] **MCP connection status indicator** — `McpServerCard.svelte`, `McpServerCardHeader.svelte` — health check status badge (loading/success/error), spinner during health check
-- [ ] **MCP tool list** — `McpServerCardToolsList.svelte` — shows tool names, descriptions, parameters schema (collapsed JSON viewer)
-- [ ] **MCP resource browser** — `McpResourceBrowser.svelte`, `McpResourceBrowserServerItem.svelte` — hierarchical resource list per server, search, preview button
-- [ ] **MCP resource preview** — `DialogMcpResourcePreview.svelte` — modal showing resource content (text/JSON), copy button, full-text display
-- [ ] **MCP prompt picker** — `ChatFormPromptPicker.svelte` — dropdown to select from server prompts, shows arguments form, inserts prompt
-- [ ] **MCP prompt with arguments** — `ChatFormPromptPickerArgumentForm.svelte` — renders form fields for prompt arguments, validation on submit
-- [ ] **MCP resource attachment** — `ChatAttachmentMcpResources.svelte`, `ChatFormResourcePicker.svelte` — attaches resource URI + content to message, shown in attachments list
-- [ ] **MCP execution logs** — `McpConnectionLogs.svelte` — debug panel showing tool call requests/responses, parsing/execution errors
-- [ ] **MCP capabilities badges** — `McpCapabilitiesBadges.svelte` — shows resource/prompt/tool capability flags if server advertises them
-- [ ] **MCP active servers avatars** — `McpActiveServersAvatars.svelte` — compact icons in header showing which MCP servers are active for conversation
+All items deferred — **precursor for every one is an MCP client + tool-calling wiring**. See `docs/webui_parity_investigation.md` gap #2 (full Jinja — landed) and the in-flight MCP work which is phase-2.
+
+- [~] **MCP server add** — form: URL input, optional headers textarea, add button, validation.
+- [~] **MCP server list** — card list sorted by recency, loading skeletons during health check.
+- [~] **MCP server enable/disable** — per-server toggle switch, persists to conversation config.
+- [~] **MCP server delete** — delete button, confirmation modal.
+- [~] **MCP server edit** — edit URL/headers inline, save/cancel.
+- [~] **MCP connection status indicator** — loading/success/error health-check badge.
+- [~] **MCP tool list** — tool names, descriptions, parameter schema in a collapsed JSON viewer.
+- [~] **MCP resource browser** — hierarchical per-server list, search, preview.
+- [~] **MCP resource preview** — modal showing content, copy, full-text display.
+- [~] **MCP prompt picker** — dropdown of server prompts + argument form + inserter.
+- [~] **MCP prompt with arguments** — argument-form fields + validation.
+- [~] **MCP resource attachment** — attach resource URI + content to a message.
+- [~] **MCP execution logs** — debug panel of request/response, parse/exec errors.
+- [~] **MCP capabilities badges** — resource/prompt/tool capability flags per server.
+- [~] **MCP active servers avatars** — compact icons in header showing active MCP servers.
 
 ### 8. Multi-model
 
-- [ ] **Model selector dropdown** — `ModelsSelector.svelte` — searchable dropdown with model name, capability badges, grouped by favorite/available/offline
-- [ ] **Model search/filter** — `ModelsSelector.svelte` — input field filters options by name, groups results by category
-- [ ] **Grouped model list** — `ModelsSelector.svelte`, `filterModelOptions()`, `groupModelOptions()` utilities — groups by favorite, then available, then offline
-- [ ] **Model option** — `ModelsSelectorOption.svelte` — displays model name, description truncated, capability badges (vision/audio)
-- [ ] **Vision modality badge** — `BadgeModality.svelte`, icon from `MODALITY_ICONS[ModelModality.VISION]` (Eye icon) — shows if model supports vision
-- [ ] **Audio modality badge** — `BadgeModality.svelte`, icon from `MODALITY_ICONS[ModelModality.AUDIO]` (Volume icon) — shows if model supports audio
-- [ ] **Model info dialog** — `DialogModelInformation.svelte` — full model name, description, capabilities, parameters, context window
-- [ ] **Model not available dialog** — `DialogModelNotAvailable.svelte` — error state when selected model is offline/unavailable
-- [ ] **Router mode** — `isRouterMode` derived from `serverStore` — if true, model selector changes to show model per-conversation, not global
-- [ ] **Single model display** — `singleModelName` store state — if not in router mode, displays server's single model name (read-only)
-- [ ] **Model change handler** — `ModelsSelector.svelte` — calls `onModelChange()` callback on selection, updates `selectedModelId` store and conversation config
+This whole section is shaped by webui's server-side model-list model. We use per-profile model loads instead, so most items map differently — the *profile picker* covers selection, filtering is trivial on a small profile list, and there's no remote "available/offline" state to display. Vision/audio badges come with multimodal.
+
+- [-] **Model selector dropdown** — N/A. The profile ComboBox in the toolbar already does this (plus load settings and sampler bundled with each profile).
+- [-] **Model search/filter** — N/A. Few-profile case; a search box is overkill.
+- [-] **Grouped model list** — N/A.
+- [-] **Model option** — N/A.
+- [~] **Vision modality badge** — deferred. Precursor: multimodal bindings; model capabilities would expose a Vision flag we could surface next to the profile name.
+- [~] **Audio modality badge** — deferred (with multimodal).
+- [ ] **Model info dialog** — actionable. `LlamaModel` already exposes ParameterCount, TrainingContextSize, LayerCount, EmbeddingSize, Metadata (GGUF key/values), etc. A "File → Model info…" dialog showing them is a nice power-user touch.
+- [-] **Model not available dialog** — N/A. We read from a file path; "not available" = file missing, which we already report in the status bar.
+- [-] **Router mode** — N/A.
+- [-] **Single model display** — N/A. Profile name + filename shown in the toolbar.
+- [-] **Model change handler** — N/A.
 
 ### 9. Miscellaneous
 
-- [ ] **Theme toggle** — `ChatSettings.svelte` general tab — SELECT with options: Auto (system), Light, Dark; calls `setMode()` from mode-watcher, persists theme to localStorage
-- [ ] **Dark mode class strategy** — `src/app.css` — uses `.dark` class on `<html>` element, CSS variables change via `.dark { --color-X: ...}` media query
-- [ ] **Mode-watcher integration** — `src/routes/+layout.svelte`, `ModeWatcherDecorator.svelte` — provides reactive `mode` store for theme detection
-- [ ] **Language/locale selector** — Not found in current codebase; no i18n framework visible
-- [ ] **About dialog / keyboard shortcut overlay** — `KeyboardShortcutInfo.svelte` — modal listing all keyboard shortcuts (Ctrl+K, Ctrl+Shift+O, etc.)
-- [ ] **Error toast messages** — `svelte-sonner` Toaster in `+layout.svelte` — displays error notifications from `chatStore` errors
-- [ ] **Success/info toasts** — `svelte-sonner` Toaster — displays operation confirmations (copy to clipboard, message deleted, etc.)
-- [ ] **Empty state — no conversations** — home page or sidebar shows "Start new chat" prompt
-- [ ] **Empty state — empty conversation** — chat view shows centered prompt "Ask anything..." with example questions
-- [ ] **Loading splash screen** — `ServerLoadingSplash.svelte` — fullscreen spinner while server is initializing
-- [ ] **Error splash screen** — `ServerErrorSplash.svelte` — fullscreen error message if server connection fails
-- [ ] **Onboarding / feature tour** — Not explicitly found; may be deferred to desktop client
+- [ ] **Theme toggle** — actionable. Settings → Display gains a radio: Auto / Light / Dark. Wires to `Application.Current.RequestedThemeVariant`; persist the choice in `AppSettings`.
+- [-] **Dark mode class strategy** — N/A. Avalonia's `ThemeVariant` is the equivalent and is already wired.
+- [-] **Mode-watcher integration** — N/A. Avalonia equivalent (system-theme detection) is built in via `ThemeVariant.Default`.
+- [-] **Language/locale selector** — N/A. No i18n framework; app is English-only.
+- [ ] **About dialog / keyboard shortcut overlay** — actionable. Modal listing Ctrl+N / Ctrl+Shift+O / Ctrl+K / Ctrl+B / Ctrl+, / Ctrl+L and our Enter/Shift+Enter compose rules. Menu: Help → Shortcuts (or About…).
+- [ ] **Error toast messages** — actionable. Replace the "errors only visible in status bar" pattern with a `svelte-sonner`-equivalent (a non-blocking overlay pill). Candidates: roll our own `ToastHost` UserControl, or use `DialogHostAvalonia`-style pattern.
+- [ ] **Success/info toasts** — actionable. Same host as above; used for "Copied", "Profile saved", etc.
+- [ ] **Empty state — no conversations** — actionable. When `Conversations.Count == 0`, sidebar shows a centered "Start your first chat" with a primary button. We currently auto-create a blank conversation to avoid this state.
+- [ ] **Empty state — empty conversation** — actionable. When the active conversation's `Messages.Count == 0`, chat area shows centered placeholder with example prompts or a "type something to start" hint.
+- [ ] **Loading splash screen** — actionable (small). Shown while model is loading — progress-ambiguous spinner + model name. Currently just a status-bar text change.
+- [~] **Error splash screen** — deferred. Precursor: formal app-wide error boundary. For now load/generation errors go to `last-error.log` + status bar.
+- [-] **Onboarding / feature tour** — N/A. Probably out of scope for a developer-oriented desktop app.
 
 ## Visual theming
 
 ### Framework + design system
 
-- [ ] **Tailwind version** — `@tailwindcss/vite: ^4.0.0`, `tailwindcss: ^4.0.0` (`package.json`) — modern Vite-integrated build
-- [ ] **Tailwind plugins** — `@tailwindcss/forms: ^0.5.9`, `@tailwindcss/typography: ^0.5.15` (for `.prose` classes on markdown)
-- [ ] **Component library** — shadcn-svelte via `components.json` registry, manually curated components in `src/lib/components/ui/`
-- [ ] **Design system generator** — `components.json` alias `ui` → `$lib/components/ui`, baseColor `neutral`, Tailwind CSS path `src/app.css`
-- [ ] **Tailwind config path** — No `tailwind.config.ts`; uses Tailwind v4 inline `@theme` config in `src/app.css` (see below)
+These items describe what the webui uses, not TODOs for us — we replaced Tailwind + shadcn-svelte with Avalonia's styling system + hand-rolled control styles in `Theme/`.
+
+- [-] **Tailwind version** — N/A (we use Avalonia styles + Fluent theme).
+- [-] **Tailwind plugins** — N/A.
+- [-] **Component library** — N/A (custom controls; shadcn-equivalent variants hand-rolled in `Theme/Controls.axaml`).
+- [-] **Design system generator** — N/A.
+- [-] **Tailwind config path** — N/A.
 
 ### Color system
 
@@ -213,7 +226,7 @@ src/
   - `--border: oklch(0.875 0 0)` — light gray border
   - `--input: oklch(0.92 0 0)` — very light input background
   - `--ring: oklch(0.708 0 0)` — medium gray for focus rings
-- [ ] **Chart colors** — `--chart-1` through `--chart-5` (deferred — no charts yet)
+- [~] **Chart colors** — `--chart-1` through `--chart-5` deferred; no charts yet.
 - [x] **Sidebar tokens** — `Sidebar`, `SidebarForeground`, `SidebarBorder` in both dictionaries (simpler subset — no separate primary/ring variants needed for our sidebar usage)
 - [x] **Code block colors** — `CodeBackground`/`CodeForeground` in both variants (ready for markdown rendering)
 - [x] **Dark mode override** — separate `Dark` theme dictionary in `Theme/Tokens.axaml` overrides all tokens:
@@ -235,7 +248,7 @@ src/
   - `--radius-md: calc(var(--radius) - 2px)` — 8px
   - `--radius-lg: var(--radius)` — 10px
   - `--radius-xl: calc(var(--radius) + 4px)` — 14px
-- [ ] **Z-index tokens** — N/A (Avalonia manages popup z-order; no explicit layer tokens needed)
+- [-] **Z-index tokens** — N/A. Avalonia manages popup z-order; no explicit layer tokens needed.
 - [x] **Dark/light mode switch** — Avalonia `ThemeVariant` mechanism. Currently hard-coded to `Dark` in `App.axaml`; a user toggle + persisted preference is tracked as a follow-up.
 
 ### Typography
@@ -244,12 +257,12 @@ src/
 - [x] **Base font size** — 13px desktop body (`FontSizeBase` token). Webui uses 16px for the web context; desktop apps conventionally run 2-3pt smaller.
 - [x] **Heading scale** — `TextBlock.h1`/`h2`/`h3` classes in `Theme/Controls.axaml` mapped to `FontSize2xl`/`Xl`/`Lg` tokens.
 - [x] **Code font** — `CodeFontFamily` resource (`Consolas, Menlo, DejaVu Sans Mono, monospace`). Used by markdown code blocks when we add them.
-- [ ] **Line height** — using Avalonia defaults. Revisit if message density feels off.
-- [ ] **Letter spacing** — defaults (no tracking overrides; revisit if needed).
+- [-] **Line height** — Avalonia defaults. Would only revisit if message density feels off.
+- [-] **Letter spacing** — Avalonia defaults. Would only revisit if needed.
 - [x] **Button text** — `FontSize="FontSizeSm"` + `FontWeight="Medium"` baked into base Button style.
 - [x] **Label text** — default `TextBlock` picks up `FontSizeBase`; field labels in forms use `FontSizeSm` via Grid layout.
 - [x] **Helper text** — `TextBlock` classes `muted` + `xs` combine to the shadcn `text-xs text-muted-foreground` pattern.
-- [ ] **Markdown prose** — deferred (no markdown rendering yet; Markdig integration is its own task).
+- [-] **Markdown prose** — N/A. Markdig renders to Avalonia controls directly; there's no `.prose` equivalent to wrap. Obsolete annotation.
 
 ### Spacing + radius scale
 
@@ -262,14 +275,16 @@ src/
   - Cards: `RadiusLg` (10px)
   - Code blocks: will use `RadiusMd` when added
   - Message bubbles: `RadiusLg` (10px)
-- [ ] **Radius for icon buttons** — N/A until we add an icon library.
+- [~] **Radius for icon buttons** — deferred with icons.
 - [x] **Sidebar spacing** — `RadiusLg` container, 6px inner list margin, 10px button row padding in `SettingsWindow.axaml`.
 - [x] **Message padding** — bubble `Padding="14,10"`, `Margin="0,4"` between bubbles via `Border.bubble` style.
 
 ### Iconography
 
-- [ ] **Icon library** — `@lucide/svelte: ^0.515.0` (`package.json`)
-- [ ] **Common icon usage**:
+All deferred — the app currently uses text labels (Copy / Edit / Delete etc.). An icon pass is its own focused task; candidates are `Projektanker.Icons.Avalonia.MaterialDesign` or embedding lucide SVG path data as `Geometry` resources.
+
+- [~] **Icon library** — deferred.
+- [~] **Common icon usage**:
   - Edit: `Edit`
   - Copy: `Copy`
   - Delete: `Trash2`
@@ -290,10 +305,10 @@ src/
   - Git: `GitBranch` (for fork)
   - External: `ExternalLink`
   - Code: `Code`
-- [ ] **Icon sizing** — `size-4` (16px) default in buttons, `size-3` (12px) in badges, `size-5`/`size-6` for standalone icons
-- [ ] **Icon colors** — inherit from button/text color context, or explicit `text-muted-foreground` in secondary contexts
-- [ ] **Custom SVGs** — favicon inlined as base64 data URL in build (from `static/favicon.svg`)
-- [ ] **Icon-only buttons** — variant `icon`, `icon-sm`, `icon-lg` sizes (9/5/10 units respectively)
+- [~] **Icon sizing** — deferred.
+- [~] **Icon colors** — deferred.
+- [~] **Custom SVGs** — deferred. App icon is also TBD.
+- [~] **Icon-only buttons** — deferred.
 
 ### Component patterns
 
@@ -309,74 +324,74 @@ src/
 - [x] **Textarea styling** — inherits TextBox style; compose bar uses `MinHeight="56" MaxHeight="200"` with `TextWrapping="Wrap"`.
 - [x] **Select/dropdown** — ComboBox picks up Input/Border/Ring tokens. No custom item-template styling yet.
 - [x] **Label + field layout** — `ProfileEditorView` / `SamplerPanelView` use 130,*-column Grid rows with labels on the left, helpers below as `xs muted`.
-- [ ] **Form validation** — deferred (no inputs with validation yet).
+- [~] **Form validation** — deferred. No inputs with validation yet.
 - [x] **Checkbox** — basic styling (Foreground + FontSize). Toggle/switch variant deferred.
-- [ ] **Switch/toggle** — deferred.
+- [~] **Switch/toggle** — deferred. `CheckBox` is a stand-in for bool toggles; a proper animated switch is polish.
 - [x] **Cards/panels** — `Border.card` and `Border.panel` classes in `Theme/Controls.axaml`. SettingsWindow uses `card`; MainWindow toolbar/status use `panel`/`statusbar`.
 - [x] **Message bubbles** — `Border.bubble.user` right-aligned Primary bg + max-width 640; `Border.bubble.assistant` left/stretch, Card bg + border. Role selection via bound bools `IsUser`/`IsAssistant`.
 - [x] **Settings form** — grouped `section` headers, vertical stack of rows with label column, footer with Save/Close.
 - [x] **Sidebar** — `SettingsWindow` left pane uses Sidebar/SidebarBorder tokens; list items highlight Accent on hover/selected via `ListBoxItem` styles.
-- [ ] **Code block** — deferred until markdown rendering lands.
+- [x] **Code block** — fenced/indented code rendered as `Border` with `CodeBackground`, monospace `TextBlock` inside a `ScrollViewer`, optional language label in a two-row grid.
 - [x] **Dialog/modal** — `SettingsWindow` shown via `ShowDialog(owner)` with `WindowStartupLocation="CenterOwner"`.
-- [ ] **Toast/notification** — deferred.
-- [ ] **Tooltip** — deferred.
+- [ ] **Toast/notification** — actionable (see Miscellaneous).
+- [~] **Tooltip** — deferred.
 
 ### Motion + accessibility
 
-- [ ] **Transitions** — deferred (Avalonia `Transitions` on properties; add fade-in for new messages and slide for Expander when polish pass happens).
+- [~] **Transitions** — deferred. Avalonia `Transitions` on properties; add fade-in for new messages and slide for Expander in a polish pass.
 - [x] **Hover effects** — `:pointerover /template/ ContentPresenter#PART_ContentPresenter` setters on every Button variant.
 - [x] **Focus rings** — `TextBox:focus` thickens BorderBrush to `Ring`. Avalonia's built-in focus adorner is inherited from FluentTheme.
 - [x] **Disabled state** — `Button:disabled` and `TextBox:disabled` drop Opacity to 0.5; Button also flips Cursor to Arrow.
-- [ ] **Streaming cursor animation** — deferred.
-- [ ] **Auto-scroll on new messages** — deferred.
-- [ ] **Reduced motion support** — N/A until we add animations; Avalonia has no built-in `prefers-reduced-motion` query, need to poll or wire manually.
+- [x] **Streaming cursor animation** — see Message rendering. Avalonia `Animation` on `TextBlock.cursor` in `Theme/Controls.axaml`.
+- [x] **Auto-scroll on new messages** — implemented. Subscribes to `SelectedConversation.Messages.CollectionChanged` for new bubbles + 100 ms poll during `IsGenerating`, both gated on `AppSettings.AutoScroll`.
+- [~] **Reduced motion support** — deferred. Avalonia has no built-in `prefers-reduced-motion`; would need to poll platform APIs or add a user setting.
 - [x] **Focus trap in dialogs** — Avalonia's `ShowDialog` traps focus natively.
 - [x] **Keyboard navigation** — Avalonia defaults handle Tab/arrows/Escape. Our `Enter/Shift+Enter` handler is in `MainWindow.axaml.cs:12-22`. Ctrl+L (Load) and Ctrl+, (Preferences) wired via `InputGesture` on MenuItems.
-- [ ] **ARIA labels** — deferred. Avalonia's analog is `AutomationProperties.Name` etc.
+- [~] **ARIA labels** — deferred. Avalonia's analog is `AutomationProperties.Name` etc.; needed for screen-reader support.
 - [x] **Contrast** — sRGB hex values chosen from Tailwind neutral palette (WCAG AA compliant) + shadcn destructive red.
 
 ### Styling techniques
 
 - [x] **Utility-first via Style Selectors** — `Classes="outline sm"` composes like Tailwind classes. No CSS-in-C# library.
 - [x] **CSS variables analog** — `ResourceDictionary.ThemeDictionaries` + `DynamicResource` binding.
-- [ ] **Backdrop blur** — deferred (Avalonia `ExperimentalAcrylicBorder` covers this; add if we want shadcn's frosted ghost hover).
-- [ ] **Shadow scale** — deferred (no shadows applied; Avalonia uses `BoxShadows` property on Border).
-- [ ] **Scrollbar styling** — deferred.
+- [~] **Backdrop blur** — deferred. Avalonia `ExperimentalAcrylicBorder` covers this; add if we want shadcn's frosted ghost hover.
+- [~] **Shadow scale** — deferred. No shadows applied; Avalonia uses `BoxShadows` property on Border.
+- [~] **Scrollbar styling** — deferred.
 - [x] **Global styles** — base `Window` and `TextBlock` selectors in `Theme/Controls.axaml` set Background/Foreground/FontSize.
-- [ ] **Custom SCSS for external content** — N/A.
+- [-] **Custom SCSS for external content** — N/A.
 
 ## Parity strategy notes
 
-### High-confidence, cheap wins
-- [ ] Basic UI shell (layout, routing, sidebar) — straightforward Avalonia port, no API dependencies
-- [ ] Settings panels — form generation is mechanical, can template per section
-- [ ] Message list UI — straightforward MVVM binding to chat history
-- [ ] Button/input component library — shadcn-svelte → shadcn-avalonia or custom, all variants documented above
-- [ ] Dark mode — Avalonia supports `ThemeVariant.Dark/Light`, CSS variables → static resource brushes
-- [ ] Keyboard shortcuts — Avalonia keybinding system, register same Ctrl+K, Ctrl+Shift+O, Ctrl+Shift+E
-- [ ] Conversation list with search — IndexedDB → local SQLite or memory cache, search trivial
+### High-confidence, cheap wins — landed
+- [x] Basic UI shell (layout, menu + toolbar, sidebar)
+- [x] Settings panels (Profiles + Display tabs)
+- [x] Message list UI (MVVM binding against `SelectedConversation.Messages`)
+- [x] Button / input component library (hand-rolled variants under `Theme/Controls.axaml`)
+- [x] Dark mode (ThemeVariant + tokens); theme toggle UI still TODO
+- [x] Keyboard shortcuts (Ctrl+N / Ctrl+Shift+O / Ctrl+K / Ctrl+B / Ctrl+L / Ctrl+,)
+- [x] Conversation list with search (JSON-persisted, case-insensitive title + preview filter)
 
-### Medium effort, well-scoped
-- [ ] Markdown rendering with remark/rehype — C# markdown libraries available (Markdig), syntax highlighting via Prism/Pygments, KaTeX rendering via HTML → WPF `FlowDocument` or custom XAML parser
-- [ ] File attachments & drag-drop — Avalonia has file dialogs and drag-drop APIs
-- [ ] Audio recording — NAudio or CoreAudio bindings available
-- [ ] MCP protocol client — already have `@modelcontextprotocol/sdk` equivalent in dotnet (MCP.NET); integrate server communication
-- [ ] Model selector with search — bind to model list, filter on TextChanged, group by capability
+### Medium effort, well-scoped — status
+- [x] Markdown rendering with remark/rehype analog — Markdig → Avalonia control tree (see Message rendering section for the detailed breakdown).
+- [~] File attachments & drag-drop — deferred (multimodal).
+- [~] Audio recording — deferred (multimodal; NAudio/CoreAudio).
+- [~] MCP protocol client — deferred (phase 2; `ModelContextProtocol` NuGet is an option when we take this on).
+- [-] Model selector with search — N/A (profile-based UI instead).
 
 ### Known blockers or server-specific stubs
-- [ ] **Multi-model routing** — if server only runs one model, disable model-per-conversation UI and just show selected model in header
-- [ ] **MCP resource browser** — MCP protocol support required; if not needed, stub with "MCP not available" state
-- [ ] **Tool calling / prompt picker** — tied to MCP; stub if MCP not used
-- [ ] **Continue generation** — needs server-side streaming support; verify llama.cpp supports continuing from offset
-- [ ] **Token count estimation** — requires tokenizer (tiktoken or llama.cpp vocab); may need to request from server or embed tokenizer
+- [-] **Multi-model routing** — N/A. Single model per profile-load; no "model per conversation" concept.
+- [~] **MCP resource browser** — deferred (phase 2 with MCP client).
+- [~] **Tool calling / prompt picker** — deferred (phase 2 with MCP).
+- [~] **Continue generation** — deferred. Precursor: `LlamaGenerator` resume-from-offset support.
+- [ ] **Token count estimation** — actionable. `model.Vocab.Tokenize(UserInput, false, true).Length` on debounced input change.
 
 ### Visual implementation notes
 - [x] **OKLCH colors** — translated to sRGB hex anchored on Tailwind v4 neutral palette.
 - [x] **Radius scale** — `CornerRadius` resources in `Theme/Tokens.axaml`.
 - [x] **Fonts** — inherited system stack.
 - [x] **Spacing scale** — `SpacingXs/Sm/Md/Lg/Xl` + `PaddingXs/Sm/Md/Lg` resources.
-- [ ] **Icons** — deferred (candidates: `Projektanker.Icons.Avalonia.MaterialDesign` for a Material set, or embed lucide SVG path data as `Geometry` resources).
-- [ ] **Animations** — deferred.
+- [~] **Icons** — deferred. Candidates: `Projektanker.Icons.Avalonia.MaterialDesign` for a Material set, or embed lucide SVG path data as `Geometry` resources.
+- [~] **Animations** — deferred.
 
 ---
 

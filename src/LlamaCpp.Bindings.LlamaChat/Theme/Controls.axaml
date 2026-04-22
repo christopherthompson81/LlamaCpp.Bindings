@@ -307,4 +307,20 @@
         <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
 
+    <!-- ================================================================
+         Streaming cursor — a pulsing block character appended to the live
+         tail of MarkdownView while the bubble has IsStreaming=true.
+         ================================================================ -->
+    <Style Selector="TextBlock.cursor">
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="Opacity" Value="1" />
+        <Style.Animations>
+            <Animation Duration="0:0:1" IterationCount="Infinite">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
 </Styles>

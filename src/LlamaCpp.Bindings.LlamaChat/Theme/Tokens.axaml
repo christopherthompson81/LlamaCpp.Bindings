@@ -63,6 +63,18 @@
             <SolidColorBrush x:Key="AssistantBubble"         Color="#F5F5F5" />
             <SolidColorBrush x:Key="AssistantBubbleForeground" Color="#0A0A0A" />
 
+            <!-- Syntax highlighting (GitHub Light palette) -->
+            <SolidColorBrush x:Key="SyntaxKeyword"       Color="#CF222E" />
+            <SolidColorBrush x:Key="SyntaxString"        Color="#0A3069" />
+            <SolidColorBrush x:Key="SyntaxComment"       Color="#6E7781" />
+            <SolidColorBrush x:Key="SyntaxNumber"        Color="#0550AE" />
+            <SolidColorBrush x:Key="SyntaxType"          Color="#8250DF" />
+            <SolidColorBrush x:Key="SyntaxFunction"      Color="#8250DF" />
+            <SolidColorBrush x:Key="SyntaxVariable"      Color="#953800" />
+            <SolidColorBrush x:Key="SyntaxOperator"      Color="#CF222E" />
+            <SolidColorBrush x:Key="SyntaxPreprocessor"  Color="#116329" />
+            <SolidColorBrush x:Key="SyntaxTag"           Color="#116329" />
+
         </ResourceDictionary>
 
         <!-- ============================================================
@@ -115,6 +127,18 @@
             <SolidColorBrush x:Key="UserBubbleForeground"    Color="#FAFAFA" />
             <SolidColorBrush x:Key="AssistantBubble"         Color="#171717" />
             <SolidColorBrush x:Key="AssistantBubbleForeground" Color="#FAFAFA" />
+
+            <!-- Syntax highlighting (GitHub Dark palette) -->
+            <SolidColorBrush x:Key="SyntaxKeyword"       Color="#FF7B72" />
+            <SolidColorBrush x:Key="SyntaxString"        Color="#A5D6FF" />
+            <SolidColorBrush x:Key="SyntaxComment"       Color="#8B949E" />
+            <SolidColorBrush x:Key="SyntaxNumber"        Color="#79C0FF" />
+            <SolidColorBrush x:Key="SyntaxType"          Color="#D2A8FF" />
+            <SolidColorBrush x:Key="SyntaxFunction"      Color="#D2A8FF" />
+            <SolidColorBrush x:Key="SyntaxVariable"      Color="#FFA657" />
+            <SolidColorBrush x:Key="SyntaxOperator"      Color="#FF7B72" />
+            <SolidColorBrush x:Key="SyntaxPreprocessor"  Color="#7EE787" />
+            <SolidColorBrush x:Key="SyntaxTag"           Color="#7EE787" />
 
         </ResourceDictionary>
 

@@ -35,6 +35,19 @@ internal static class DialogService
         await owner.Clipboard.SetTextAsync(text);
     }
 
+    /// <summary>
+    /// Show the given code at full window size in a modal with its own copy
+    /// button. The header "Expand" action on each code block in a chat
+    /// bubble routes here.
+    /// </summary>
+    public static async Task ShowCodePreviewAsync(string code, string? language)
+    {
+        var owner = Owner;
+        if (owner is null) return;
+        var win = new CodePreviewDialog(code, language);
+        await win.ShowDialog(owner);
+    }
+
     public static async Task<string?> PickGgufFileAsync()
     {
         var owner = Owner;

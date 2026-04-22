@@ -171,7 +171,8 @@
                                                                      Classes="sm muted"
                                                                      TextWrapping="Wrap" />
                                             </Expander>
-                                            <views:MarkdownView Markdown="{Binding Content}" />
+                                            <views:MarkdownView Markdown="{Binding Content}"
+                                                                IsStreaming="{Binding IsStreaming}" />
                                             <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
                                                        IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).AppSettings.ShowMessageStats}" />
 

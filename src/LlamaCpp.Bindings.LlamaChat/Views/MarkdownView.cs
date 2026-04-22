@@ -1,6 +1,7 @@
 using System;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Media;
 using LlamaCpp.Bindings.LlamaChat.Services;
 
@@ -29,10 +30,25 @@ public sealed class MarkdownView : UserControl
     public static readonly StyledProperty<string?> MarkdownProperty =
         AvaloniaProperty.Register<MarkdownView, string?>(nameof(Markdown));
 
+    public static readonly StyledProperty<bool> IsStreamingProperty =
+        AvaloniaProperty.Register<MarkdownView, bool>(nameof(IsStreaming));
+
     public string? Markdown
     {
         get => GetValue(MarkdownProperty);
         set => SetValue(MarkdownProperty, value);
+    }
+
+    /// <summary>
+    /// When true, append a pulsing <c>▌</c> cursor to the live tail. The
+    /// blink animation is driven by the <c>TextBlock.cursor</c> style in
+    /// <c>Theme/Controls.axaml</c> so the behaviour matches the rest of the
+    /// theme system.
+    /// </summary>
+    public bool IsStreaming
+    {
+        get => GetValue(IsStreamingProperty);
+        set => SetValue(IsStreamingProperty, value);
     }
 
     private readonly StackPanel _stable = new() { Spacing = 6 };
@@ -60,7 +76,8 @@ public sealed class MarkdownView : UserControl
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == MarkdownProperty) Update();
+        if (change.Property == MarkdownProperty || change.Property == IsStreamingProperty)
+            Update();
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -84,17 +101,29 @@ public sealed class MarkdownView : UserControl
             _lastRenderedStable = newStable;
         }
 
-        // Hide the live tail entirely when empty so it doesn't claim a line
-        // of layout height under an already-rendered stable block.
-        if (newLive.Length == 0)
+        // Live tail: plain-text Run for the streaming text + (when
+        // IsStreaming) an InlineUIContainer wrapping a TextBlock.cursor
+        // whose blink animation lives in the theme. Using Inlines instead
+        // of Text lets us mix the two without losing wrap behaviour.
+        _live.Inlines!.Clear();
+
+        var hasText = newLive.Length > 0;
+        var showCursor = IsStreaming;
+
+        if (hasText || showCursor)
         {
-            _live.Text = string.Empty;
-            _live.IsVisible = false;
+            if (hasText) _live.Inlines.Add(new Run(newLive));
+            if (showCursor)
+            {
+                var cursor = new TextBlock { Text = "▌" };
+                cursor.Classes.Add("cursor");
+                _live.Inlines.Add(new InlineUIContainer(cursor));
+            }
+            _live.IsVisible = true;
         }
         else
         {
-            _live.Text = newLive;
-            _live.IsVisible = true;
+            _live.IsVisible = false;
         }
     }
 

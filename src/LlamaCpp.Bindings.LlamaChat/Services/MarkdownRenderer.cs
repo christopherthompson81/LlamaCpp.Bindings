@@ -210,16 +210,41 @@ public static class MarkdownRenderer
         return sb.ToString();
     }
 
-    private static Control BuildCodeBlock(string text, string? language)
+    private static Control BuildCodeBlock(string text, string? language) =>
+        BuildCodeBlock(text, language, showActions: true);
+
+    /// <summary>
+    /// Build a code-block control with syntax highlighting (via
+    /// <see cref="CodeHighlighter"/>) and an optional header row of
+    /// <c>language</c> + <c>Copy</c> + <c>Expand</c> action buttons. Also
+    /// used by the expand-dialog to render the same code block at full size
+    /// without the header — hence the <paramref name="showActions"/> flag.
+    /// </summary>
+    internal static Control BuildCodeBlock(string text, string? language, bool showActions)
     {
         var codeText = new TextBlock
         {
-            Text = text,
             TextWrapping = TextWrapping.NoWrap,
             FontSize = 12,
         };
         codeText[!TextBlock.ForegroundProperty] = new DynamicResourceExtension("CodeForeground");
         codeText[!TextBlock.FontFamilyProperty] = new DynamicResourceExtension("CodeFontFamily");
+
+        // Tokenise with ColorCode and emit a Run per token. Tokens whose
+        // scope doesn't map get the default CodeForeground (set on the
+        // containing TextBlock above), so unrecognised languages still
+        // render — just monochrome.
+        var tokens = CodeHighlighter.Highlight(text, language);
+        foreach (var tok in tokens)
+        {
+            var run = new Run(tok.Text);
+            var token = ScopeToTokenBrush(tok.Scope);
+            if (token is not null)
+            {
+                run[!Run.ForegroundProperty] = new DynamicResourceExtension(token);
+            }
+            codeText.Inlines!.Add(run);
+        }
 
         var scroll = new ScrollViewer
         {
@@ -228,28 +253,10 @@ public static class MarkdownRenderer
             Content = codeText,
         };
 
-        object child = scroll;
-        if (!string.IsNullOrWhiteSpace(language))
+        Control child = scroll;
+        if (showActions)
         {
-            var lang = new TextBlock
-            {
-                Text = language,
-                FontSize = 10,
-                Opacity = 0.6,
-                Margin = new Thickness(0, 0, 0, 4),
-                HorizontalAlignment = HorizontalAlignment.Right,
-            };
-            lang[!TextBlock.ForegroundProperty] = new DynamicResourceExtension("MutedForeground");
-
-            var grid = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,*"),
-            };
-            Grid.SetRow(lang, 0);
-            Grid.SetRow(scroll, 1);
-            grid.Children.Add(lang);
-            grid.Children.Add(scroll);
-            child = grid;
+            child = BuildCodeBlockShell(scroll, text, language);
         }
 
         var border = new Border
@@ -257,11 +264,111 @@ public static class MarkdownRenderer
             Padding = new Thickness(12, 10),
             Margin = new Thickness(0, 4, 0, 4),
             CornerRadius = new CornerRadius(8),
-            Child = (Control)child,
+            Child = child,
         };
         border[!Border.BackgroundProperty] = new DynamicResourceExtension("CodeBackground");
         return border;
     }
+
+    /// <summary>
+    /// Wraps the code body in a header row with language label on the left
+    /// and Copy / Expand buttons on the right. The buttons use ghost+sm
+    /// classes so they blend into the block.
+    /// </summary>
+    private static Control BuildCodeBlockShell(Control body, string text, string? language)
+    {
+        var langLabel = new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(language) ? "" : language,
+            FontSize = 10,
+            Opacity = 0.6,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        langLabel[!TextBlock.ForegroundProperty] = new DynamicResourceExtension("MutedForeground");
+
+        var copyBtn = new Button
+        {
+            Content = "Copy",
+            Padding = new Thickness(8, 2),
+            FontSize = 10,
+            MinHeight = 22,
+        };
+        copyBtn.Classes.Add("ghost");
+        copyBtn.Classes.Add("sm");
+        copyBtn.Click += async (_, _) =>
+        {
+            await DialogService.CopyToClipboardAsync(text);
+        };
+
+        var expandBtn = new Button
+        {
+            Content = "Expand",
+            Padding = new Thickness(8, 2),
+            FontSize = 10,
+            MinHeight = 22,
+            Margin = new Thickness(4, 0, 0, 0),
+        };
+        expandBtn.Classes.Add("ghost");
+        expandBtn.Classes.Add("sm");
+        expandBtn.Click += async (_, _) =>
+        {
+            await DialogService.ShowCodePreviewAsync(text, language);
+        };
+
+        var headerRow = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        headerRow.Children.Add(copyBtn);
+        headerRow.Children.Add(expandBtn);
+
+        var header = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Margin = new Thickness(0, 0, 0, 4),
+        };
+        Grid.SetColumn(langLabel, 0);
+        Grid.SetColumn(headerRow, 1);
+        header.Children.Add(langLabel);
+        header.Children.Add(headerRow);
+
+        var grid = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,*"),
+        };
+        Grid.SetRow(header, 0);
+        Grid.SetRow(body, 1);
+        grid.Children.Add(header);
+        grid.Children.Add(body);
+        return grid;
+    }
+
+    /// <summary>
+    /// Map a ColorCode scope name (as found in <c>ColorCode.Common.ScopeName</c>)
+    /// to one of our theme's <c>Syntax*</c> brush keys. Unmapped scopes
+    /// return null and the token renders with the default code foreground.
+    /// </summary>
+    private static string? ScopeToTokenBrush(string? scope) => scope switch
+    {
+        null => null,
+        "Keyword" or "Pseudo Keyword" or "Preprocessor Keyword" or "HTML Attribute Name"
+            => "SyntaxKeyword",
+        "String" or "String C# Verbatim" or "String Character" or "HTML Attribute Value"
+            => "SyntaxString",
+        "Comment" or "Comment XML Tag" or "Comment XML Attribute"
+            or "Comment XML Attribute Value" or "XML Doc Comment" or "XML Doc Tag"
+            => "SyntaxComment",
+        "Number" => "SyntaxNumber",
+        "Type" or "Class Name" or "Built-in Type" or "Type Variable"
+            => "SyntaxType",
+        "Namespace" or "Module" => "SyntaxType",
+        "HTML Element Name" or "HTML Tag Delimiter" or "XML Tag" or "XML Name"
+            => "SyntaxTag",
+        "Preprocessor" or "HTML Entity" => "SyntaxPreprocessor",
+        "Operator" or "Punctuation" => "SyntaxOperator",
+        _ => null,
+    };
 
     private static Control RenderTable(Table table)
     {
