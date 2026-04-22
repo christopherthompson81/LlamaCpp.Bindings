@@ -9,18 +9,10 @@
              x:Class="LlamaCpp.Bindings.LlamaChat.Views.SamplerPanelView"
              x:DataType="vm:SamplerPanelViewModel">
 
-    <UserControl.Resources>
-        <x:Double x:Key="LabelWidth">130</x:Double>
-    </UserControl.Resources>
-
     <UserControl.Styles>
-        <Style Selector="TextBlock.section">
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="Margin" Value="0,10,0,4" />
-        </Style>
+        <!-- TextBlock.section is defined globally in Theme/Controls.axaml -->
         <Style Selector="Grid.row">
-            <Setter Property="Margin" Value="0,2" />
+            <Setter Property="Margin" Value="0,3" />
         </Style>
     </UserControl.Styles>
 

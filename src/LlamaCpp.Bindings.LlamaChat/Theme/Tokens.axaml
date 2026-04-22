@@ -1,0 +1,162 @@
+<!--
+    Design tokens — colors (theme-varying), radii, spacing, typography.
+
+    Colors mirror the shadcn-svelte / tailwind-neutral palette used by
+    llama.cpp's tools/server webui (see docs/webui_feature_checklist.md).
+    OKLCH values from the webui's src/app.css are translated here to the
+    nearest sRGB values from Tailwind v4's official neutral palette, plus
+    shadcn's canonical destructive red. Reference comments below each group.
+  -->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ResourceDictionary.ThemeDictionaries>
+
+        <!-- ============================================================
+             Light variant
+             ============================================================ -->
+        <ResourceDictionary x:Key="Light">
+
+            <!-- Surface + text -->
+            <SolidColorBrush x:Key="Background"         Color="#FFFFFF" />
+            <SolidColorBrush x:Key="Foreground"         Color="#0A0A0A" />
+            <SolidColorBrush x:Key="Card"               Color="#FFFFFF" />
+            <SolidColorBrush x:Key="CardForeground"     Color="#0A0A0A" />
+            <SolidColorBrush x:Key="Popover"            Color="#FFFFFF" />
+            <SolidColorBrush x:Key="PopoverForeground"  Color="#0A0A0A" />
+
+            <!-- Primary (dark on light) -->
+            <SolidColorBrush x:Key="Primary"            Color="#171717" />
+            <SolidColorBrush x:Key="PrimaryForeground"  Color="#FAFAFA" />
+
+            <!-- Secondary / Accent (low-contrast surfaces) -->
+            <SolidColorBrush x:Key="Secondary"          Color="#EDEDED" />
+            <SolidColorBrush x:Key="SecondaryForeground" Color="#171717" />
+            <SolidColorBrush x:Key="Accent"             Color="#EDEDED" />
+            <SolidColorBrush x:Key="AccentForeground"   Color="#171717" />
+
+            <!-- Muted (lighter than secondary; hints, placeholders) -->
+            <SolidColorBrush x:Key="Muted"              Color="#F5F5F5" />
+            <SolidColorBrush x:Key="MutedForeground"    Color="#737373" />
+
+            <!-- Destructive (red-orange) -->
+            <SolidColorBrush x:Key="Destructive"            Color="#DC2626" />
+            <SolidColorBrush x:Key="DestructiveForeground"  Color="#FAFAFA" />
+
+            <!-- Chrome -->
+            <SolidColorBrush x:Key="Border"     Color="#D7D7D7" />
+            <SolidColorBrush x:Key="Input"      Color="#E8E8E8" />
+            <SolidColorBrush x:Key="Ring"       Color="#A3A3A3" />
+
+            <!-- Sidebar -->
+            <SolidColorBrush x:Key="Sidebar"             Color="#FAFAFA" />
+            <SolidColorBrush x:Key="SidebarForeground"   Color="#0A0A0A" />
+            <SolidColorBrush x:Key="SidebarBorder"       Color="#D7D7D7" />
+
+            <!-- Code -->
+            <SolidColorBrush x:Key="CodeBackground" Color="#FAFAFA" />
+            <SolidColorBrush x:Key="CodeForeground" Color="#0A0A0A" />
+
+            <!-- Chat-specific derivations -->
+            <SolidColorBrush x:Key="UserBubble"              Color="#171717" />
+            <SolidColorBrush x:Key="UserBubbleForeground"    Color="#FAFAFA" />
+            <SolidColorBrush x:Key="AssistantBubble"         Color="#F5F5F5" />
+            <SolidColorBrush x:Key="AssistantBubbleForeground" Color="#0A0A0A" />
+
+        </ResourceDictionary>
+
+        <!-- ============================================================
+             Dark variant
+             ============================================================ -->
+        <ResourceDictionary x:Key="Dark">
+
+            <!-- Surface + text -->
+            <SolidColorBrush x:Key="Background"         Color="#121212" />
+            <SolidColorBrush x:Key="Foreground"         Color="#FAFAFA" />
+            <SolidColorBrush x:Key="Card"               Color="#171717" />
+            <SolidColorBrush x:Key="CardForeground"     Color="#FAFAFA" />
+            <SolidColorBrush x:Key="Popover"            Color="#171717" />
+            <SolidColorBrush x:Key="PopoverForeground"  Color="#FAFAFA" />
+
+            <!-- Primary (light on dark) -->
+            <SolidColorBrush x:Key="Primary"            Color="#E5E5E5" />
+            <SolidColorBrush x:Key="PrimaryForeground"  Color="#171717" />
+
+            <!-- Secondary / Accent -->
+            <SolidColorBrush x:Key="Secondary"          Color="#2E2E2E" />
+            <SolidColorBrush x:Key="SecondaryForeground" Color="#FAFAFA" />
+            <SolidColorBrush x:Key="Accent"             Color="#2E2E2E" />
+            <SolidColorBrush x:Key="AccentForeground"   Color="#FAFAFA" />
+
+            <!-- Muted -->
+            <SolidColorBrush x:Key="Muted"              Color="#262626" />
+            <SolidColorBrush x:Key="MutedForeground"    Color="#A3A3A3" />
+
+            <!-- Destructive -->
+            <SolidColorBrush x:Key="Destructive"            Color="#EF4444" />
+            <SolidColorBrush x:Key="DestructiveForeground"  Color="#FAFAFA" />
+
+            <!-- Chrome (30% white alpha per webui's dark tokens) -->
+            <SolidColorBrush x:Key="Border"     Color="#FFFFFF" Opacity="0.18" />
+            <SolidColorBrush x:Key="Input"      Color="#FFFFFF" Opacity="0.10" />
+            <SolidColorBrush x:Key="Ring"       Color="#737373" />
+
+            <!-- Sidebar -->
+            <SolidColorBrush x:Key="Sidebar"             Color="#171717" />
+            <SolidColorBrush x:Key="SidebarForeground"   Color="#FAFAFA" />
+            <SolidColorBrush x:Key="SidebarBorder"       Color="#FFFFFF" Opacity="0.18" />
+
+            <!-- Code -->
+            <SolidColorBrush x:Key="CodeBackground" Color="#1F1F1F" />
+            <SolidColorBrush x:Key="CodeForeground" Color="#D7D7D7" />
+
+            <!-- Chat-specific derivations -->
+            <SolidColorBrush x:Key="UserBubble"              Color="#2E2E2E" />
+            <SolidColorBrush x:Key="UserBubbleForeground"    Color="#FAFAFA" />
+            <SolidColorBrush x:Key="AssistantBubble"         Color="#171717" />
+            <SolidColorBrush x:Key="AssistantBubbleForeground" Color="#FAFAFA" />
+
+        </ResourceDictionary>
+
+    </ResourceDictionary.ThemeDictionaries>
+
+    <!-- ================================================================
+         Non-theme-varying tokens
+         ================================================================ -->
+
+    <!-- Radius scale matches webui's radius token (0.625rem base = 10px) -->
+    <CornerRadius x:Key="RadiusSm">6</CornerRadius>
+    <CornerRadius x:Key="RadiusMd">8</CornerRadius>
+    <CornerRadius x:Key="RadiusLg">10</CornerRadius>
+    <CornerRadius x:Key="RadiusXl">14</CornerRadius>
+
+    <!-- Spacing scale (Tailwind-ish: 4/8/12/16/24) -->
+    <x:Double x:Key="SpacingXs">4</x:Double>
+    <x:Double x:Key="SpacingSm">8</x:Double>
+    <x:Double x:Key="SpacingMd">12</x:Double>
+    <x:Double x:Key="SpacingLg">16</x:Double>
+    <x:Double x:Key="SpacingXl">24</x:Double>
+
+    <Thickness x:Key="PaddingXs">4</Thickness>
+    <Thickness x:Key="PaddingSm">8</Thickness>
+    <Thickness x:Key="PaddingMd">12</Thickness>
+    <Thickness x:Key="PaddingLg">16</Thickness>
+
+    <!-- Typography — Tailwind text-* scale mapped to desktop-comfortable sizes.
+         Webui uses text-xs (12), text-sm (14), text-base (16), etc. -->
+    <x:Double x:Key="FontSizeXs">11</x:Double>
+    <x:Double x:Key="FontSizeSm">12</x:Double>
+    <x:Double x:Key="FontSizeBase">13</x:Double>
+    <x:Double x:Key="FontSizeLg">15</x:Double>
+    <x:Double x:Key="FontSizeXl">17</x:Double>
+    <x:Double x:Key="FontSize2xl">20</x:Double>
+
+    <!-- Heights for input controls (matches shadcn h-9) -->
+    <x:Double x:Key="ControlHeight">32</x:Double>
+    <x:Double x:Key="ControlHeightSm">28</x:Double>
+    <x:Double x:Key="ControlHeightLg">36</x:Double>
+
+    <!-- Monospace stack for code blocks -->
+    <FontFamily x:Key="CodeFontFamily">Consolas, Menlo, DejaVu Sans Mono, monospace</FontFamily>
+
+</ResourceDictionary>

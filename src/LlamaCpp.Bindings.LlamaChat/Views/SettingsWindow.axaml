@@ -12,55 +12,69 @@
         Width="900" Height="700" MinWidth="600" MinHeight="400"
         WindowStartupLocation="CenterOwner">
 
-    <TabControl TabStripPlacement="Left" Margin="8">
+    <Grid RowDefinitions="Auto,*,Auto">
 
-        <TabItem Header="Profiles">
-            <Grid ColumnDefinitions="240,*" RowDefinitions="*,Auto" Margin="8">
-                <!-- Profile list -->
-                <Border Grid.Row="0" Grid.Column="0"
-                        BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1"
-                        CornerRadius="4" Padding="0">
-                    <Grid RowDefinitions="*,Auto">
-                        <ListBox Grid.Row="0" ItemsSource="{Binding Profiles}"
-                                 SelectedItem="{Binding SelectedProfile}">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate DataType="vm:ProfileEditorViewModel">
-                                    <TextBlock Text="{Binding Name}" />
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4">
-                            <Button Content="Add" Command="{Binding AddProfileCommand}" Margin="0,0,4,0" />
-                            <Button Content="Duplicate" Command="{Binding DuplicateProfileCommand}" Margin="0,0,4,0" />
-                            <Button Content="Delete" Command="{Binding DeleteProfileCommand}" />
-                        </StackPanel>
-                    </Grid>
-                </Border>
+        <!-- Header -->
+        <Border Grid.Row="0" Classes="panel" Padding="20,14">
+            <TextBlock Text="Settings" Classes="h2" />
+        </Border>
 
-                <!-- Editor -->
-                <Border Grid.Row="0" Grid.Column="1" Margin="8,0,0,0"
-                        BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1"
-                        CornerRadius="4" Padding="12">
-                    <ScrollViewer>
-                        <ContentControl Content="{Binding SelectedProfile}">
-                            <ContentControl.ContentTemplate>
-                                <DataTemplate DataType="vm:ProfileEditorViewModel">
-                                    <v:ProfileEditorView />
-                                </DataTemplate>
-                            </ContentControl.ContentTemplate>
-                        </ContentControl>
-                    </ScrollViewer>
-                </Border>
+        <!-- Body: profile list | editor -->
+        <Grid Grid.Row="1" ColumnDefinitions="260,*" Margin="16">
 
-                <!-- Footer -->
-                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal"
-                            HorizontalAlignment="Right" Margin="0,8,0,0" Spacing="8">
-                    <TextBlock Text="{Binding Status}" VerticalAlignment="Center" Opacity="0.7" />
-                    <Button Content="Save" Command="{Binding SaveCommand}" />
-                    <Button Content="Close" Click="OnCloseClicked" />
-                </StackPanel>
+            <Border Grid.Column="0"
+                    Background="{DynamicResource Sidebar}"
+                    BorderBrush="{DynamicResource SidebarBorder}"
+                    BorderThickness="1"
+                    CornerRadius="{DynamicResource RadiusLg}">
+                <Grid RowDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Row="0" Text="Profiles" Classes="section" Margin="14,12,14,6" />
+                    <ListBox Grid.Row="1" Margin="6"
+                             ItemsSource="{Binding Profiles}"
+                             SelectedItem="{Binding SelectedProfile}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="vm:ProfileEditorViewModel">
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="6">
+                        <Button Content="Add" Classes="sm outline"
+                                Command="{Binding AddProfileCommand}" />
+                        <Button Content="Duplicate" Classes="sm outline"
+                                Command="{Binding DuplicateProfileCommand}" />
+                        <Button Content="Delete" Classes="sm destructive"
+                                Command="{Binding DeleteProfileCommand}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="1" Margin="16,0,0,0"
+                    Classes="card">
+                <ScrollViewer>
+                    <ContentControl Content="{Binding SelectedProfile}">
+                        <ContentControl.ContentTemplate>
+                            <DataTemplate DataType="vm:ProfileEditorViewModel">
+                                <v:ProfileEditorView />
+                            </DataTemplate>
+                        </ContentControl.ContentTemplate>
+                    </ContentControl>
+                </ScrollViewer>
+            </Border>
+
+        </Grid>
+
+        <!-- Footer -->
+        <Border Grid.Row="2" Classes="statusbar" Padding="20,12">
+            <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Grid.Column="0" Text="{Binding Status}" Classes="xs muted"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <Button Grid.Column="1" Content="Save" Margin="8,0,6,0"
+                        Command="{Binding SaveCommand}" />
+                <Button Grid.Column="2" Content="Close" Classes="outline"
+                        Click="OnCloseClicked" />
             </Grid>
-        </TabItem>
+        </Border>
 
-    </TabControl>
+    </Grid>
 </Window>

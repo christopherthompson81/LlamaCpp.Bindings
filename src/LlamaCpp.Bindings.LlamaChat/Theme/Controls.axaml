@@ -1,0 +1,310 @@
+<!--
+    Control styles layered on top of FluentTheme. Adopts the tokens from
+    Theme/Tokens.axaml to get shadcn/webui-like aesthetics: muted chrome,
+    generous radii, lowercase density for UI chrome.
+
+    Button variants match shadcn's six (default/destructive/outline/
+    secondary/ghost/link), applied by Classes="primary|destructive|..." on
+    the element. Default (no class) == primary.
+  -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ================================================================
+         Base TextBlock conventions
+         ================================================================ -->
+    <Style Selector="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeBase}" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+        <Setter Property="Foreground" Value="{DynamicResource MutedForeground}" />
+    </Style>
+    <Style Selector="TextBlock.xs">
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeXs}" />
+    </Style>
+    <Style Selector="TextBlock.sm">
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+    </Style>
+    <Style Selector="TextBlock.h1">
+        <Setter Property="FontSize" Value="{DynamicResource FontSize2xl}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.h2">
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeXl}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.h3">
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeLg}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.section">
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource MutedForeground}" />
+        <Setter Property="Margin" Value="0,10,0,4" />
+    </Style>
+
+    <!-- ================================================================
+         Window
+         ================================================================ -->
+    <Style Selector="Window">
+        <Setter Property="Background" Value="{DynamicResource Background}" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeBase}" />
+    </Style>
+
+    <!-- ================================================================
+         Button — base (acts as "primary"/"default" shadcn variant)
+         ================================================================ -->
+    <Style Selector="Button">
+        <Setter Property="Background" Value="{DynamicResource Primary}" />
+        <Setter Property="Foreground" Value="{DynamicResource PrimaryForeground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusMd}" />
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Primary}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
+        <Setter Property="Opacity" Value="0.9" />
+    </Style>
+    <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Primary}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
+        <Setter Property="Opacity" Value="0.8" />
+    </Style>
+    <Style Selector="Button:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+
+    <!-- Button.destructive -->
+    <Style Selector="Button.destructive">
+        <Setter Property="Background" Value="{DynamicResource Destructive}" />
+        <Setter Property="Foreground" Value="{DynamicResource DestructiveForeground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Destructive}" />
+    </Style>
+    <Style Selector="Button.destructive:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Destructive}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Destructive}" />
+    </Style>
+
+    <!-- Button.outline -->
+    <Style Selector="Button.outline">
+        <Setter Property="Background" Value="{DynamicResource Background}" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+    </Style>
+    <Style Selector="Button.outline:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentForeground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- Button.secondary -->
+    <Style Selector="Button.secondary">
+        <Setter Property="Background" Value="{DynamicResource Secondary}" />
+        <Setter Property="Foreground" Value="{DynamicResource SecondaryForeground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Secondary}" />
+    </Style>
+    <Style Selector="Button.secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Secondary}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Secondary}" />
+    </Style>
+
+    <!-- Button.ghost — transparent until hover -->
+    <Style Selector="Button.ghost">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentForeground}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- Button.link — inline text affordance -->
+    <Style Selector="Button.link">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Padding" Value="4,2" />
+    </Style>
+    <Style Selector="Button.link:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="TextBlock.TextDecorations" Value="Underline" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- Size modifiers — compose with any variant -->
+    <Style Selector="Button.sm">
+        <Setter Property="MinHeight" Value="{DynamicResource ControlHeightSm}" />
+        <Setter Property="Padding" Value="10,4" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeXs}" />
+    </Style>
+    <Style Selector="Button.lg">
+        <Setter Property="MinHeight" Value="{DynamicResource ControlHeightLg}" />
+        <Setter Property="Padding" Value="16,8" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeBase}" />
+    </Style>
+
+    <!-- ================================================================
+         TextBox
+         ================================================================ -->
+    <Style Selector="TextBox">
+        <Setter Property="Background" Value="{DynamicResource Input}" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusMd}" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource Ring}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource Foreground}" />
+    </Style>
+    <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{DynamicResource Ring}" />
+        <Setter Property="BorderThickness" Value="1.5" />
+    </Style>
+    <Style Selector="TextBox:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- ================================================================
+         ComboBox
+         ================================================================ -->
+    <Style Selector="ComboBox">
+        <Setter Property="Background" Value="{DynamicResource Input}" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusMd}" />
+        <Setter Property="Padding" Value="10,4" />
+        <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+    </Style>
+
+    <!-- ================================================================
+         NumericUpDown
+         ================================================================ -->
+    <Style Selector="NumericUpDown">
+        <Setter Property="Background" Value="{DynamicResource Input}" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusMd}" />
+        <Setter Property="MinHeight" Value="{DynamicResource ControlHeight}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+    </Style>
+
+    <!-- ================================================================
+         CheckBox
+         ================================================================ -->
+    <Style Selector="CheckBox">
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+        <Setter Property="Padding" Value="8,0,0,0" />
+    </Style>
+
+    <!-- ================================================================
+         ListBox / ListBoxItem — used for profile list & messages
+         ================================================================ -->
+    <Style Selector="ListBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="4" />
+    </Style>
+    <Style Selector="ListBoxItem">
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusSm}" />
+        <Setter Property="Margin" Value="0,1" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentForeground}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentForeground}" />
+    </Style>
+
+    <!-- ================================================================
+         Menu + MenuItem — top bar
+         ================================================================ -->
+    <Style Selector="Menu">
+        <Setter Property="Background" Value="{DynamicResource Background}" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="Padding" Value="4" />
+    </Style>
+    <Style Selector="MenuItem">
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusSm}" />
+    </Style>
+
+    <!-- ================================================================
+         Expander — reasoning panel
+         ================================================================ -->
+    <Style Selector="Expander">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource MutedForeground}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+    </Style>
+
+    <!-- ================================================================
+         Reusable Border classes
+         ================================================================ -->
+    <Style Selector="Border.card">
+        <Setter Property="Background" Value="{DynamicResource Card}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusLg}" />
+        <Setter Property="Padding" Value="16" />
+    </Style>
+    <Style Selector="Border.panel">
+        <Setter Property="Background" Value="{DynamicResource Muted}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.statusbar">
+        <Setter Property="Background" Value="{DynamicResource Muted}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="Padding" Value="12,4" />
+    </Style>
+
+    <!-- Message bubble classes -->
+    <Style Selector="Border.bubble">
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusLg}" />
+        <Setter Property="Padding" Value="14,10" />
+        <Setter Property="Margin" Value="0,4" />
+    </Style>
+    <Style Selector="Border.bubble.user">
+        <Setter Property="Background" Value="{DynamicResource UserBubble}" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="MaxWidth" Value="640" />
+    </Style>
+    <Style Selector="Border.bubble.assistant">
+        <Setter Property="Background" Value="{DynamicResource AssistantBubble}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+
+</Styles>

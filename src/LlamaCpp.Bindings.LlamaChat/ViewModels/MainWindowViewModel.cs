@@ -17,19 +17,40 @@ namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase, IDisposable
 {
+    // ============================================================
+    // Profiles (loaded from ProfileStore in ctor)
+    // ============================================================
     public ObservableCollection<ProfileEditorViewModel> Profiles { get; }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(LoadCommand))]
     private ProfileEditorViewModel? _selectedProfile;
 
-    /// <summary>
-    /// The profile that was used for the currently loaded session. Sampler +
-    /// generation settings for SendAsync come from here — not from
-    /// <see cref="SelectedProfile"/>, which only drives the next Load.
-    /// </summary>
     private ProfileEditorViewModel? _activeLoadedProfile;
 
+    // ============================================================
+    // Conversations
+    // ============================================================
+    public ObservableCollection<ConversationViewModel> Conversations { get; } = new();
+
+    /// <summary>
+    /// Filtered slice driven by <see cref="SearchText"/>. Bound to the sidebar
+    /// ListBox so typing filters without mutating the master list.
+    /// </summary>
+    public ObservableCollection<ConversationViewModel> FilteredConversations { get; } = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSend))]
+    [NotifyCanExecuteChangedFor(nameof(SendCommand))]
+    private ConversationViewModel? _selectedConversation;
+
+    [ObservableProperty] private string _searchText = string.Empty;
+
+    [ObservableProperty] private bool _isSidebarVisible = true;
+
+    // ============================================================
+    // Session
+    // ============================================================
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend))]
     [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand), nameof(UnloadCommand))]
@@ -53,25 +74,75 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
     private string _userInput = string.Empty;
 
-    public ObservableCollection<MessageViewModel> Messages { get; } = new();
-
     public bool IsModelLoaded => Session is not null;
-    public bool CanSend => IsModelLoaded && !IsGenerating && !IsBusy && !string.IsNullOrWhiteSpace(UserInput);
+
+    public bool CanSend =>
+        IsModelLoaded
+        && !IsGenerating
+        && !IsBusy
+        && !string.IsNullOrWhiteSpace(UserInput)
+        && SelectedConversation is not null;
+
     public bool CanCancel => IsGenerating;
 
     private CancellationTokenSource? _generationCts;
     private readonly List<string> _recentNativeLogLines = new();
     private const int MaxLogLines = 40;
 
+    // ============================================================
+    // Construction
+    // ============================================================
     public MainWindowViewModel()
     {
-        var loaded = ProfileStore.Load()
-            .Select(p => new ProfileEditorViewModel(p))
-            .ToList();
-        Profiles = new ObservableCollection<ProfileEditorViewModel>(loaded);
+        Profiles = new ObservableCollection<ProfileEditorViewModel>(
+            ProfileStore.Load().Select(p => new ProfileEditorViewModel(p)));
         SelectedProfile = Profiles.FirstOrDefault();
+
+        foreach (var c in ConversationStore.Load())
+        {
+            Conversations.Add(new ConversationViewModel(c));
+        }
+
+        // Ensure there is at least one conversation so the UI has a place to
+        // append messages on first launch / after last one deleted.
+        if (Conversations.Count == 0)
+        {
+            Conversations.Add(ConversationViewModel.NewEmpty());
+        }
+
+        RebuildFilteredConversations();
+        SelectedConversation = FilteredConversations.FirstOrDefault();
     }
 
+    partial void OnSearchTextChanged(string value) => RebuildFilteredConversations();
+
+    partial void OnSelectedConversationChanged(ConversationViewModel? oldValue, ConversationViewModel? newValue)
+    {
+        // Switching conversations invalidates the KV cache — the old prefix
+        // belongs to the previous transcript. Clearing now means the next send
+        // pays the full re-prefill exactly once (same cost as the current
+        // clear-every-turn policy, so no net regression).
+        if (oldValue != newValue) Session?.ClearKv();
+    }
+
+    private void RebuildFilteredConversations()
+    {
+        FilteredConversations.Clear();
+        IEnumerable<ConversationViewModel> source = Conversations
+            .OrderByDescending(c => c.UpdatedAt);
+        if (!string.IsNullOrWhiteSpace(SearchText))
+        {
+            var q = SearchText.Trim();
+            source = source.Where(c =>
+                c.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                c.Preview.Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+        foreach (var c in source) FilteredConversations.Add(c);
+    }
+
+    // ============================================================
+    // Model load / unload
+    // ============================================================
     [RelayCommand(CanExecute = nameof(CanLoad))]
     private async Task LoadAsync()
     {
@@ -123,26 +194,88 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         Session?.Dispose();
         Session = null;
         _activeLoadedProfile = null;
-        Messages.Clear();
         ModelSummary = string.Empty;
         StatusText = "Unloaded.";
     }
 
     private bool CanUnload() => Session is not null && !IsGenerating;
 
+    // ============================================================
+    // Conversation CRUD
+    // ============================================================
+    [RelayCommand]
+    private void NewConversation()
+    {
+        var conv = ConversationViewModel.NewEmpty();
+        Conversations.Add(conv);
+        RebuildFilteredConversations();
+        SelectedConversation = conv;
+        SearchText = string.Empty;
+        SaveConversations();
+    }
+
+    [RelayCommand]
+    private void DeleteConversation(ConversationViewModel? conv)
+    {
+        conv ??= SelectedConversation;
+        if (conv is null) return;
+        Conversations.Remove(conv);
+        if (Conversations.Count == 0) Conversations.Add(ConversationViewModel.NewEmpty());
+        RebuildFilteredConversations();
+        SelectedConversation = FilteredConversations.FirstOrDefault();
+        SaveConversations();
+    }
+
+    [RelayCommand]
+    private void BeginRename(ConversationViewModel? conv)
+    {
+        conv ??= SelectedConversation;
+        if (conv is null) return;
+        conv.IsEditing = true;
+    }
+
+    [RelayCommand]
+    private void EndRename(ConversationViewModel? conv)
+    {
+        conv ??= SelectedConversation;
+        if (conv is null) return;
+        if (string.IsNullOrWhiteSpace(conv.Title)) conv.Title = "New chat";
+        conv.IsEditing = false;
+        RebuildFilteredConversations();
+        SaveConversations();
+    }
+
+    // ============================================================
+    // Sidebar + generation
+    // ============================================================
+    [RelayCommand]
+    private void ToggleSidebar() => IsSidebarVisible = !IsSidebarVisible;
+
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendAsync()
     {
-        if (Session is null || _activeLoadedProfile is null) return;
+        if (Session is null || SelectedConversation is null || _activeLoadedProfile is null) return;
         var text = UserInput.Trim();
         if (text.Length == 0) return;
-
         UserInput = string.Empty;
-        Session.AppendUser(text);
-        Messages.Add(new MessageViewModel { Role = "user", Content = text });
+
+        var conv = SelectedConversation;
+        var user = new MessageViewModel { Role = "user", Content = text };
+        conv.Messages.Add(user);
+        conv.UpdatedAt = DateTimeOffset.UtcNow;
+
+        // Auto-title off the first user message so the sidebar item is legible.
+        if (string.IsNullOrWhiteSpace(conv.Title) ||
+            conv.Title == "New chat" || conv.Title == "(untitled)")
+        {
+            var first = text.Replace('\n', ' ').Trim();
+            conv.Title = first.Length > 40 ? first[..40] + "…" : first;
+        }
 
         var assistant = new MessageViewModel { Role = "assistant", IsStreaming = true };
-        Messages.Add(assistant);
+        conv.Messages.Add(assistant);
+
+        RebuildFilteredConversations();
 
         IsGenerating = true;
         StatusText = "Generating...";
@@ -153,7 +286,19 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
             var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
 
-            await foreach (var evt in Session.StreamAssistantTurnAsync(sampler, gen, _generationCts.Token))
+            // Feed everything except the empty assistant placeholder to the model.
+            var transcript = conv.Messages
+                .Take(conv.Messages.Count - 1)
+                .Select(m => new ChatTurn(
+                    Id: Guid.NewGuid(),
+                    Role: m.IsUser ? TurnRole.User : TurnRole.Assistant,
+                    Content: m.Content,
+                    State: TurnState.Complete,
+                    CreatedAt: DateTimeOffset.UtcNow))
+                .ToList();
+
+            await foreach (var evt in Session.StreamAssistantReplyAsync(
+                               transcript, sampler, gen, _generationCts.Token))
             {
                 switch (evt)
                 {
@@ -190,6 +335,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             _generationCts?.Dispose();
             _generationCts = null;
             IsGenerating = false;
+            conv.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveConversations();
         }
     }
 
@@ -199,9 +346,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void ClearConversation()
     {
-        Session?.Reset();
-        Messages.Clear();
+        if (SelectedConversation is null) return;
+        SelectedConversation.Messages.Clear();
+        Session?.ClearKv();
         StatusText = IsModelLoaded ? "Conversation cleared." : "Not loaded.";
+        SaveConversations();
     }
 
     [RelayCommand]
@@ -210,15 +359,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         var vm = new SettingsWindowViewModel(Profiles);
         await DialogService.ShowSettingsAsync(vm);
 
-        // Settings window closes; persist to disk so the edits survive restart.
-        // The "Save" button inside the window also persists — this handles the
-        // case where the user closed without clicking it. Silent failure here
-        // is fine; the user will see stale state on next load and can re-save.
         try { ProfileStore.Save(Profiles.Select(p => p.ToProfile())); }
-        catch { /* see note above */ }
+        catch { /* non-fatal; user can re-save from the dialog */ }
 
-        // Ensure SelectedProfile still points at something valid — it may have
-        // been deleted in the settings window.
         if (SelectedProfile is not null && !Profiles.Contains(SelectedProfile))
         {
             SelectedProfile = Profiles.FirstOrDefault();
@@ -232,6 +375,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             d.Shutdown();
         }
+    }
+
+    // ============================================================
+    // Helpers
+    // ============================================================
+    private void SaveConversations()
+    {
+        try { ConversationStore.Save(Conversations.Select(c => c.ToModel())); }
+        catch { /* non-fatal */ }
     }
 
     private void OnNativeLog(LlamaLogLevel level, string msg)
@@ -251,5 +403,6 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _generationCts?.Cancel();
         _generationCts?.Dispose();
         Session?.Dispose();
+        SaveConversations();
     }
 }

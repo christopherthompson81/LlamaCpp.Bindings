@@ -10,9 +10,11 @@ using LlamaCpp.Bindings.LlamaChat.Models;
 namespace LlamaCpp.Bindings.LlamaChat.Services;
 
 /// <summary>
-/// One loaded model + context bound to a single conversation transcript.
-/// Not thread-safe: the UI marshals all send/cancel operations serially.
-/// Disposal releases the context and model.
+/// One loaded model + context. Stateless w.r.t. the chat transcript —
+/// callers (ConversationViewModel) own the turn list and pass a snapshot
+/// into <see cref="StreamAssistantReplyAsync"/>. This lets one session
+/// service multiple conversations by swapping transcripts in.
+/// Not thread-safe: UI marshals send/cancel operations serially.
 /// </summary>
 public sealed class ChatSession : IDisposable
 {
@@ -20,9 +22,6 @@ public sealed class ChatSession : IDisposable
     private readonly LlamaContext _context;
     private readonly string? _chatTemplate;
 
-    private readonly List<ChatTurn> _turns = new();
-
-    public IReadOnlyList<ChatTurn> Turns => _turns;
     public LlamaModel Model => _model;
     public LlamaContext Context => _context;
     public string? ChatTemplate => _chatTemplate;
@@ -67,27 +66,22 @@ public sealed class ChatSession : IDisposable
         return new ChatSession(model, context, model.GetChatTemplate());
     }
 
-    public void AppendUser(string text) =>
-        _turns.Add(ChatTurn.NewUser(text));
-
-    public void Reset()
-    {
-        _turns.Clear();
-        _context.ClearKvCache();
-    }
+    /// <summary>Drop the KV cache. Called when switching conversations.</summary>
+    public void ClearKv() => _context.ClearKvCache();
 
     /// <summary>
-    /// Generate an assistant reply to the current transcript. Yields stream
-    /// events in real time; the caller is responsible for updating the visible
-    /// <see cref="ChatTurn"/> (which the session does not track as "live"; call
-    /// <see cref="Commit"/> once the stream ends).
+    /// Render <paramref name="transcript"/> through the model's chat template
+    /// (or a bare fallback) and stream the assistant reply. The caller is
+    /// responsible for appending the final assistant turn to its own
+    /// transcript once <see cref="StreamEvent.Done"/> is observed.
     /// </summary>
-    public async IAsyncEnumerable<StreamEvent> StreamAssistantTurnAsync(
+    public async IAsyncEnumerable<StreamEvent> StreamAssistantReplyAsync(
+        IReadOnlyList<ChatTurn> transcript,
         SamplerSettings sampler,
         GenerationSettings generation,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var prompt = RenderPromptForCompletion();
+        var prompt = RenderPromptForCompletion(transcript);
 
         // v1 cache policy: clear and re-decode the full transcript every turn.
         // O(total tokens) per turn, correct, trivially debuggable. Prefix-cache
@@ -103,9 +97,6 @@ public sealed class ChatSession : IDisposable
         var promptStartTicks = sw.ElapsedTicks;
         TimeSpan? promptTime = null;
         int completionTokens = 0;
-
-        var aggregateContent = new StringBuilder();
-        var aggregateReasoning = new StringBuilder();
 
         var stream = generator.GenerateAsync(
             prompt,
@@ -127,20 +118,11 @@ public sealed class ChatSession : IDisposable
             if (extractor is not null)
             {
                 var emit = extractor.Push(piece);
-                if (emit.Content.Length > 0)
-                {
-                    aggregateContent.Append(emit.Content);
-                    yield return new StreamEvent.Content(emit.Content);
-                }
-                if (emit.Reasoning.Length > 0)
-                {
-                    aggregateReasoning.Append(emit.Reasoning);
-                    yield return new StreamEvent.Reasoning(emit.Reasoning);
-                }
+                if (emit.Content.Length > 0) yield return new StreamEvent.Content(emit.Content);
+                if (emit.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(emit.Reasoning);
             }
             else
             {
-                aggregateContent.Append(piece);
                 yield return new StreamEvent.Content(piece);
             }
         }
@@ -148,45 +130,24 @@ public sealed class ChatSession : IDisposable
         if (extractor is not null)
         {
             var tail = extractor.Flush();
-            if (tail.Content.Length > 0)
-            {
-                aggregateContent.Append(tail.Content);
-                yield return new StreamEvent.Content(tail.Content);
-            }
-            if (tail.Reasoning.Length > 0)
-            {
-                aggregateReasoning.Append(tail.Reasoning);
-                yield return new StreamEvent.Reasoning(tail.Reasoning);
-            }
+            if (tail.Content.Length > 0) yield return new StreamEvent.Content(tail.Content);
+            if (tail.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(tail.Reasoning);
         }
 
         sw.Stop();
         var total = sw.Elapsed;
         var genTime = promptTime.HasValue ? total - promptTime.Value : total;
 
-        // Store the committed turn on the session. TurnStats promptTokens is
-        // unknown here without re-tokenizing the prompt; leave as 0 until
-        // LlamaGenerator surfaces that count.
-        _turns.Add(new ChatTurn(
-            Id: Guid.NewGuid(),
-            Role: TurnRole.Assistant,
-            Content: aggregateContent.ToString(),
-            State: TurnState.Complete,
-            CreatedAt: DateTimeOffset.UtcNow,
-            Reasoning: aggregateReasoning.Length > 0 ? aggregateReasoning.ToString() : null,
-            Stats: new TurnStats(0, completionTokens, promptTime ?? TimeSpan.Zero, genTime)));
-
         yield return new StreamEvent.Done(completionTokens, promptTime ?? TimeSpan.Zero, genTime);
     }
 
-    private string RenderPromptForCompletion()
+    private string RenderPromptForCompletion(IReadOnlyList<ChatTurn> transcript)
     {
         if (string.IsNullOrEmpty(_chatTemplate))
         {
             // Model has no embedded template. Fall back to naked role-prefixed concat.
-            // Matches samples/LlamaChat's fallback behavior.
             var sb = new StringBuilder();
-            foreach (var t in _turns)
+            foreach (var t in transcript)
             {
                 sb.Append(RoleLabel(t.Role)).Append(": ").AppendLine(t.Content);
             }
@@ -194,7 +155,7 @@ public sealed class ChatSession : IDisposable
             return sb.ToString();
         }
 
-        var messages = _turns
+        var messages = transcript
             .Select(t => new ChatMessage(RoleLabel(t.Role), t.Content))
             .ToArray();
         return LlamaChatTemplate.Apply(_chatTemplate, messages, addAssistantPrefix: true);

@@ -4,25 +4,38 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
         mc:Ignorable="d"
-        d:DesignWidth="1100" d:DesignHeight="800"
+        d:DesignWidth="1200" d:DesignHeight="800"
         x:Class="LlamaCpp.Bindings.LlamaChat.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="LlamaChat"
-        Width="1100" Height="800"
-        MinWidth="700" MinHeight="450">
+        Width="1200" Height="800"
+        MinWidth="800" MinHeight="500">
+
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Ctrl+N" Command="{Binding NewConversationCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+O" Command="{Binding NewConversationCommand}" />
+        <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleSidebarCommand}" />
+        <KeyBinding Gesture="Ctrl+L" Command="{Binding LoadCommand}" />
+        <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
+    </Window.KeyBindings>
 
     <DockPanel>
         <!-- Menu bar -->
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
-                <MenuItem Header="_Load" Command="{Binding LoadCommand}" InputGesture="Ctrl+L" />
-                <MenuItem Header="_Unload" Command="{Binding UnloadCommand}" />
+                <MenuItem Header="_New chat"   Command="{Binding NewConversationCommand}" InputGesture="Ctrl+N" />
+                <MenuItem Header="_Load model" Command="{Binding LoadCommand}"            InputGesture="Ctrl+L" />
+                <MenuItem Header="_Unload"     Command="{Binding UnloadCommand}" />
                 <Separator />
-                <MenuItem Header="E_xit" Command="{Binding ExitCommand}" />
+                <MenuItem Header="E_xit"       Command="{Binding ExitCommand}" />
             </MenuItem>
             <MenuItem Header="_Chat">
                 <MenuItem Header="_Clear conversation" Command="{Binding ClearConversationCommand}" />
-                <MenuItem Header="Cancel generation" Command="{Binding CancelCommand}" />
+                <MenuItem Header="Cancel generation"   Command="{Binding CancelCommand}" />
+                <MenuItem Header="_Delete conversation" Command="{Binding DeleteConversationCommand}" />
+            </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem Header="Toggle _sidebar" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
             </MenuItem>
             <MenuItem Header="_Settings">
                 <MenuItem Header="_Preferences..." Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
@@ -30,11 +43,10 @@
         </Menu>
 
         <!-- Toolbar: active profile + model actions -->
-        <Border DockPanel.Dock="Top" Padding="12,6"
-                Background="{DynamicResource SystemChromeMediumColor}"
-                BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,0,1">
+        <Border DockPanel.Dock="Top" Classes="panel" Padding="12,8">
             <Grid ColumnDefinitions="Auto,240,Auto,Auto,Auto,*">
-                <TextBlock Grid.Column="0" Text="Profile:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <TextBlock Grid.Column="0" Text="Profile" Classes="muted sm"
+                           VerticalAlignment="Center" Margin="0,0,8,0" />
                 <ComboBox Grid.Column="1"
                           ItemsSource="{Binding Profiles}"
                           SelectedItem="{Binding SelectedProfile}"
@@ -46,66 +58,137 @@
                         </DataTemplate>
                     </ComboBox.ItemTemplate>
                 </ComboBox>
-                <Button Grid.Column="2" Content="Load" Margin="6,0,0,0"
+                <Button Grid.Column="2" Content="Load" Margin="8,0,0,0"
                         Command="{Binding LoadCommand}" />
-                <Button Grid.Column="3" Content="Unload" Margin="4,0,0,0"
+                <Button Grid.Column="3" Content="Unload" Classes="outline" Margin="6,0,0,0"
                         Command="{Binding UnloadCommand}" />
-                <Button Grid.Column="4" Content="Settings..." Margin="4,0,0,0"
+                <Button Grid.Column="4" Content="Settings" Classes="outline" Margin="6,0,0,0"
                         Command="{Binding OpenSettingsCommand}" />
-                <TextBlock Grid.Column="5" Text="{Binding ModelSummary}"
+                <TextBlock Grid.Column="5" Text="{Binding ModelSummary}" Classes="muted xs"
                            VerticalAlignment="Center" Margin="16,0,0,0"
-                           TextTrimming="CharacterEllipsis" Opacity="0.8" />
+                           TextTrimming="CharacterEllipsis" />
             </Grid>
         </Border>
 
         <!-- Status bar -->
-        <Border DockPanel.Dock="Bottom" Padding="12,4"
-                Background="{DynamicResource SystemChromeLowColor}"
-                BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,1,0,0">
-            <TextBlock Text="{Binding StatusText}" FontSize="11" />
+        <Border DockPanel.Dock="Bottom" Classes="statusbar">
+            <TextBlock Text="{Binding StatusText}" Classes="xs muted" />
         </Border>
 
-        <!-- Conversation -->
-        <Grid RowDefinitions="*,Auto" Margin="12">
-            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
-                <ItemsControl ItemsSource="{Binding Messages}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="vm:MessageViewModel">
-                            <Border Margin="0,4" Padding="12,8" CornerRadius="8"
-                                    Background="{DynamicResource SystemChromeLowColor}">
-                                <StackPanel Spacing="4">
-                                    <TextBlock Text="{Binding Role}" FontWeight="Bold"
-                                               FontSize="12" Opacity="0.8" />
-                                    <Expander Header="Reasoning"
-                                              IsVisible="{Binding HasReasoning}"
-                                              IsExpanded="{Binding IsReasoningExpanded}">
-                                        <SelectableTextBlock Text="{Binding Reasoning}"
-                                                             FontSize="12" Opacity="0.75"
-                                                             TextWrapping="Wrap" />
-                                    </Expander>
-                                    <SelectableTextBlock Text="{Binding Content}"
-                                                         TextWrapping="Wrap" />
-                                    <TextBlock Text="{Binding StatsSummary}"
-                                               FontSize="11" Opacity="0.6"
-                                               IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                </StackPanel>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+        <!-- Body = sidebar + main -->
+        <Grid ColumnDefinitions="Auto,*">
 
-            <!-- Compose bar -->
-            <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,8,0,0">
-                <TextBox Grid.Column="0" Text="{Binding UserInput, Mode=TwoWay}"
-                         PlaceholderText="Type a message, Shift+Enter for newline..."
-                         AcceptsReturn="False" TextWrapping="Wrap"
-                         MinHeight="48" MaxHeight="180"
-                         KeyDown="OnComposeKeyDown" />
-                <Button Grid.Column="1" Content="Send" Margin="6,0,0,0"
-                        Command="{Binding SendCommand}" IsDefault="True" />
-                <Button Grid.Column="2" Content="Cancel" Margin="4,0,0,0"
-                        Command="{Binding CancelCommand}" />
+            <!-- ================= Sidebar ================= -->
+            <Border Grid.Column="0"
+                    IsVisible="{Binding IsSidebarVisible}"
+                    Width="280"
+                    Background="{DynamicResource Sidebar}"
+                    BorderBrush="{DynamicResource SidebarBorder}"
+                    BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,Auto,*">
+
+                    <!-- New chat button -->
+                    <Button Grid.Row="0" Content="+  New chat"
+                            Classes="outline"
+                            Margin="10,10,10,6"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Command="{Binding NewConversationCommand}" />
+
+                    <!-- Search -->
+                    <TextBox Grid.Row="1" Name="SearchBox"
+                             Margin="10,0,10,6"
+                             Text="{Binding SearchText}"
+                             PlaceholderText="Search conversations..." />
+
+                    <!-- Conversation list -->
+                    <ListBox Grid.Row="2"
+                             Margin="4,0,4,6"
+                             ItemsSource="{Binding FilteredConversations}"
+                             SelectedItem="{Binding SelectedConversation}">
+                        <ListBox.Styles>
+                            <Style Selector="ListBoxItem">
+                                <Setter Property="Padding" Value="10,8" />
+                            </Style>
+                        </ListBox.Styles>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="vm:ConversationViewModel">
+                                <Grid>
+                                    <!-- Default display -->
+                                    <StackPanel Spacing="2" IsVisible="{Binding !IsEditing}">
+                                        <TextBlock Text="{Binding DisplayTitle}"
+                                                   FontWeight="Medium"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Preview}"
+                                                   Classes="muted xs"
+                                                   IsVisible="{Binding Preview, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <!-- Inline rename -->
+                                    <TextBox Text="{Binding Title, Mode=TwoWay}"
+                                             IsVisible="{Binding IsEditing}"
+                                             KeyDown="OnRenameKeyDown"
+                                             LostFocus="OnRenameLostFocus"
+                                             AttachedToVisualTree="OnRenameAttached" />
+                                    <Grid.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Rename"
+                                                      Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).BeginRenameCommand}"
+                                                      CommandParameter="{Binding}" />
+                                            <MenuItem Header="Delete"
+                                                      Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteConversationCommand}"
+                                                      CommandParameter="{Binding}" />
+                                        </ContextMenu>
+                                    </Grid.ContextMenu>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <!-- ================= Main (messages + compose) ================= -->
+            <Grid Grid.Column="1" RowDefinitions="*,Auto" Margin="16,12,16,12">
+
+                <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding SelectedConversation.Messages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="vm:MessageViewModel">
+                                <Border Classes="bubble"
+                                        Classes.user="{Binding IsUser}"
+                                        Classes.assistant="{Binding IsAssistant}">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="{Binding Role}" Classes="xs"
+                                                   FontWeight="SemiBold" Opacity="0.7" />
+                                        <Expander Header="Reasoning"
+                                                  IsVisible="{Binding HasReasoning}"
+                                                  IsExpanded="{Binding IsReasoningExpanded}">
+                                            <SelectableTextBlock Text="{Binding Reasoning}"
+                                                                 Classes="sm muted"
+                                                                 TextWrapping="Wrap" />
+                                        </Expander>
+                                        <SelectableTextBlock Text="{Binding Content}"
+                                                             TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
+                                                   IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,12,0,0">
+                    <TextBox Grid.Column="0" Text="{Binding UserInput, Mode=TwoWay}"
+                             PlaceholderText="Type a message, Shift+Enter for newline..."
+                             AcceptsReturn="False" TextWrapping="Wrap"
+                             MinHeight="56" MaxHeight="200"
+                             KeyDown="OnComposeKeyDown" />
+                    <Button Grid.Column="1" Content="Send" Margin="8,0,0,0"
+                            Command="{Binding SendCommand}" IsDefault="True" />
+                    <Button Grid.Column="2" Content="Cancel" Classes="outline" Margin="6,0,0,0"
+                            Command="{Binding CancelCommand}" />
+                </Grid>
             </Grid>
         </Grid>
     </DockPanel>

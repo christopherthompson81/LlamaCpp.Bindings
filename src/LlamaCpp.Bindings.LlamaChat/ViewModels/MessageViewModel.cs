@@ -14,7 +14,16 @@ public partial class MessageViewModel : ObservableObject
 
     public bool HasReasoning => !string.IsNullOrEmpty(Reasoning);
 
+    public bool IsUser => Role == "user";
+    public bool IsAssistant => Role == "assistant";
+
     partial void OnReasoningChanged(string? value) => OnPropertyChanged(nameof(HasReasoning));
+
+    partial void OnRoleChanged(string value)
+    {
+        OnPropertyChanged(nameof(IsUser));
+        OnPropertyChanged(nameof(IsAssistant));
+    }
 
     public static MessageViewModel FromTurn(ChatTurn t) => new()
     {
