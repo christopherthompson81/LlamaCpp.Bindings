@@ -19,8 +19,13 @@ internal enum llama_rope_type : int
 {
     LLAMA_ROPE_TYPE_NONE   = -1,
     LLAMA_ROPE_TYPE_NORM   = 0,
-    // NEOX/MROPE/IMROPE/VISION come from ggml.h via #define, values omitted here
-    // since we don't consume them directly from managed code.
+    // Values below come from ggml.h's GGML_ROPE_TYPE_* #defines. If ggml's
+    // numbering ever changes, the xref pipeline will surface it via the
+    // llama_rope_type diff.
+    LLAMA_ROPE_TYPE_NEOX   = 2,
+    LLAMA_ROPE_TYPE_MROPE  = 8,
+    LLAMA_ROPE_TYPE_VISION = 24,
+    LLAMA_ROPE_TYPE_IMROPE = 40,
 }
 
 internal enum llama_rope_scaling_type : int

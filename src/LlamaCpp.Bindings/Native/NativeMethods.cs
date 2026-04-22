@@ -60,6 +60,84 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial int llama_model_n_layer(IntPtr model);
 
+    // ----- Model metadata (Tier 1 expansion) -----
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_model_n_embd_inp(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_model_n_embd_out(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_model_n_head(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_model_n_head_kv(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_model_n_swa(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial float llama_model_rope_freq_scale_train(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial llama_rope_type llama_model_rope_type(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial ulong llama_model_size(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial ulong llama_model_n_params(IntPtr model);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_model_has_encoder(IntPtr model);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_model_has_decoder(IntPtr model);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_model_is_recurrent(IntPtr model);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_model_is_hybrid(IntPtr model);
+
+    [LibraryImport(LibName)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool llama_model_is_diffusion(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_model_decoder_start_token(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial uint llama_model_n_cls_out(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static partial IntPtr llama_model_cls_label(IntPtr model, uint i);
+
+    // Probe-and-fill pattern: returns length on success, -1 on failure.
+    // Caller allocates `buf` and passes `buf_size`. Null-terminated output.
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_model_desc(IntPtr model, byte* buf, nuint buf_size);
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int llama_model_meta_val_str(
+        IntPtr model, string key, byte* buf, nuint buf_size);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_model_meta_count(IntPtr model);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_model_meta_key_by_index(
+        IntPtr model, int i, byte* buf, nuint buf_size);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_model_meta_val_str_by_index(
+        IntPtr model, int i, byte* buf, nuint buf_size);
+
     // ----- Context create / metadata / free -----
 
     [LibraryImport(LibName)]
