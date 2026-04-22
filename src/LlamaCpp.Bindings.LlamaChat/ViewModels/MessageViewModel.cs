@@ -12,6 +12,16 @@ public partial class MessageViewModel : ObservableObject
     [ObservableProperty] private bool _isStreaming = false;
     [ObservableProperty] private string? _statsSummary;
 
+    /// <summary>True while the inline-edit textarea is shown for this bubble.</summary>
+    [ObservableProperty] private bool _isEditing;
+
+    /// <summary>
+    /// Working copy of <see cref="Content"/> while editing. Committed or
+    /// discarded by the command that ends the edit — the VM never writes
+    /// through to <see cref="Content"/> directly from the textarea binding.
+    /// </summary>
+    [ObservableProperty] private string _editDraft = string.Empty;
+
     public bool HasReasoning => !string.IsNullOrEmpty(Reasoning);
 
     public bool IsUser => Role == "user";

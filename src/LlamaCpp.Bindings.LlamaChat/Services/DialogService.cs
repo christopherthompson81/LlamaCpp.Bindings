@@ -2,6 +2,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Input.Platform;
 using Avalonia.Platform.Storage;
 using LlamaCpp.Bindings.LlamaChat.ViewModels;
 using LlamaCpp.Bindings.LlamaChat.Views;
@@ -24,6 +25,14 @@ internal static class DialogService
         if (owner is null) return;
         var win = new SettingsWindow { DataContext = vm };
         await win.ShowDialog(owner);
+    }
+
+    public static async Task CopyToClipboardAsync(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        var owner = Owner;
+        if (owner?.Clipboard is null) return;
+        await owner.Clipboard.SetTextAsync(text);
     }
 
     public static async Task<string?> PickGgufFileAsync()

@@ -161,16 +161,54 @@
                                     <StackPanel Spacing="6">
                                         <TextBlock Text="{Binding Role}" Classes="xs"
                                                    FontWeight="SemiBold" Opacity="0.7" />
-                                        <Expander Header="Reasoning"
-                                                  IsVisible="{Binding HasReasoning}"
-                                                  IsExpanded="{Binding IsReasoningExpanded}">
-                                            <SelectableTextBlock Text="{Binding Reasoning}"
-                                                                 Classes="sm muted"
-                                                                 TextWrapping="Wrap" />
-                                        </Expander>
-                                        <views:MarkdownView Markdown="{Binding Content}" />
-                                        <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
-                                                   IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                                        <!-- Read-only view -->
+                                        <StackPanel Spacing="6" IsVisible="{Binding !IsEditing}">
+                                            <Expander Header="Reasoning"
+                                                      IsVisible="{Binding HasReasoning}"
+                                                      IsExpanded="{Binding IsReasoningExpanded}">
+                                                <SelectableTextBlock Text="{Binding Reasoning}"
+                                                                     Classes="sm muted"
+                                                                     TextWrapping="Wrap" />
+                                            </Expander>
+                                            <views:MarkdownView Markdown="{Binding Content}" />
+                                            <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
+                                                       IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                                            <!-- Action bar -->
+                                            <StackPanel Orientation="Horizontal" Spacing="2" Margin="-6,4,-6,-4"
+                                                        IsVisible="{Binding !IsStreaming}">
+                                                <Button Content="Copy" Classes="ghost sm"
+                                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyMessageCommand}"
+                                                        CommandParameter="{Binding}" />
+                                                <Button Content="Edit" Classes="ghost sm"
+                                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).BeginEditMessageCommand}"
+                                                        CommandParameter="{Binding}" />
+                                                <Button Content="Retry" Classes="ghost sm"
+                                                        IsVisible="{Binding IsAssistant}"
+                                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RegenerateMessageCommand}"
+                                                        CommandParameter="{Binding}" />
+                                                <Button Content="Delete" Classes="ghost sm"
+                                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteMessageCommand}"
+                                                        CommandParameter="{Binding}" />
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <!-- Inline edit -->
+                                        <StackPanel Spacing="6" IsVisible="{Binding IsEditing}">
+                                            <TextBox Text="{Binding EditDraft, Mode=TwoWay}"
+                                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                                     MinHeight="60" MaxHeight="280" />
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                        HorizontalAlignment="Right">
+                                                <Button Content="Save"
+                                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CommitEditMessageCommand}"
+                                                        CommandParameter="{Binding}" />
+                                                <Button Content="Cancel" Classes="outline"
+                                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CancelEditMessageCommand}"
+                                                        CommandParameter="{Binding}" />
+                                            </StackPanel>
+                                        </StackPanel>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

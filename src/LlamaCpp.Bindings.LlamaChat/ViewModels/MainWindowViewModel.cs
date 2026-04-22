@@ -272,9 +272,23 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             conv.Title = first.Length > 40 ? first[..40] + "…" : first;
         }
 
+        await GenerateAssistantReplyAsync(conv);
+    }
+
+    /// <summary>
+    /// Append an assistant placeholder to <paramref name="conv"/> and stream
+    /// a reply into it using the current transcript. Shared by
+    /// <see cref="SendAsync"/>, <see cref="RegenerateMessageAsync"/>, and the
+    /// user-edit-commit path. Caller must have already mutated the
+    /// transcript to reflect "what the model should reply to now".
+    /// </summary>
+    private async Task GenerateAssistantReplyAsync(ConversationViewModel conv)
+    {
+        if (Session is null || _activeLoadedProfile is null) return;
+
         var assistant = new MessageViewModel { Role = "assistant", IsStreaming = true };
         conv.Messages.Add(assistant);
-
+        conv.UpdatedAt = DateTimeOffset.UtcNow;
         RebuildFilteredConversations();
 
         IsGenerating = true;
@@ -338,6 +352,107 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             conv.UpdatedAt = DateTimeOffset.UtcNow;
             SaveConversations();
         }
+    }
+
+    // ============================================================
+    // Per-message actions (copy / edit / regenerate / delete)
+    // ============================================================
+
+    [RelayCommand]
+    private async Task CopyMessageAsync(MessageViewModel? msg)
+    {
+        if (msg is null) return;
+        await DialogService.CopyToClipboardAsync(msg.Content);
+        StatusText = "Copied to clipboard.";
+    }
+
+    [RelayCommand]
+    private void BeginEditMessage(MessageViewModel? msg)
+    {
+        if (msg is null) return;
+        msg.EditDraft = msg.Content;
+        msg.IsEditing = true;
+    }
+
+    [RelayCommand]
+    private void CancelEditMessage(MessageViewModel? msg)
+    {
+        if (msg is null) return;
+        msg.IsEditing = false;
+        msg.EditDraft = string.Empty;
+    }
+
+    /// <summary>
+    /// Commit the inline edit. For a user message we also truncate everything
+    /// after it and regenerate — the previous assistant reply was conditioned
+    /// on the old prompt, so keeping it would be inconsistent. For an
+    /// assistant message we just overwrite its text.
+    /// </summary>
+    [RelayCommand]
+    private async Task CommitEditMessageAsync(MessageViewModel? msg)
+    {
+        if (msg is null || SelectedConversation is null) return;
+
+        var conv = SelectedConversation;
+        var newText = msg.EditDraft;
+        msg.Content = newText;
+        msg.IsEditing = false;
+        msg.EditDraft = string.Empty;
+
+        if (msg.IsUser)
+        {
+            var idx = conv.Messages.IndexOf(msg);
+            if (idx < 0) return;
+            // Remove everything after the edited user message.
+            while (conv.Messages.Count > idx + 1) conv.Messages.RemoveAt(idx + 1);
+            Session?.ClearKv();
+            if (Session is not null) await GenerateAssistantReplyAsync(conv);
+            else SaveConversations();
+        }
+        else
+        {
+            // Assistant edit: overwrite in place, no regeneration.
+            conv.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveConversations();
+        }
+    }
+
+    [RelayCommand]
+    private void DeleteMessage(MessageViewModel? msg)
+    {
+        if (msg is null || SelectedConversation is null) return;
+        SelectedConversation.Messages.Remove(msg);
+        Session?.ClearKv();
+        SaveConversations();
+    }
+
+    /// <summary>
+    /// Remove the given assistant message (and anything after it) and
+    /// re-stream a new reply against the preceding transcript. If called on
+    /// a user message we re-generate the assistant reply *to* that user turn.
+    /// </summary>
+    [RelayCommand]
+    private async Task RegenerateMessageAsync(MessageViewModel? msg)
+    {
+        if (msg is null || Session is null || SelectedConversation is null) return;
+        var conv = SelectedConversation;
+        var idx = conv.Messages.IndexOf(msg);
+        if (idx < 0) return;
+
+        // Truncate: drop this message (assistant or user) and everything past
+        // it. If it was a user turn we leave nothing for the model to reply
+        // to, which we guard against below.
+        var truncateFrom = msg.IsUser ? idx + 1 : idx;
+        while (conv.Messages.Count > truncateFrom) conv.Messages.RemoveAt(truncateFrom);
+
+        if (conv.Messages.Count == 0 || !conv.Messages[^1].IsUser)
+        {
+            StatusText = "Nothing to regenerate from.";
+            return;
+        }
+
+        Session.ClearKv();
+        await GenerateAssistantReplyAsync(conv);
     }
 
     [RelayCommand(CanExecute = nameof(CanCancel))]

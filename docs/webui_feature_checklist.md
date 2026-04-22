@@ -96,14 +96,14 @@ src/
 
 ### 4. Message actions
 
-- [ ] **Copy message** — `src/lib/components/app/chat/ChatMessages/ChatMessageActions.svelte` — icon button copies full text to clipboard
-- [ ] **Edit message** — `ChatMessageActions.svelte`, `ChatMessageEditForm.svelte` — inline textarea, submit/cancel buttons, saves to database, triggers re-render
-- [ ] **Regenerate response** — `ChatMessageActions.svelte` — calls `chatStore.regenerateMessage()`, streams new assistant response
-- [ ] **Continue generation** — `ChatMessageActions.svelte` (experimental feature behind config flag `ENABLE_CONTINUE_GENERATION`) — extends last assistant message by continuing context
-- [ ] **Delete message** — `ChatMessageActions.svelte` — confirmation dialog with option to delete downstream messages or just selected message
-- [ ] **Branch navigation** — `ChatMessageBranchingControls.svelte` — shows sibling count and navigation arrows if message has variants, allows switching between branches
-- [ ] **Fork conversation** — `ChatMessageActions.svelte` — "Fork" button opens dialog to name new conversation, includes option to copy attachments or not
-- [ ] **Message deletion dialog** — `DialogConfirmation.svelte` — shows summary of messages to delete (user/assistant/system counts), confirm/cancel
+- [x] **Copy message** — `CopyMessageCommand` → `DialogService.CopyToClipboardAsync` (wraps `Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync`). Button bound in the bubble template.
+- [x] **Edit message** — inline edit surface (TextBox + Save / Cancel) replaces the read-only bubble body while `MessageViewModel.IsEditing`. On Save: user message → truncate downstream + regenerate; assistant message → overwrite in place. `EditDraft` is the buffer; `Content` only commits on Save.
+- [x] **Regenerate response** — `RegenerateMessageCommand` truncates the transcript starting at the target message (or right after, if the target was a user turn), `ClearKv()`s the session, and re-enters `GenerateAssistantReplyAsync`. Extracted from `SendAsync` so both share the same streaming path.
+- [ ] **Continue generation** — deferred. Needs `LlamaGenerator` support for resuming from a position in an already-decoded transcript (we re-prefill each turn today — see `docs/webui_parity_investigation.md` Run 1 item 6 "Prefix-cache reuse").
+- [x] **Delete message** — `DeleteMessageCommand` removes the single clicked message (not downstream) and clears the KV cache. No confirmation dialog yet.
+- [ ] **Branch navigation** — deferred. Conversation is currently a flat list; branching needs a tree-shaped transcript with `parentId` on each turn plus sibling nav controls.
+- [ ] **Fork conversation** — deferred (straightforward wrapper once branching or a simple "duplicate up to here" command lands).
+- [ ] **Message deletion dialog** — deferred (we delete immediately; add confirmation once there's a "delete downstream" variant to choose).
 
 ### 5. Compose
 
