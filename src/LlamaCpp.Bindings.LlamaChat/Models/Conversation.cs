@@ -14,5 +14,6 @@ public sealed record Conversation
     public string Title { get; init; } = "New chat";
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public bool Pinned { get; init; } = false;
     public List<ChatTurn> Turns { get; init; } = new();
 }

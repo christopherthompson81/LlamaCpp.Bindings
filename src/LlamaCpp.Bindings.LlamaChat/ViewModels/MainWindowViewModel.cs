@@ -75,6 +75,22 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
     private string _userInput = string.Empty;
 
+    /// <summary>Token count of <see cref="UserInput"/> for the currently loaded vocab, debounced.</summary>
+    [ObservableProperty] private int _userInputTokenCount;
+
+    private readonly Avalonia.Threading.DispatcherTimer _tokenCountTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(150),
+    };
+
+    partial void OnUserInputChanged(string value)
+    {
+        // Restart the debounce window — tokenisation is cheap but touching
+        // native vocab for every keystroke is wasteful.
+        _tokenCountTimer.Stop();
+        _tokenCountTimer.Start();
+    }
+
     public bool IsModelLoaded => Session is not null;
 
     public bool CanSend =>
@@ -124,6 +140,30 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         RebuildFilteredConversations();
         SelectedConversation = FilteredConversations.FirstOrDefault();
+
+        _tokenCountTimer.Tick += (_, _) =>
+        {
+            _tokenCountTimer.Stop();
+            RecomputeUserInputTokens();
+        };
+    }
+
+    private void RecomputeUserInputTokens()
+    {
+        if (Session is null || string.IsNullOrEmpty(UserInput))
+        {
+            UserInputTokenCount = 0;
+            return;
+        }
+        try
+        {
+            var toks = Session.Model.Vocab.Tokenize(UserInput, addSpecial: false, parseSpecial: true);
+            UserInputTokenCount = toks.Length;
+        }
+        catch
+        {
+            UserInputTokenCount = 0;
+        }
     }
 
     partial void OnSearchTextChanged(string value) => RebuildFilteredConversations();
@@ -147,7 +187,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         FilteredConversations.Clear();
         IEnumerable<ConversationViewModel> source = Conversations
-            .OrderByDescending(c => c.UpdatedAt);
+            .OrderByDescending(c => c.Pinned)
+            .ThenByDescending(c => c.UpdatedAt);
         if (!string.IsNullOrWhiteSpace(SearchText))
         {
             var q = SearchText.Trim();
@@ -252,6 +293,16 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
+    private void TogglePinned(ConversationViewModel? conv)
+    {
+        conv ??= SelectedConversation;
+        if (conv is null) return;
+        conv.Pinned = !conv.Pinned;
+        RebuildFilteredConversations();
+        SaveConversations();
+    }
+
+    [RelayCommand]
     private void BeginRename(ConversationViewModel? conv)
     {
         conv ??= SelectedConversation;
@@ -282,6 +333,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         if (Session is null || SelectedConversation is null || _activeLoadedProfile is null) return;
         var text = UserInput.Trim();
         if (text.Length == 0) return;
+
+        // Intercept slash commands before sending to the model. Unknown
+        // `/commands` fall through to being sent as a normal message.
+        if (text.StartsWith('/') && TryHandleSlashCommand(text))
+        {
+            UserInput = string.Empty;
+            return;
+        }
+
         UserInput = string.Empty;
 
         var conv = SelectedConversation;
@@ -571,10 +631,48 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void DeleteMessage(MessageViewModel? msg)
+    private async Task DeleteMessageAsync(MessageViewModel? msg)
     {
         if (msg is null || SelectedConversation is null) return;
-        SelectedConversation.Messages.Remove(msg);
+        var conv = SelectedConversation;
+        var idx = conv.Messages.IndexOf(msg);
+        if (idx < 0) return;
+
+        var downstreamCount = conv.Messages.Count - idx - 1;
+
+        // Single message with nothing after it: delete straight away, no
+        // need to interrupt the user with a dialog for an obvious case.
+        if (downstreamCount == 0)
+        {
+            conv.Messages.RemoveAt(idx);
+            Session?.ClearKv();
+            SaveConversations();
+            return;
+        }
+
+        var choice = await DialogService.ConfirmAsync(
+            "Delete message",
+            $"There {(downstreamCount == 1 ? "is" : "are")} {downstreamCount} message(s) after this one. " +
+            "Keeping them would leave the conversation inconsistent with the deleted turn.",
+            new (string, string, bool, bool)[]
+            {
+                ("cancel",     "Cancel",                        false, false),
+                ("just",       "Just this",                     true,  false),
+                ("downstream", $"This + {downstreamCount} after", true,  true),
+            });
+
+        switch (choice)
+        {
+            case "just":
+                conv.Messages.RemoveAt(idx);
+                break;
+            case "downstream":
+                while (conv.Messages.Count > idx) conv.Messages.RemoveAt(idx);
+                break;
+            default:
+                return;   // cancelled
+        }
+
         Session?.ClearKv();
         SaveConversations();
     }
@@ -611,6 +709,63 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand(CanExecute = nameof(CanCancel))]
     private void Cancel() => _generationCts?.Cancel();
 
+    /// <summary>
+    /// Handle a "/command" typed in the compose box. Returns true if the
+    /// command matched; false to let <see cref="SendAsync"/> send the
+    /// text through to the model as-is.
+    /// </summary>
+    private bool TryHandleSlashCommand(string text)
+    {
+        var space = text.IndexOf(' ');
+        var cmd = (space > 0 ? text[..space] : text).ToLowerInvariant();
+        switch (cmd)
+        {
+            case "/clear":
+            case "/reset":
+                if (SelectedConversation is not null)
+                {
+                    SelectedConversation.Messages.Clear();
+                    Session?.ClearKv();
+                    SaveConversations();
+                    ToastService.Info("Conversation cleared");
+                }
+                return true;
+            case "/new":
+                NewConversation();
+                return true;
+            case "/settings":
+                _ = OpenSettingsAsync();
+                return true;
+            case "/help":
+            case "/?":
+                _ = DialogService.ShowShortcutsAsync();
+                return true;
+            case "/copy":
+                // Copy the last assistant message.
+                var last = SelectedConversation?.Messages.LastOrDefault(m => m.IsAssistant);
+                if (last is not null)
+                {
+                    _ = CopyMessageAsync(last);
+                }
+                else
+                {
+                    ToastService.Warning("/copy", "No assistant message to copy yet.");
+                }
+                return true;
+            default:
+                // Unknown slash command — let it flow through as a normal message.
+                // Heuristic: if the user clearly typed a command (starts with /
+                // + only letters/digits, no spaces), surface it as a warning
+                // so they know the command wasn't recognised.
+                if (space < 0)
+                {
+                    ToastService.Warning("Unknown command", $"{cmd} — try /clear, /new, /settings, /help, /copy");
+                    return true;
+                }
+                return false;
+        }
+    }
+
     [RelayCommand]
     private void ClearConversation()
     {
@@ -640,6 +795,52 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     [RelayCommand]
     private async Task ShowShortcutsAsync() => await DialogService.ShowShortcutsAsync();
+
+    [RelayCommand]
+    private async Task ExportConversationsAsync()
+    {
+        var path = await DialogService.PickExportFileAsync();
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            ConversationStore.ExportToFile(
+                Conversations.Select(c => c.ToModel()), path);
+            ToastService.Success("Exported", $"{Conversations.Count} conversation(s) → {Path.GetFileName(path)}");
+        }
+        catch (Exception ex)
+        {
+            ToastService.Error("Export failed", ex.Message);
+        }
+    }
+
+    [RelayCommand]
+    private async Task ImportConversationsAsync()
+    {
+        var path = await DialogService.PickImportFileAsync();
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            var imported = ConversationStore.ImportFromFile(path);
+            var existing = new HashSet<Guid>(Conversations.Select(c => c.Id));
+            var added = 0;
+            foreach (var c in imported)
+            {
+                if (existing.Contains(c.Id)) continue;    // skip duplicates by id
+                Conversations.Add(new ConversationViewModel(c));
+                added++;
+            }
+            RebuildFilteredConversations();
+            SaveConversations();
+            ToastService.Success("Imported",
+                added == imported.Count
+                    ? $"{added} conversation(s) from {Path.GetFileName(path)}"
+                    : $"{added} of {imported.Count} (rest already present)");
+        }
+        catch (Exception ex)
+        {
+            ToastService.Error("Import failed", ex.Message);
+        }
+    }
 
     [RelayCommand(CanExecute = nameof(IsModelLoaded))]
     private async Task ShowModelInfoAsync()

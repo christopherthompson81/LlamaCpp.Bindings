@@ -75,8 +75,8 @@ src/
 - [x] **Search conversations** — case-insensitive substring on Title + Preview, live-filtered as user types. Ctrl+K focuses the search box.
 - [x] **Active conversation highlight** — `ListBox.SelectedItem` bound to `SelectedConversation`; styled via existing `ListBoxItem:selected` accent from Theme/Controls.
 - [x] **Conversation preview text** — `ConversationViewModel.Preview` — first user message truncated to 80 chars, rendered below the title in the sidebar.
-- [ ] **Pinned/recent grouping** — add a `Pinned` bool to `Conversation` and render two groups in the sidebar. Small.
-- [ ] **Export/import conversations** — JSON is already the on-disk format, so a File menu item opening `StorageProvider.OpenFilePickerAsync` + `SaveFilePickerAsync` is the whole feature.
+- [x] **Pinned/recent grouping** — `Conversation.Pinned` bool + `ConversationViewModel.Pinned` + `TogglePinnedCommand` (context menu "Pin / unpin") + `RebuildFilteredConversations` sorts by `Pinned` desc then `UpdatedAt` desc. A 📌 indicator appears next to pinned items' titles in the sidebar.
+- [x] **Export/import conversations** — `ConversationStore.ExportToFile` / `ImportFromFile`, `DialogService.PickExportFileAsync` / `PickImportFileAsync` via `StorageProvider`. File menu gains Export / Import items. Import de-dupes by conversation Id.
 
 ### 3. Message rendering
 
@@ -110,7 +110,7 @@ src/
 - [x] **Delete message** — `DeleteMessageCommand` removes the single clicked message (not downstream) and clears the KV cache. No confirmation dialog yet.
 - [~] **Branch navigation** — deferred. Precursor: tree-shaped transcript with `parentId` on each turn.
 - [~] **Fork conversation** — deferred. Trivial wrapper once branching or a "duplicate-up-to-here" command lands.
-- [ ] **Message deletion dialog** — actionable now. Small confirm dialog offering "just this" vs "this + downstream".
+- [x] **Message deletion dialog** — `DialogService.ConfirmAsync` + `ConfirmDialog` (multi-choice). `DeleteMessageAsync` skips the prompt when there's nothing downstream; otherwise offers Cancel / Just this / This + N after.
 
 ### 5. Compose
 
@@ -123,10 +123,10 @@ src/
 - [~] **Paste handling (files)** — deferred (with multimodal). Plain-text paste already works via default `TextBox` behaviour.
 - [~] **MCP prompt picker** — deferred. Precursor: MCP client.
 - [~] **MCP resource picker** — deferred (with MCP).
-- [ ] **Slash command support** — actionable. Intercept leading `/` in compose and show a small popup with `/clear`, `/reset`, `/system ...` etc. Low priority, no blocker.
-- [ ] **Token count display** — actionable now. Call `model.Vocab.Tokenize(UserInput, false, true)` on `UserInput` change (debounced) and show count in the compose area.
-- [x] **Send button state** — disabled/enabled bound to `CanSend` (checks input length, not generating, not busy, model loaded, conversation selected). Spinner during submission is a small polish todo.
-- [ ] **Stop generation button** — actionable. Merge Send + Cancel into one toggle that shows "Send" when idle and "Stop" during `IsGenerating`. Currently we have two separate buttons side-by-side.
+- [x] **Slash command support** — `SendAsync` intercepts leading `/` and dispatches: `/clear` + `/reset` wipe the current conversation, `/new` creates one, `/settings` opens prefs, `/help` / `/?` show the shortcuts overlay, `/copy` copies the last assistant message. Unknown one-word commands surface a warning toast listing the set; anything with a space falls through to the model.
+- [x] **Token count display** — `UserInputTokenCount` (debounced 150 ms via `DispatcherTimer`) tokenises the compose text with `Session.Model.Vocab.Tokenize`. Shown under the compose TextBox as `N tok`, hidden when no model is loaded.
+- [x] **Send button state** — disabled/enabled bound to `CanSend`.
+- [x] **Stop generation button** — Send and Stop share one column in the compose grid; `IsVisible` swaps on `IsGenerating`. Stop uses the `destructive` button class.
 
 ### 6. Chat settings
 
@@ -173,7 +173,7 @@ This whole section is shaped by webui's server-side model-list model. We use per
 - [-] **Model option** — N/A.
 - [~] **Vision modality badge** — deferred. Precursor: multimodal bindings; model capabilities would expose a Vision flag we could surface next to the profile name.
 - [~] **Audio modality badge** — deferred (with multimodal).
-- [ ] **Model info dialog** — actionable. `LlamaModel` already exposes ParameterCount, TrainingContextSize, LayerCount, EmbeddingSize, Metadata (GGUF key/values), etc. A "File → Model info…" dialog showing them is a nice power-user touch.
+- [x] **Model info dialog** — `Views/ModelInfoDialog.cs`. File → Model info… (disabled when no model is loaded). Shows a summary block (profile / filename / description / parameter count / file size / training context / layers / embedding dim / capabilities / vocab size / template presence) plus the full GGUF key/value bag in a scrollable lower table. Long values clipped to 400 chars so the embedded Jinja template doesn't blow up the dialog.
 - [-] **Model not available dialog** — N/A. We read from a file path; "not available" = file missing, which we already report in the status bar.
 - [-] **Router mode** — N/A.
 - [-] **Single model display** — N/A. Profile name + filename shown in the toolbar.
@@ -181,16 +181,16 @@ This whole section is shaped by webui's server-side model-list model. We use per
 
 ### 9. Miscellaneous
 
-- [ ] **Theme toggle** — actionable. Settings → Display gains a radio: Auto / Light / Dark. Wires to `Application.Current.RequestedThemeVariant`; persist the choice in `AppSettings`.
+- [x] **Theme toggle** — `AppSettings.ThemeMode` (Auto/Light/Dark) + Settings → Display ComboBox. `Services/ThemeService.Apply` maps to `Application.RequestedThemeVariant`; applied at startup and live on each change via `AppSettingsViewModel.OnThemeModeChanged`. `App.axaml`'s default variant flipped to `Default` so the user setting wins.
 - [-] **Dark mode class strategy** — N/A. Avalonia's `ThemeVariant` is the equivalent and is already wired.
 - [-] **Mode-watcher integration** — N/A. Avalonia equivalent (system-theme detection) is built in via `ThemeVariant.Default`.
 - [-] **Language/locale selector** — N/A. No i18n framework; app is English-only.
-- [ ] **About dialog / keyboard shortcut overlay** — actionable. Modal listing Ctrl+N / Ctrl+Shift+O / Ctrl+K / Ctrl+B / Ctrl+, / Ctrl+L and our Enter/Shift+Enter compose rules. Menu: Help → Shortcuts (or About…).
-- [ ] **Error toast messages** — actionable. Replace the "errors only visible in status bar" pattern with a `svelte-sonner`-equivalent (a non-blocking overlay pill). Candidates: roll our own `ToastHost` UserControl, or use `DialogHostAvalonia`-style pattern.
-- [ ] **Success/info toasts** — actionable. Same host as above; used for "Copied", "Profile saved", etc.
-- [ ] **Empty state — no conversations** — actionable. When `Conversations.Count == 0`, sidebar shows a centered "Start your first chat" with a primary button. We currently auto-create a blank conversation to avoid this state.
-- [ ] **Empty state — empty conversation** — actionable. When the active conversation's `Messages.Count == 0`, chat area shows centered placeholder with example prompts or a "type something to start" hint.
-- [ ] **Loading splash screen** — actionable (small). Shown while model is loading — progress-ambiguous spinner + model name. Currently just a status-bar text change.
+- [x] **About dialog / keyboard shortcut overlay** — `Views/ShortcutsDialog.cs`. Help → Keyboard shortcuts… lists Ctrl+N / Ctrl+Shift+O / Ctrl+K / Ctrl+B / Ctrl+L / Ctrl+, and Enter / Shift+Enter / Escape.
+- [x] **Error toast messages** — `Services/ToastService` + `Views/ToastHost`. Bottom-right overlay; error path wired in generation failure + model load failure; Destructive border colour.
+- [x] **Success/info toasts** — same host; success (green border) wired for Copy, model loaded, export/import, pin; info for /clear; warning for unknown slash command.
+- [-] **Empty state — no conversations** — N/A. Ctor guarantees at least one conversation exists (auto-creates a blank one if the store is empty), so the sidebar is never empty in practice.
+- [x] **Empty state — empty conversation** — centred "Start the conversation" hint shown in the chat area when `SelectedConversation.Messages.Count == 0`; sits behind the ScrollViewer.
+- [x] **Loading splash screen** — full-window overlay on MainWindow, visible while `IsBusy`. Shows profile name + indeterminate progress bar + current status text. Blocks interaction during `ChatSession.Load`.
 - [~] **Error splash screen** — deferred. Precursor: formal app-wide error boundary. For now load/generation errors go to `last-error.log` + status bar.
 - [-] **Onboarding / feature tour** — N/A. Probably out of scope for a developer-oriented desktop app.
 
@@ -333,7 +333,7 @@ All deferred — the app currently uses text labels (Copy / Edit / Delete etc.).
 - [x] **Sidebar** — `SettingsWindow` left pane uses Sidebar/SidebarBorder tokens; list items highlight Accent on hover/selected via `ListBoxItem` styles.
 - [x] **Code block** — fenced/indented code rendered as `Border` with `CodeBackground`, monospace `TextBlock` inside a `ScrollViewer`, optional language label in a two-row grid.
 - [x] **Dialog/modal** — `SettingsWindow` shown via `ShowDialog(owner)` with `WindowStartupLocation="CenterOwner"`.
-- [ ] **Toast/notification** — actionable (see Miscellaneous).
+- [x] **Toast/notification** — see Miscellaneous. `ToastService` + `ToastHost` + severity-variant `Border.toast` styles.
 - [~] **Tooltip** — deferred.
 
 ### Motion + accessibility
@@ -383,7 +383,7 @@ All deferred — the app currently uses text labels (Copy / Edit / Delete etc.).
 - [~] **MCP resource browser** — deferred (phase 2 with MCP client).
 - [~] **Tool calling / prompt picker** — deferred (phase 2 with MCP).
 - [~] **Continue generation** — deferred. Precursor: `LlamaGenerator` resume-from-offset support.
-- [ ] **Token count estimation** — actionable. `model.Vocab.Tokenize(UserInput, false, true).Length` on debounced input change.
+- [x] **Token count estimation** — `UserInputTokenCount` on the main VM, debounced 150 ms, shown under the compose box.
 
 ### Visual implementation notes
 - [x] **OKLCH colors** — translated to sRGB hex anchored on Tailwind v4 neutral palette.

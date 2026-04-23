@@ -23,6 +23,9 @@ public partial class ConversationViewModel : ObservableObject
 
     [ObservableProperty] private DateTimeOffset _updatedAt;
 
+    /// <summary>Pinned conversations sort to the top of the sidebar.</summary>
+    [ObservableProperty] private bool _pinned;
+
     /// <summary>Inline-rename mode in the sidebar.</summary>
     [ObservableProperty] private bool _isEditing;
 
@@ -51,6 +54,7 @@ public partial class ConversationViewModel : ObservableObject
         _title = model.Title;
         CreatedAt = model.CreatedAt;
         _updatedAt = model.UpdatedAt;
+        _pinned = model.Pinned;
 
         foreach (var t in model.Turns)
         {
@@ -73,6 +77,7 @@ public partial class ConversationViewModel : ObservableObject
         Title = Title,
         CreatedAt = CreatedAt,
         UpdatedAt = UpdatedAt,
+        Pinned = Pinned,
         Turns = Messages.Select(m => new ChatTurn(
             Id: Guid.NewGuid(),
             Role: m.IsUser ? TurnRole.User : TurnRole.Assistant,

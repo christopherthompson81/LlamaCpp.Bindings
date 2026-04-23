@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -48,6 +49,17 @@ internal static class DialogService
         await win.ShowDialog(owner);
     }
 
+    public static async Task<string?> ConfirmAsync(
+        string title, string message,
+        IReadOnlyList<(string Key, string Label, bool Destructive, bool Primary)> options)
+    {
+        var owner = Owner;
+        if (owner is null) return null;
+        var win = new ConfirmDialog(title, message, options);
+        await win.ShowDialog(owner);
+        return win.SelectedKey;
+    }
+
     public static async Task ShowModelInfoAsync(LlamaModel model, string? profileName)
     {
         var owner = Owner;
@@ -62,6 +74,45 @@ internal static class DialogService
         if (owner is null) return;
         var win = new CodePreviewDialog(code, language);
         await win.ShowDialog(owner);
+    }
+
+    /// <summary>
+    /// Open-file picker for a conversation-bundle JSON. Returns the path
+    /// the user selected, or null if cancelled.
+    /// </summary>
+    public static async Task<string?> PickImportFileAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return null;
+        var result = await owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import conversations",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Conversation bundle (.json)") { Patterns = new[] { "*.json" } },
+                FilePickerFileTypes.All,
+            },
+        });
+        return result.Count > 0 ? result[0].TryGetLocalPath() : null;
+    }
+
+    /// <summary>Save-file picker for exporting the conversation bundle.</summary>
+    public static async Task<string?> PickExportFileAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return null;
+        var result = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export conversations",
+            SuggestedFileName = $"llamachat-conversations-{System.DateTime.Now:yyyy-MM-dd}.json",
+            DefaultExtension = "json",
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("Conversation bundle (.json)") { Patterns = new[] { "*.json" } },
+            },
+        });
+        return result?.TryGetLocalPath();
     }
 
     public static async Task<string?> PickGgufFileAsync()

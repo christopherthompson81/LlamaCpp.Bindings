@@ -30,6 +30,9 @@
                 <MenuItem Header="_Unload"     Command="{Binding UnloadCommand}" />
                 <MenuItem Header="Model _info..." Command="{Binding ShowModelInfoCommand}" />
                 <Separator />
+                <MenuItem Header="_Export conversations..." Command="{Binding ExportConversationsCommand}" />
+                <MenuItem Header="_Import conversations..." Command="{Binding ImportConversationsCommand}" />
+                <Separator />
                 <MenuItem Header="E_xit"       Command="{Binding ExitCommand}" />
             </MenuItem>
             <MenuItem Header="_Chat">
@@ -122,9 +125,15 @@
                                 <Grid>
                                     <!-- Default display -->
                                     <StackPanel Spacing="2" IsVisible="{Binding !IsEditing}">
-                                        <TextBlock Text="{Binding DisplayTitle}"
-                                                   FontWeight="Medium"
-                                                   TextTrimming="CharacterEllipsis" />
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding DisplayTitle}"
+                                                       FontWeight="Medium"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="📌" FontSize="11"
+                                                       Opacity="0.7" Margin="6,0,0,0"
+                                                       IsVisible="{Binding Pinned}" />
+                                        </Grid>
                                         <TextBlock Text="{Binding Preview}"
                                                    Classes="muted xs"
                                                    IsVisible="{Binding Preview, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
@@ -141,6 +150,10 @@
                                             <MenuItem Header="Rename"
                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).BeginRenameCommand}"
                                                       CommandParameter="{Binding}" />
+                                            <MenuItem Header="Pin / unpin"
+                                                      Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).TogglePinnedCommand}"
+                                                      CommandParameter="{Binding}" />
+                                            <Separator />
                                             <MenuItem Header="Delete"
                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteConversationCommand}"
                                                       CommandParameter="{Binding}" />
@@ -237,18 +250,23 @@
                     </ScrollViewer>
                 </Panel>
 
-                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,12,0,0">
-                    <TextBox Grid.Column="0" Text="{Binding UserInput, Mode=TwoWay}"
+                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" RowDefinitions="*,Auto"
+                      Margin="0,12,0,0">
+                    <TextBox Grid.Column="0" Grid.Row="0" Text="{Binding UserInput, Mode=TwoWay}"
                              PlaceholderText="Type a message, Shift+Enter for newline..."
                              AcceptsReturn="False" TextWrapping="Wrap"
                              MinHeight="56" MaxHeight="200"
                              KeyDown="OnComposeKeyDown" />
+                    <TextBlock Grid.Column="0" Grid.Row="1" Classes="xs muted"
+                               Margin="4,2,0,0"
+                               IsVisible="{Binding IsModelLoaded}"
+                               Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
                     <!-- Send and Stop share a column — only one is visible at a
                          time depending on IsGenerating. Matches webui's toggle. -->
-                    <Button Grid.Column="1" Content="Send" Margin="8,0,0,0"
+                    <Button Grid.Column="1" Grid.Row="0" Content="Send" Margin="8,0,0,0"
                             Command="{Binding SendCommand}" IsDefault="True"
                             IsVisible="{Binding !IsGenerating}" />
-                    <Button Grid.Column="1" Content="Stop" Classes="destructive" Margin="8,0,0,0"
+                    <Button Grid.Column="1" Grid.Row="0" Content="Stop" Classes="destructive" Margin="8,0,0,0"
                             Command="{Binding CancelCommand}"
                             IsVisible="{Binding IsGenerating}" />
                 </Grid>

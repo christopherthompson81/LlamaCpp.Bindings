@@ -56,4 +56,16 @@ internal static class ConversationStore
         var json = JsonSerializer.Serialize(conversations, JsonOpts);
         File.WriteAllText(StorePath, json);
     }
+
+    public static void ExportToFile(IEnumerable<Conversation> conversations, string path)
+    {
+        File.WriteAllText(path, JsonSerializer.Serialize(conversations, JsonOpts));
+    }
+
+    public static IReadOnlyList<Conversation> ImportFromFile(string path)
+    {
+        var json = File.ReadAllText(path);
+        return JsonSerializer.Deserialize<List<Conversation>>(json, JsonOpts)
+               ?? (IReadOnlyList<Conversation>)Array.Empty<Conversation>();
+    }
 }
