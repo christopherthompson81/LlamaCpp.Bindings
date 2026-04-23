@@ -28,6 +28,7 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.1" />
     <PackageReference Include="Markdig" Version="0.38.0" />
     <PackageReference Include="ColorCode.Core" Version="2.0.15" />
+    <PackageReference Include="CSharpMath.SkiaSharp" Version="1.0.0-pre.1" />
   </ItemGroup>
 
   <ItemGroup>

@@ -6,7 +6,9 @@ using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Markdig;
+using Markdig.Extensions.Mathematics;
 using Markdig.Extensions.TaskLists;
 using Markdig.Extensions.Tables;
 using Markdig.Syntax;
@@ -36,6 +38,7 @@ public static class MarkdownRenderer
         .UseAutoLinks()
         .UsePipeTables()
         .UseTaskLists()
+        .UseMathematics()
         .Build();
 
     public static void RenderInto(Panel host, string? markdown)
@@ -73,6 +76,7 @@ public static class MarkdownRenderer
         ParagraphBlock p => RenderParagraph(p),
         ListBlock l => RenderList(l),
         QuoteBlock q => RenderQuote(q),
+        MathBlock mb => RenderMathBlock(mb),
         FencedCodeBlock fc => RenderFencedCodeBlock(fc),
         CodeBlock cb => RenderIndentedCodeBlock(cb),
         ThematicBreakBlock => RenderThematicBreak(),
@@ -196,6 +200,27 @@ public static class MarkdownRenderer
     {
         var text = ExtractBlockText(cb);
         return BuildCodeBlock(text, language: null);
+    }
+
+    private static Control RenderMathBlock(MathBlock mb)
+    {
+        var latex = ExtractBlockText(mb);
+        var fg = MathRenderer.ResolveThemeForeground();
+        var bmp = MathRenderer.Render(latex, display: true, fg);
+        if (bmp is null)
+        {
+            // Invalid LaTeX — show raw source in a muted monospace block so
+            // the user sees what failed rather than a blank space.
+            return BuildCodeBlock(latex, language: "math", showActions: false);
+        }
+
+        return new Image
+        {
+            Source = bmp,
+            Stretch = Avalonia.Media.Stretch.None,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 6, 0, 6),
+        };
     }
 
     private static string ExtractBlockText(LeafBlock block)
@@ -452,6 +477,31 @@ public static class MarkdownRenderer
                 run[!TextElement.FontFamilyProperty] = new DynamicResourceExtension("CodeFontFamily");
                 run[!TextElement.BackgroundProperty] = new DynamicResourceExtension("CodeBackground");
                 dst.Add(run);
+                break;
+            }
+
+            case MathInline math:
+            {
+                var latex = math.Content.ToString();
+                var fg = MathRenderer.ResolveThemeForeground();
+                var bmp = MathRenderer.Render(latex, display: false, fg);
+                if (bmp is null)
+                {
+                    // Fallback: render the raw latex in code style so the user
+                    // can see what failed.
+                    var run = new Run($"${latex}$") { FontSize = 12 };
+                    run[!TextElement.FontFamilyProperty] = new DynamicResourceExtension("CodeFontFamily");
+                    dst.Add(run);
+                }
+                else
+                {
+                    var img = new Image
+                    {
+                        Source = bmp,
+                        Stretch = Avalonia.Media.Stretch.None,
+                    };
+                    dst.Add(new InlineUIContainer(img) { BaselineAlignment = BaselineAlignment.Center });
+                }
                 break;
             }
 
