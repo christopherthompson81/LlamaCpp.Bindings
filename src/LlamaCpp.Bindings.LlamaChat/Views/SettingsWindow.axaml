@@ -122,6 +122,17 @@
                 </Border>
             </TabItem>
 
+            <!-- ===== Tools / MCP ===== -->
+            <TabItem Header="Tools / MCP">
+                <ContentControl Content="{Binding McpSettings}">
+                    <ContentControl.ContentTemplate>
+                        <DataTemplate DataType="vm:McpSettingsViewModel">
+                            <v:McpSettingsView />
+                        </DataTemplate>
+                    </ContentControl.ContentTemplate>
+                </ContentControl>
+            </TabItem>
+
         </TabControl>
 
         <!-- Footer -->

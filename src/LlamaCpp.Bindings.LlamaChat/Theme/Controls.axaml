@@ -306,6 +306,45 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
+    <!-- Tool-result bubbles: muted, compact, offset from the main convo flow
+         so the eye can skim past them. Left-rail accent hints at "this was
+         machine I/O, not a turn." -->
+    <Style Selector="Border.bubble.tool">
+        <Setter Property="Background" Value="{DynamicResource Muted}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1,1,1,1" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="Margin" Value="16,4,16,4" />
+        <Setter Property="Opacity" Value="0.92" />
+    </Style>
+
+    <!-- Tool-call chip: compact pill shown above an assistant reply when the
+         model invoked a tool. Visual shorthand for the full markup which
+         lives in the model-facing content string. -->
+    <Style Selector="Border.toolchip">
+        <Setter Property="Background" Value="{DynamicResource Muted}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="8,2" />
+    </Style>
+
+    <!-- Monospace boxed container for a tool result's text output. Reuses
+         the same code-block tokens the markdown renderer uses for fenced
+         code, so tool output reads at a glance as "machine output" rather
+         than "prose." -->
+    <Style Selector="Border.toolresult">
+        <Setter Property="Background" Value="{DynamicResource CodeBackground}" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusMd}" />
+        <Setter Property="Padding" Value="10,8" />
+    </Style>
+    <Style Selector="Border.toolresult SelectableTextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource CodeFontFamily}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource CodeForeground}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
 
     <!-- ================================================================
          Toast notifications — each card is a Border.toast with a severity

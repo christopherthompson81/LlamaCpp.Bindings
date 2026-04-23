@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace LlamaCpp.Bindings.LlamaChat.Models;
 
-public enum TurnRole { System, User, Assistant }
+public enum TurnRole { System, User, Assistant, Tool }
 
 public enum TurnState { Pending, Streaming, Complete, Cancelled, Errored }
 

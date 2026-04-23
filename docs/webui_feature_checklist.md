@@ -121,8 +121,8 @@ src/
 - [~] **Audio recording** — partially landed. Audio **file attachment** works end-to-end via the same compose paperclip + drag-drop + `ChatSession` multimodal path as images; `MtmdBitmap.FromAudioSamples` is the public wrapper over `mtmd_bitmap_init_from_audio` for future callers with raw PCM-F32 buffers. What's still deferred is **mic capture** — the compose bar doesn't have a record button yet, because that needs a platform-specific audio-capture pipeline (NAudio on Windows, PortAudio/ALSA cross-platform).
 - [x] **Drag-and-drop file upload** — `DragDrop.AllowDrop="True"` on the main `Window`; `OnComposeDragOver` in `MainWindow.axaml.cs` accepts the drop only when the payload contains `DataFormat.File` **and** `CanAttachImages`; `OnComposeDrop` walks `IDataTransfer.TryGetFiles()` and feeds local paths to `MainWindowViewModel.TryAddPendingImage`.
 - [x] **Paste handling (files)** — Ctrl+V in the compose `TextBox` is intercepted by `OnComposeKeyDown`: if the clipboard has a bitmap payload (`IClipboard.TryGetBitmapAsync`), the bitmap is re-encoded to PNG bytes and queued as an attachment, and the default text-paste is suppressed. Non-image clipboard content (plain text, mixed) falls through to the `TextBox`'s native paste.
-- [~] **MCP prompt picker** — deferred. Precursor: MCP client.
-- [~] **MCP resource picker** — deferred (with MCP).
+- [x] **MCP prompt picker** — `Views/McpPromptPickerDialog.cs` — modal with a server/prompt ComboBox, dynamic argument fields (name/required/description), Insert button fetches `prompts/get` and inserts the rendered text into the compose box.
+- [x] **MCP resource picker** — `Views/McpResourcePickerDialog.cs` — split-pane resource browser with search, Preview reads the content inline via `resources/read`, Attach inserts a `<!-- resource: uri -->\nbody` block into the compose box.
 - [x] **Slash command support** — `SendAsync` intercepts leading `/` and dispatches: `/clear` + `/reset` wipe the current conversation, `/new` creates one, `/settings` opens prefs, `/help` / `/?` show the shortcuts overlay, `/copy` copies the last assistant message. Unknown one-word commands surface a warning toast listing the set; anything with a space falls through to the model.
 - [x] **Token count display** — `UserInputTokenCount` (debounced 150 ms via `DispatcherTimer`) tokenises the compose text with `Session.Model.Vocab.Tokenize`. Shown under the compose TextBox as `N tok`, hidden when no model is loaded.
 - [x] **Send button state** — disabled/enabled bound to `CanSend`.
@@ -135,7 +135,7 @@ src/
 - [x] **Display tab** — three toggles, all wired: `AutoScroll`, `ShowMessageStats`, `ShowReasoningInProgress`. Code-block theme and copy-as-plain-text deferred until we add the code-block toolbar. `AppSettings` record + `AppSettingsStore` persist to `app-settings.json` alongside profiles.
 - [x] **Sampling tab** — already implemented in `Views/SamplerPanelView.axaml` (embedded inside ProfileEditorView): temperature + dynatemp, top-k/p, min-p, typical, top-n-σ, XTC, DRY, repetition/frequency/presence penalties.
 - [x] **Advanced tab** — merged with Sampling: seed, dynamic-temp range/exponent, mirostat v1/v2 + tau/eta, grammar (GBNF). "Tokens to keep" + "ignore EOS" deferred (both require LlamaGenerator API extensions).
-- [~] **Tools/MCP tab** — deferred. Precursor: MCP client support (phase-2 item in `docs/webui_parity_investigation.md`).
+- [x] **Tools/MCP tab** — third tab in `SettingsWindow`. `Views/McpSettingsView.axaml` renders server list + editor with URL/Headers/enable controls, live connection status, and an expandable per-tool view showing each tool's JSON input schema.
 - [x] **System prompt** — per-profile multi-line TextBox at the top of the profile editor. Prepended to every transcript as a `TurnRole.System` turn when that profile is loaded.
 - [~] **Response format tab** — deferred. Precursor: JSON-schema → GBNF converter + preset templates. Raw GBNF slot already exists on the profile.
 - [-] **Parameter sync source indicator** — N/A. Settings are local-only; there's no server-default/session-override hierarchy to visualise.
@@ -145,23 +145,25 @@ src/
 
 ### 7. Tool calling / MCP
 
-All items deferred — **precursor for every one is an MCP client + tool-calling wiring**. See `docs/webui_parity_investigation.md` gap #2 (full Jinja — landed) and the in-flight MCP work which is phase-2.
+Streamable HTTP transport only (most common for HTTP-facing MCP servers; stdio servers can be front-ended by a local HTTP shim). Hand-rolled JSON-RPC client in `Services/McpClient.cs` — no external SDK dependency. Tool-calling uses the Hermes-style `<tool_call>{...}</tool_call>` wrapper, which is what modern Qwen/DeepSeek/Llama tool-use Jinja templates produce.
 
-- [~] **MCP server add** — form: URL input, optional headers textarea, add button, validation.
-- [~] **MCP server list** — card list sorted by recency, loading skeletons during health check.
-- [~] **MCP server enable/disable** — per-server toggle switch, persists to conversation config.
-- [~] **MCP server delete** — delete button, confirmation modal.
-- [~] **MCP server edit** — edit URL/headers inline, save/cancel.
-- [~] **MCP connection status indicator** — loading/success/error health-check badge.
-- [~] **MCP tool list** — tool names, descriptions, parameter schema in a collapsed JSON viewer.
-- [~] **MCP resource browser** — hierarchical per-server list, search, preview.
-- [~] **MCP resource preview** — modal showing content, copy, full-text display.
-- [~] **MCP prompt picker** — dropdown of server prompts + argument form + inserter.
-- [~] **MCP prompt with arguments** — argument-form fields + validation.
-- [~] **MCP resource attachment** — attach resource URI + content to a message.
-- [~] **MCP execution logs** — debug panel of request/response, parse/exec errors.
-- [~] **MCP capabilities badges** — resource/prompt/tool capability flags per server.
-- [~] **MCP active servers avatars** — compact icons in header showing active MCP servers.
+- [x] **MCP server add** — `Add` button in the settings tab inserts a disabled-by-default stub; user fills in URL + headers and clicks Save.
+- [x] **MCP server list** — `Views/McpSettingsView.axaml` left pane is a ListBox of `McpServerEntry` rows (name + URL + state pill). Backed by `McpClientService.Instance.Servers`.
+- [x] **MCP server enable/disable** — `Connect on startup` CheckBox in the editor toggles `Config.Enabled`, which disconnects/reconnects through `McpClientService.ToggleEnabledAsync`.
+- [x] **MCP server delete** — destructive `Delete` button; no confirmation dialog in v1 (deferred — same as conversation delete).
+- [x] **MCP server edit** — URL + headers + name edit in place on the selected server; `Save` reconnects with the new config. Headers entered as `Key: value` one per line.
+- [x] **MCP connection status indicator** — `StateLabel` pill on each list item + the editor status panel shows `Idle / Connecting… / Ready / Error / Disabled` plus the last error text.
+- [x] **MCP tool list** — per-server Expander list of tools; each shows the tool's `description` + a pretty-printed `inputSchema` JSON in a code block. Pretty-printing via `Services/JsonPrettyPrinter`.
+- [x] **MCP resource browser** — `Views/McpResourcePickerDialog.cs` — flat list of every ready server's resources, search box, server label per entry.
+- [x] **MCP resource preview** — `Preview` button in the browser calls `resources/read` and renders the concatenated text content in the right pane (monospace, scrollable).
+- [x] **MCP prompt picker** — `Views/McpPromptPickerDialog.cs` — ComboBox of `server / prompt` entries, dynamic argument form per prompt, Insert fetches `prompts/get` and stuffs the rendered text into the compose box.
+- [x] **MCP prompt with arguments** — argument form built from each prompt's `arguments[]` schema; required args show a trailing `*` in the label. Empty-value fields are omitted from the call.
+- [x] **MCP resource attachment** — `Attach` button on the browser reads the resource and inserts a `<!-- resource: uri -->\nbody` block into the compose textbox.
+- [x] **MCP execution logs** — `Views/McpExecutionLogDialog.cs` — ring buffer (500 entries) of request/response JSON blobs, shown newest-first with timestamps and server names. Opened from `Settings → MCP execution log`.
+- [x] **MCP capabilities badges** — tools/prompts/resources pills in the editor status panel, driven by the server's declared `capabilities` in the `initialize` response.
+- [x] **MCP active servers avatars** — compact circular initial badges in the toolbar, bound to `MainWindowViewModel.ActiveMcpServers` (only servers in `Ready` state appear).
+
+**Tool-calling loop.** When `MainWindowViewModel.GenerateAssistantReplyAsync` completes, `MaybeExecuteToolCallsAsync` scans the reply for `<tool_call>` blocks via `Services/ToolCallParser`. Each call is routed to the right server via the `serverName__toolName` prefix convention; the result JSON is appended as a `tool`-role message and the loop re-enters generation (max 6 rounds, cap tunable via `ToolCallMaxRounds`). Tools are injected into the Jinja template through a new `tools:` parameter on `LlamaChatTemplate.Apply` — the template's existing tool-use branches render without further changes.
 
 ### 8. Multi-model
 
@@ -375,13 +377,13 @@ All deferred — the app currently uses text labels (Copy / Edit / Delete etc.).
 - [x] Markdown rendering with remark/rehype analog — Markdig → Avalonia control tree (see Message rendering section for the detailed breakdown).
 - [x] File attachments & drag-drop — images only for v1 (compose paperclip + drag-drop + clipboard paste + user-bubble thumbnails). Audio input still deferred.
 - [~] Audio recording — file attachment works (compose paperclip, drag-drop, audio chip in bubble). Mic capture still deferred — needs platform-specific capture pipeline (NAudio / PortAudio).
-- [~] MCP protocol client — deferred (phase 2; `ModelContextProtocol` NuGet is an option when we take this on).
+- [x] MCP protocol client — hand-rolled JSON-RPC over Streamable HTTP in `Services/McpClient.cs`. No external SDK — matches the project's thin-wrapper philosophy and avoids SDK version drift. Supports the full surface the UI needs: `initialize`, `tools/list`, `tools/call`, `prompts/list`, `prompts/get`, `resources/list`, `resources/read`. Responses parsed from both direct JSON bodies and SSE streams.
 - [-] Model selector with search — N/A (profile-based UI instead).
 
 ### Known blockers or server-specific stubs
 - [-] **Multi-model routing** — N/A. Single model per profile-load; no "model per conversation" concept.
-- [~] **MCP resource browser** — deferred (phase 2 with MCP client).
-- [~] **Tool calling / prompt picker** — deferred (phase 2 with MCP).
+- [x] **MCP resource browser** — see §7.
+- [x] **Tool calling / prompt picker** — see §7. Hermes-style `<tool_call>` format; compatible with Qwen, DeepSeek, Hermes-family templates.
 - [x] **Continue generation** — Continue button in the assistant bubble's action bar; `StreamContinuationAsync` extends the last reply from the current KV state without re-rendering.
 - [x] **Token count estimation** — `UserInputTokenCount` on the main VM, debounced 150 ms, shown under the compose box.
 

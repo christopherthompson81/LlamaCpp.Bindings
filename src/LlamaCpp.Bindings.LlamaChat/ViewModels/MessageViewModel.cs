@@ -1,6 +1,8 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using LlamaCpp.Bindings.LlamaChat.Models;
+using LlamaCpp.Bindings.LlamaChat.Services.ToolCall;
 
 namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 
@@ -47,14 +49,150 @@ public partial class MessageViewModel : ObservableObject
 
     public bool IsUser => Role == "user";
     public bool IsAssistant => Role == "assistant";
+    public bool IsTool => Role == "tool";
+
+    /// <summary>
+    /// Name of the tool whose result this message holds. Only meaningful
+    /// when <see cref="IsTool"/>. Used as the header of the tool bubble.
+    /// </summary>
+    [ObservableProperty] private string? _toolName;
+
+    // Threshold for auto-collapsing a tool result. Short replies (a single
+    // number, a one-liner status) read naturally inline; long ones
+    // (dumped API payloads, multi-paragraph summaries) get tucked behind
+    // an expander so they don't dominate the transcript flow. Matches the
+    // feel of the Reasoning panel — "inline when short, collapsible when
+    // long."
+    private const int ToolCollapseLineThreshold = 3;
+    private const int ToolCollapseCharThreshold = 240;
+
+    /// <summary>
+    /// True when the tool result is long enough to benefit from collapsing.
+    /// Driven by both line and character thresholds so a single very-long
+    /// line still collapses, and three short lines do too.
+    /// </summary>
+    public bool ShouldCollapseTool
+    {
+        get
+        {
+            if (!IsTool) return false;
+            var c = Content ?? string.Empty;
+            if (c.Length > ToolCollapseCharThreshold) return true;
+            int nl = 0;
+            for (int i = 0; i < c.Length; i++)
+            {
+                if (c[i] == '\n' && ++nl >= ToolCollapseLineThreshold) return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Current expanded state of the tool-result <c>Expander</c>. Lazily
+    /// initialised to <c>!ShouldCollapseTool</c> on first read — short
+    /// results open by default, long ones stay collapsed. After the user
+    /// clicks the chevron the override sticks (they toggled for a reason).
+    /// The always-present Expander around every tool bubble is what gives
+    /// the user a clear "this collapses" affordance; this property just
+    /// picks the initial position.
+    /// </summary>
+    private bool _isToolExpandedInitialised;
+    private bool _isToolExpanded;
+    public bool IsToolExpanded
+    {
+        get
+        {
+            if (!_isToolExpandedInitialised)
+            {
+                _isToolExpanded = !ShouldCollapseTool;
+                _isToolExpandedInitialised = true;
+            }
+            return _isToolExpanded;
+        }
+        set
+        {
+            _isToolExpandedInitialised = true;
+            SetProperty(ref _isToolExpanded, value);
+        }
+    }
+
+    /// <summary>
+    /// True when the bubble has any non-tool-call text worth rendering. Used
+    /// by the assistant bubble to hide the MarkdownView entirely when the
+    /// stripped content is empty — avoids a zero-height ghost element when
+    /// the model's reply was purely a tool call.
+    /// </summary>
+    public bool HasDisplayContent => !string.IsNullOrEmpty(DisplayContent);
+
+    /// <summary>
+    /// Peek text shown in the collapsed tool-bubble header: first line of
+    /// the result truncated to ~80 chars, plus a "+N more lines" suffix
+    /// when the body has more. Most MCP tools put a status/summary on
+    /// line 1, so this is usually enough to skip a click.
+    /// </summary>
+    public string ToolPeek
+    {
+        get
+        {
+            if (!IsTool) return string.Empty;
+            var c = Content ?? string.Empty;
+            if (c.Length == 0) return string.Empty;
+
+            int nl = c.IndexOf('\n');
+            var firstLine = nl < 0 ? c : c[..nl];
+            if (firstLine.Length > 80) firstLine = firstLine[..77] + "…";
+
+            int extraLines = 0;
+            for (int i = 0; i < c.Length; i++) if (c[i] == '\n') extraLines++;
+            if (extraLines > 0)
+            {
+                var label = extraLines == 1 ? "line" : "lines";
+                return $"{firstLine}  (+{extraLines} more {label})";
+            }
+            return firstLine;
+        }
+    }
+
+    /// <summary>
+    /// Content with tool-call markup stripped, for the markdown view. The
+    /// raw <see cref="Content"/> is preserved intact so that re-prompting
+    /// the model on the next tool-loop round sees exactly what the model
+    /// emitted — the template's tool-use branch needs those tags to
+    /// reconstruct the turn.
+    /// </summary>
+    public string DisplayContent =>
+        IsAssistant ? ToolCallDisplay.StripMarkup(Content) : Content;
+
+    /// <summary>Compact chips for each tool call in this assistant reply.</summary>
+    public IReadOnlyList<ToolCallDisplay.Chip> ToolCallChips =>
+        IsAssistant ? ToolCallDisplay.ExtractChips(Content) : System.Array.Empty<ToolCallDisplay.Chip>();
+
+    public bool HasToolCalls => ToolCallChips.Count > 0;
 
     partial void OnReasoningChanged(string? value) => OnPropertyChanged(nameof(HasReasoning));
     partial void OnAsrLanguageChanged(string? value) => OnPropertyChanged(nameof(HasAsrLanguage));
+
+    partial void OnContentChanged(string value)
+    {
+        OnPropertyChanged(nameof(DisplayContent));
+        OnPropertyChanged(nameof(HasDisplayContent));
+        OnPropertyChanged(nameof(ToolCallChips));
+        OnPropertyChanged(nameof(HasToolCalls));
+        OnPropertyChanged(nameof(ShouldCollapseTool));
+        OnPropertyChanged(nameof(ToolPeek));
+    }
 
     partial void OnRoleChanged(string value)
     {
         OnPropertyChanged(nameof(IsUser));
         OnPropertyChanged(nameof(IsAssistant));
+        OnPropertyChanged(nameof(IsTool));
+        OnPropertyChanged(nameof(DisplayContent));
+        OnPropertyChanged(nameof(HasDisplayContent));
+        OnPropertyChanged(nameof(ToolCallChips));
+        OnPropertyChanged(nameof(HasToolCalls));
+        OnPropertyChanged(nameof(ShouldCollapseTool));
+        OnPropertyChanged(nameof(ToolPeek));
     }
 
     public static MessageViewModel FromTurn(ChatTurn t)

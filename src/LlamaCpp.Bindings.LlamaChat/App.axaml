@@ -10,6 +10,8 @@
                 <ResourceInclude Source="avares://LlamaCpp.Bindings.LlamaChat/Theme/Tokens.axaml" />
             </ResourceDictionary.MergedDictionaries>
             <svc:AttachmentThumbnailConverter x:Key="AttachmentThumbnail" />
+            <svc:JsonPrettyPrinter x:Key="JsonPrettyPrinter" />
+            <svc:FirstLetterConverter x:Key="FirstLetter" />
         </ResourceDictionary>
     </Application.Resources>
 

@@ -87,7 +87,8 @@ public static class LlamaChatTemplate
     public static string Apply(
         string template,
         IReadOnlyList<ChatMessage> messages,
-        bool addAssistantPrefix = true)
+        bool addAssistantPrefix = true,
+        IReadOnlyList<object?>? tools = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(template);
         ArgumentNullException.ThrowIfNull(messages);
@@ -104,7 +105,7 @@ public static class LlamaChatTemplate
         // haven't covered yet (e.g. exotic macros / inheritance).
         try
         {
-            return ApplyWithJinja(template, messages, addAssistantPrefix);
+            return ApplyWithJinja(template, messages, addAssistantPrefix, tools);
         }
         catch (JinjaException)
         {
@@ -162,7 +163,8 @@ public static class LlamaChatTemplate
     private static string ApplyWithJinja(
         string template,
         IReadOnlyList<ChatMessage> messages,
-        bool addAssistantPrefix)
+        bool addAssistantPrefix,
+        IReadOnlyList<object?>? tools = null)
     {
         var compiled = _jinjaCache.GetOrAdd(template, JinjaTemplate.Parse);
 
@@ -183,7 +185,7 @@ public static class LlamaChatTemplate
             // Conservative defaults for flags some templates branch on.
             // Keeping enable_thinking unset lets the Qwen3 thinking-mode
             // branch render (its default is "thinking on").
-            ["tools"] = null,
+            ["tools"] = tools is { Count: > 0 } ? (object?)tools : null,
             ["add_vision_id"] = false,
         };
 

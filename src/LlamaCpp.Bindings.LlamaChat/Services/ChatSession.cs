@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using LlamaCpp.Bindings.LlamaChat.Models;
+using LlamaCpp.Bindings.LlamaChat.Services.ToolCall;
 
 namespace LlamaCpp.Bindings.LlamaChat.Services;
 
@@ -39,6 +40,14 @@ public sealed class ChatSession : IDisposable
     public MtmdContext? Mtmd => _mtmd;
     public string? ChatTemplate => _chatTemplate;
 
+    /// <summary>
+    /// The tool-call wire format this model's chat template expects, sniffed
+    /// once at load. Null when the model has no embedded template, or when
+    /// the template doesn't match any known format — consumers treat null as
+    /// "no tool use" and skip the parse-result loop.
+    /// </summary>
+    public IToolCallFormat? ToolCallFormat { get; }
+
     /// <summary>True if this session can accept image attachments on user turns.</summary>
     public bool SupportsImages => _mtmd?.SupportsVision == true;
 
@@ -54,6 +63,7 @@ public sealed class ChatSession : IDisposable
         _context = context;
         _mtmd = mtmd;
         _chatTemplate = template;
+        ToolCallFormat = ToolCallFormatRegistry.DetectFromTemplate(template);
     }
 
     public static ChatSession Load(ModelLoadSettings settings, Action<LlamaLogLevel, string>? logSink = null)
@@ -150,6 +160,7 @@ public sealed class ChatSession : IDisposable
         IReadOnlyList<ChatTurn> transcript,
         SamplerSettings sampler,
         GenerationSettings generation,
+        IReadOnlyList<object?>? tools = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         // Gather attachments in transcript order. When any turn has images and
@@ -170,7 +181,7 @@ public sealed class ChatSession : IDisposable
             && _mtmd is not null
             && (_mtmd.SupportsVision || _mtmd.SupportsAudio);
 
-        var prompt = RenderPromptForCompletion(transcript, multimodal ? _mtmd!.DefaultMediaMarker : null);
+        var prompt = RenderPromptForCompletion(transcript, multimodal ? _mtmd!.DefaultMediaMarker : null, tools);
 
         using var llamaSampler = SamplerFactory.Build(_model, _model.Vocab, sampler);
         var generator = new LlamaGenerator(_context, llamaSampler);
@@ -552,7 +563,10 @@ public sealed class ChatSession : IDisposable
     /// turn's content — mtmd_tokenize scans the rendered prompt for the marker
     /// and splices the corresponding image chunk into the token stream.
     /// </summary>
-    private string RenderPromptForCompletion(IReadOnlyList<ChatTurn> transcript, string? mediaMarker)
+    private string RenderPromptForCompletion(
+        IReadOnlyList<ChatTurn> transcript,
+        string? mediaMarker,
+        IReadOnlyList<object?>? tools = null)
     {
         string Expand(ChatTurn t)
         {
@@ -581,7 +595,8 @@ public sealed class ChatSession : IDisposable
         var messages = transcript
             .Select(t => new ChatMessage(RoleLabel(t.Role), Expand(t)))
             .ToArray();
-        return LlamaChatTemplate.Apply(_chatTemplate, messages, addAssistantPrefix: true);
+        return LlamaChatTemplate.Apply(_chatTemplate, messages,
+            addAssistantPrefix: true, tools: tools);
     }
 
     /// <summary>
@@ -604,6 +619,7 @@ public sealed class ChatSession : IDisposable
         TurnRole.System => "system",
         TurnRole.User => "user",
         TurnRole.Assistant => "assistant",
+        TurnRole.Tool => "tool",
         _ => "user",
     };
 

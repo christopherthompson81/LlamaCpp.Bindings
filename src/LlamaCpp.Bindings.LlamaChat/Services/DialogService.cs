@@ -84,6 +84,35 @@ internal static class DialogService
         await win.ShowDialog(owner);
     }
 
+    /// <summary>Show the MCP prompt picker modal. Returns the rendered prompt text, or null if cancelled.</summary>
+    public static async Task<string?> ShowMcpPromptPickerAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return null;
+        var win = new McpPromptPickerDialog();
+        await win.ShowDialog(owner);
+        return win.Result;
+    }
+
+    /// <summary>Show the MCP resource browser. Returns (uri, content) on attach, or null on cancel.</summary>
+    public static async Task<(string Uri, string Content)?> ShowMcpResourceBrowserAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return null;
+        var win = new McpResourcePickerDialog();
+        await win.ShowDialog(owner);
+        if (win.AttachedUri is null || win.AttachedContent is null) return null;
+        return (win.AttachedUri, win.AttachedContent);
+    }
+
+    public static async Task ShowMcpExecutionLogAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return;
+        var win = new McpExecutionLogDialog();
+        await win.ShowDialog(owner);
+    }
+
     /// <summary>
     /// Open-file picker for a conversation-bundle JSON. Returns the path
     /// the user selected, or null if cancelled.

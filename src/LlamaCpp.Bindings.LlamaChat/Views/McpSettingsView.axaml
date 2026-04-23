@@ -1,0 +1,169 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
+             xmlns:svc="using:LlamaCpp.Bindings.LlamaChat.Services"
+             xmlns:m="using:LlamaCpp.Bindings.LlamaChat.Models"
+             mc:Ignorable="d"
+             d:DesignWidth="800" d:DesignHeight="500"
+             x:Class="LlamaCpp.Bindings.LlamaChat.Views.McpSettingsView"
+             x:DataType="vm:McpSettingsViewModel">
+
+    <Grid ColumnDefinitions="280,*" Margin="8">
+
+        <!-- ===== Server list ===== -->
+        <Border Grid.Column="0"
+                Background="{DynamicResource Sidebar}"
+                BorderBrush="{DynamicResource SidebarBorder}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource RadiusLg}">
+            <Grid RowDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Row="0" Text="MCP servers" Classes="section"
+                           Margin="14,12,14,6" />
+                <ListBox Grid.Row="1" Margin="6"
+                         ItemsSource="{Binding Servers}"
+                         SelectedItem="{Binding SelectedServer}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="svc:McpServerEntry">
+                            <StackPanel Spacing="2">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="{Binding Config.Name}"
+                                               FontWeight="Medium" TextTrimming="CharacterEllipsis" />
+                                    <Border Grid.Column="1" CornerRadius="8" Padding="6,1" Margin="6,0,0,0"
+                                            Background="{DynamicResource Muted}">
+                                        <TextBlock Text="{Binding StateLabel}" Classes="xs muted" />
+                                    </Border>
+                                </Grid>
+                                <TextBlock Text="{Binding Config.Url}" Classes="xs muted"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="6">
+                    <Button Content="Add" Classes="sm outline"
+                            Command="{Binding AddServerCommand}" />
+                    <Button Content="Delete" Classes="sm destructive"
+                            Command="{Binding DeleteServerCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ===== Editor ===== -->
+        <Border Grid.Column="1" Margin="16,0,0,0" Classes="card">
+            <ScrollViewer>
+                <StackPanel Spacing="14" DataContext="{Binding SelectedServer}"
+                            IsVisible="{Binding ., Converter={x:Static ObjectConverters.IsNotNull}}">
+
+                    <TextBlock Text="Server" Classes="h3" />
+
+                    <Grid ColumnDefinitions="130,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                          RowSpacing="10">
+                        <TextBlock Grid.Column="0" Grid.Row="0" Text="Name"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Grid.Row="0"
+                                 Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftName, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Column="0" Grid.Row="1" Text="URL"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Grid.Row="1"
+                                 PlaceholderText="https://example.com/mcp"
+                                 Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftUrl, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Column="0" Grid.Row="2" Text="Headers"
+                                   VerticalAlignment="Top" Margin="0,4,0,0" />
+                        <StackPanel Grid.Column="1" Grid.Row="2" Spacing="4">
+                            <TextBox AcceptsReturn="True" TextWrapping="Wrap"
+                                     MinHeight="80" MaxHeight="200"
+                                     PlaceholderText="One per line — Key: value"
+                                     Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftHeaders, Mode=TwoWay}" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="e.g. Authorization: Bearer abc123 — sent on every request to this server." />
+                        </StackPanel>
+
+                        <TextBlock Grid.Column="0" Grid.Row="3" Text="Enabled"
+                                   VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Grid.Row="3"
+                                    Orientation="Horizontal" Spacing="8">
+                            <CheckBox IsChecked="{Binding Config.Enabled, Mode=OneWay}"
+                                      Content="Connect on startup"
+                                      Command="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).ToggleEnabledCommand}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Grid.Row="4" Orientation="Horizontal" Spacing="6">
+                            <Button Content="Save"
+                                    Command="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).SaveSelectedCommand}" />
+                            <Button Content="Reconnect" Classes="outline"
+                                    Command="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).ReconnectServerCommand}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Connection status + error -->
+                    <Border Classes="panel" Padding="12,10" CornerRadius="{DynamicResource RadiusMd}">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Status" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding StateLabel}" Classes="sm" />
+                            <TextBlock Text="{Binding Error}" Classes="xs"
+                                       Foreground="{DynamicResource Destructive}"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                            <!-- Capability badges -->
+                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                                <Border IsVisible="{Binding HasTools}"
+                                        Background="{DynamicResource Muted}"
+                                        CornerRadius="10" Padding="8,2">
+                                    <TextBlock Text="🔧 tools" Classes="xs muted" />
+                                </Border>
+                                <Border IsVisible="{Binding HasPrompts}"
+                                        Background="{DynamicResource Muted}"
+                                        CornerRadius="10" Padding="8,2">
+                                    <TextBlock Text="💬 prompts" Classes="xs muted" />
+                                </Border>
+                                <Border IsVisible="{Binding HasResources}"
+                                        Background="{DynamicResource Muted}"
+                                        CornerRadius="10" Padding="8,2">
+                                    <TextBlock Text="📄 resources" Classes="xs muted" />
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Tool list -->
+                    <StackPanel Spacing="6" IsVisible="{Binding HasTools}">
+                        <TextBlock Text="Tools" Classes="section" />
+                        <ItemsControl ItemsSource="{Binding Tools}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="m:McpToolInfo">
+                                    <Expander Margin="0,2">
+                                        <Expander.Header>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding Name}" FontWeight="Medium" />
+                                                <TextBlock Text="{Binding Description}"
+                                                           Classes="xs muted" TextWrapping="Wrap"
+                                                           IsVisible="{Binding Description,
+                                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <Border Background="{DynamicResource CodeBackground}"
+                                                CornerRadius="{DynamicResource RadiusMd}"
+                                                Padding="10,8">
+                                            <SelectableTextBlock FontFamily="{DynamicResource CodeFontFamily}"
+                                                                 FontSize="12"
+                                                                 Foreground="{DynamicResource CodeForeground}"
+                                                                 TextWrapping="Wrap"
+                                                                 Text="{Binding InputSchema,
+                                                                     Converter={StaticResource JsonPrettyPrinter}}" />
+                                        </Border>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</UserControl>

@@ -281,17 +281,30 @@ public sealed class LlamaGenerator
 
     private unsafe void DecodePromptBatch(int[] tokens)
     {
-        fixed (int* tokPtr = tokens)
+        // llama.cpp asserts n_tokens_all <= cparams.n_batch inside
+        // llama_decode and crashes the process with GGML_ASSERT if we exceed
+        // it — an uncatchable abort. Chunk into ≤ n_batch slices and decode
+        // each sequentially. llama_batch_get_one auto-positions from the
+        // current KV tail, so each chunk lands after the previous one.
+        int batchCap = Math.Max(1, _context.LogicalBatchSize);
+        int offset = 0;
+        while (offset < tokens.Length)
         {
-            var batch = NativeMethods.llama_batch_get_one(tokPtr, tokens.Length);
-            var rc = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batch);
-            if (rc != 0)
+            int take = Math.Min(batchCap, tokens.Length - offset);
+            fixed (int* tokPtr = &tokens[offset])
             {
-                throw new LlamaException(
-                    nameof(NativeMethods.llama_decode), rc,
-                    $"llama_decode returned {rc} for a {tokens.Length}-token prompt batch. " +
-                    (rc == 1 ? "Code 1 = no KV slot; reduce prompt size or increase context." : ""));
+                var batch = NativeMethods.llama_batch_get_one(tokPtr, take);
+                var rc = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batch);
+                if (rc != 0)
+                {
+                    throw new LlamaException(
+                        nameof(NativeMethods.llama_decode), rc,
+                        $"llama_decode returned {rc} for a {take}-token prompt chunk " +
+                        $"(offset {offset}/{tokens.Length}). " +
+                        (rc == 1 ? "Code 1 = no KV slot; reduce prompt size or increase context." : ""));
+                }
             }
+            offset += take;
         }
     }
 

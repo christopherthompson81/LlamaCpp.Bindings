@@ -47,6 +47,8 @@
             </MenuItem>
             <MenuItem Header="_Settings">
                 <MenuItem Header="_Preferences..." Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
+                <Separator />
+                <MenuItem Header="_MCP execution log..." Command="{Binding ShowMcpLogCommand}" />
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="Keyboard _shortcuts..." Command="{Binding ShowShortcutsCommand}" />
@@ -55,9 +57,9 @@
             </MenuItem>
         </Menu>
 
-        <!-- Toolbar: active profile + model actions -->
+        <!-- Toolbar: active profile + model actions + active MCP servers -->
         <Border DockPanel.Dock="Top" Classes="panel" Padding="12,8">
-            <Grid ColumnDefinitions="Auto,240,Auto,Auto,Auto,*">
+            <Grid ColumnDefinitions="Auto,240,Auto,Auto,Auto,*,Auto">
                 <TextBlock Grid.Column="0" Text="Profile" Classes="muted sm"
                            VerticalAlignment="Center" Margin="0,0,8,0" />
                 <ComboBox Grid.Column="1"
@@ -80,6 +82,32 @@
                 <TextBlock Grid.Column="5" Text="{Binding ModelSummary}" Classes="muted xs"
                            VerticalAlignment="Center" Margin="16,0,0,0"
                            TextTrimming="CharacterEllipsis" />
+
+                <!-- Active MCP servers: compact avatar strip. Each server
+                     shows its first-letter initial in a circle. Click
+                     opens the log dialog; tooltip shows name + tools count. -->
+                <ItemsControl Grid.Column="6" ItemsSource="{Binding ActiveMcpServers}"
+                              VerticalAlignment="Center" Margin="12,0,0,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Width="26" Height="26" CornerRadius="13"
+                                    Background="{DynamicResource Accent}"
+                                    BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                    ToolTip.Tip="{Binding Config.Name, StringFormat='MCP: {0}'}">
+                                <TextBlock Text="{Binding Config.Name, Converter={StaticResource FirstLetter}}"
+                                           FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource AccentForeground}"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </Grid>
         </Border>
 
@@ -193,10 +221,15 @@
                             <DataTemplate DataType="vm:MessageViewModel">
                                 <Border Classes="bubble"
                                         Classes.user="{Binding IsUser}"
-                                        Classes.assistant="{Binding IsAssistant}">
+                                        Classes.assistant="{Binding IsAssistant}"
+                                        Classes.tool="{Binding IsTool}">
                                     <StackPanel Spacing="6">
+                                        <!-- Role header — user/assistant only. The tool
+                                             bubble's Expander.Header carries 🔧 + the tool
+                                             name instead, so this line would duplicate it. -->
                                         <TextBlock Text="{Binding Role}" Classes="xs"
-                                                   FontWeight="SemiBold" Opacity="0.7" />
+                                                   FontWeight="SemiBold" Opacity="0.7"
+                                                   IsVisible="{Binding !IsTool}" />
 
                                         <!-- Read-only view -->
                                         <StackPanel Spacing="6" IsVisible="{Binding !IsEditing}">
@@ -264,8 +297,86 @@
                                                                Classes="xs muted" VerticalAlignment="Center" />
                                                 </StackPanel>
                                             </Border>
-                                            <views:MarkdownView Markdown="{Binding Content}"
-                                                                IsStreaming="{Binding IsStreaming}" />
+                                            <!-- Tool-call chips: one compact pill per tool
+                                                 the assistant asked for. Shown above the
+                                                 visible reply so the reader sees "what was
+                                                 called" at a glance without having to read
+                                                 XML. The actual markup still lives in
+                                                 Content for the re-prompting round-trip. -->
+                                            <ItemsControl ItemsSource="{Binding ToolCallChips}"
+                                                          IsVisible="{Binding HasToolCalls}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel Orientation="Horizontal" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <!-- Hover tooltip exposes the raw
+                                                             <tool_call> markup so the user
+                                                             can inspect the exact payload
+                                                             the model emitted without it
+                                                             eating transcript space. -->
+                                                        <Border Classes="toolchip" Margin="0,0,6,4"
+                                                                ToolTip.Tip="{Binding RawMatch}">
+                                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                                <TextBlock Text="🔧" Classes="xs" />
+                                                                <TextBlock Text="{Binding Name}"
+                                                                           Classes="xs" FontWeight="SemiBold" />
+                                                                <TextBlock Text="("
+                                                                           Classes="xs muted" />
+                                                                <TextBlock Text="{Binding ArgsDisplay}"
+                                                                           Classes="xs muted"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           MaxWidth="320" />
+                                                                <TextBlock Text=")"
+                                                                           Classes="xs muted" />
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <!-- MarkdownView only renders when there's text
+                                                 to show after stripping tool-call markup.
+                                                 Pure tool-call replies (common with Qwen3)
+                                                 leave DisplayContent empty; the chip row
+                                                 above carries all the meaningful info. -->
+                                            <views:MarkdownView Markdown="{Binding DisplayContent}"
+                                                                IsStreaming="{Binding IsStreaming}"
+                                                                IsVisible="{Binding HasDisplayContent}" />
+
+                                            <!-- Tool result: always in an Expander so the
+                                                 collapse chevron is visible regardless of
+                                                 length. Short results open by default, long
+                                                 ones stay collapsed. Header combines the
+                                                 tool name with (when collapsed) a first-line
+                                                 peek. The MCP execution-log dialog keeps
+                                                 the raw wire envelope if it's needed. -->
+                                            <Expander IsVisible="{Binding IsTool}"
+                                                      IsExpanded="{Binding IsToolExpanded, Mode=TwoWay}">
+                                                <Expander.Header>
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <TextBlock Text="🔧" Classes="xs" Opacity="0.6"
+                                                                   VerticalAlignment="Center" />
+                                                        <TextBlock Text="{Binding ToolName, FallbackValue=tool}"
+                                                                   FontWeight="SemiBold"
+                                                                   VerticalAlignment="Center" />
+                                                        <TextBlock Text="·" Classes="xs muted"
+                                                                   VerticalAlignment="Center"
+                                                                   IsVisible="{Binding !IsToolExpanded}" />
+                                                        <TextBlock Text="{Binding ToolPeek}"
+                                                                   Classes="xs muted"
+                                                                   FontFamily="{DynamicResource CodeFontFamily}"
+                                                                   VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   MaxWidth="420"
+                                                                   IsVisible="{Binding !IsToolExpanded}" />
+                                                    </StackPanel>
+                                                </Expander.Header>
+                                                <Border Classes="toolresult">
+                                                    <SelectableTextBlock Text="{Binding Content}" />
+                                                </Border>
+                                            </Expander>
                                             <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
                                                        IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).AppSettings.ShowMessageStats}" />
 
@@ -365,13 +476,26 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- Attach-image button. Only enabled when the loaded
-                         model has a matching mmproj loaded. -->
-                    <Button Grid.Column="0" Grid.Row="1" Content="📎" Classes="ghost"
-                            ToolTip.Tip="Attach image (paste or drop works too)"
-                            Command="{Binding AttachMediaCommand}"
-                            IsEnabled="{Binding CanAttachMedia}"
-                            Margin="0,0,6,0" VerticalAlignment="Top" Padding="8,6" />
+                    <!-- Attach/prompt/resource buttons stacked vertically so we
+                         don't eat horizontal space in the compose row. Paperclip
+                         is image/audio, ⚡ inserts an MCP prompt, 📁 browses MCP
+                         resources. -->
+                    <StackPanel Grid.Column="0" Grid.Row="1" Orientation="Vertical"
+                                Spacing="2" Margin="0,0,6,0" VerticalAlignment="Top">
+                        <Button Content="📎" Classes="ghost"
+                                ToolTip.Tip="Attach image or audio (paste or drop works too)"
+                                Command="{Binding AttachMediaCommand}"
+                                IsEnabled="{Binding CanAttachMedia}"
+                                Padding="8,6" />
+                        <Button Content="⚡" Classes="ghost"
+                                ToolTip.Tip="Insert MCP prompt"
+                                Command="{Binding InsertMcpPromptCommand}"
+                                Padding="8,6" />
+                        <Button Content="📁" Classes="ghost"
+                                ToolTip.Tip="Browse MCP resources"
+                                Command="{Binding AttachMcpResourceCommand}"
+                                Padding="8,6" />
+                    </StackPanel>
 
                     <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding UserInput, Mode=TwoWay}"
                              PlaceholderText="Type a message, Shift+Enter for newline..."

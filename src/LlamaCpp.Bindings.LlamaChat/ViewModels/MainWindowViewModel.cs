@@ -134,12 +134,23 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     // ============================================================
     // Construction
     // ============================================================
+    /// <summary>Active MCP servers — shown as a compact avatar strip in the toolbar.</summary>
+    public ObservableCollection<McpServerEntry> ActiveMcpServers { get; } = new();
+
     public MainWindowViewModel()
     {
         PendingAttachments.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasPendingAttachments));
         };
+
+        // Start connecting to MCP servers in the background.
+        _ = McpClientService.Instance.LoadAndConnectAsync();
+        McpClientService.Instance.StateChanged += (_, _) =>
+        {
+            Dispatcher.UIThread.Post(RefreshActiveMcpServers);
+        };
+        RefreshActiveMcpServers();
 
         AppSettings = new AppSettingsViewModel(AppSettingsStore.Load());
         // Apply theme once on startup based on the persisted setting.
@@ -171,6 +182,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             _tokenCountTimer.Stop();
             RecomputeUserInputTokens();
         };
+    }
+
+    private void RefreshActiveMcpServers()
+    {
+        ActiveMcpServers.Clear();
+        foreach (var s in McpClientService.Instance.Servers)
+        {
+            if (s.State == McpConnectionState.Ready) ActiveMcpServers.Add(s);
+        }
     }
 
     private void RecomputeUserInputTokens()
@@ -436,7 +456,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             .Take(conv.Messages.Count - 1)
             .Select(m => new ChatTurn(
                 Id: Guid.NewGuid(),
-                Role: m.IsUser ? TurnRole.User : TurnRole.Assistant,
+                Role: m.Role switch
+                {
+                    "user" => TurnRole.User,
+                    "tool" => TurnRole.Tool,
+                    _ => TurnRole.Assistant,
+                },
                 Content: m.Content,
                 State: TurnState.Complete,
                 CreatedAt: DateTimeOffset.UtcNow,
@@ -444,9 +469,124 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                     ? new List<Attachment>(m.Attachments)
                     : null)));
 
+        var tools = McpClientService.Instance.BuildToolsForTemplate();
+
         await StreamIntoMessageAsync(
             conv, assistant,
-            ct => Session.StreamAssistantReplyAsync(transcript, sampler, gen, ct));
+            ct => Session.StreamAssistantReplyAsync(transcript, sampler, gen, tools, ct));
+
+        // Tool-calling loop: if the model emitted any <tool_call> blocks,
+        // execute them via MCP, append tool-role messages with the results,
+        // and re-generate. Bounded by ToolCallMaxRounds to prevent runaway
+        // loops on a model that keeps asking for tools forever.
+        await MaybeExecuteToolCallsAsync(conv, assistant);
+    }
+
+    private const int ToolCallMaxRounds = 6;
+
+    private async Task MaybeExecuteToolCallsAsync(ConversationViewModel conv, MessageViewModel assistant)
+    {
+        for (int round = 0; round < ToolCallMaxRounds; round++)
+        {
+            if (Session is null) return;
+            var calls = ToolCallParser.Extract(assistant.Content, Session.ToolCallFormat);
+            if (calls.Count == 0) return;
+
+            foreach (var call in calls)
+            {
+                var resolved = McpClientService.Instance.ResolveToolCall(call.Name);
+                string resultText;
+                if (resolved is null)
+                {
+                    resultText = $"(error: no MCP server advertises tool '{call.Name}')";
+                }
+                else
+                {
+                    try
+                    {
+                        var res = await McpClientService.Instance.CallToolAsync(
+                            resolved.Value.Server, resolved.Value.ToolName, call.Arguments,
+                            _generationCts?.Token ?? System.Threading.CancellationToken.None);
+                        // Collapse the MCP envelope down to its text content
+                        // for the bubble. Re-prompting the model uses this
+                        // same text, which matches what most tool-use
+                        // templates expect. The full wire envelope is still
+                        // visible in the MCP execution-log dialog if the
+                        // user needs to debug a response.
+                        resultText = Services.ToolCall.ToolCallDisplay.FormatMcpResult(res);
+                    }
+                    catch (Exception ex)
+                    {
+                        resultText = $"(error: {ex.Message})";
+                    }
+                }
+
+                conv.Messages.Add(new MessageViewModel
+                {
+                    Role = "tool",
+                    ToolName = call.Name,
+                    Content = resultText,
+                });
+            }
+
+            // Trigger one more generation round with the new tool results in
+            // the transcript. The loop re-enters Extract with fresh content,
+            // exiting cleanly once the assistant stops requesting tools.
+            var next = new MessageViewModel
+            {
+                Role = "assistant",
+                IsStreaming = true,
+                IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
+            };
+            conv.Messages.Add(next);
+
+            var sampler = _activeLoadedProfile!.SamplerPanel.SnapshotSampler();
+            var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
+            var transcript = BuildTranscriptFor(conv);
+            var tools = McpClientService.Instance.BuildToolsForTemplate();
+
+            Session.ClearKv();
+            await StreamIntoMessageAsync(
+                conv, next,
+                ct => Session.StreamAssistantReplyAsync(transcript, sampler, gen, tools, ct));
+
+            assistant = next;
+        }
+
+        ToastService.Warning("Tool loop",
+            $"Hit {ToolCallMaxRounds}-round cap on tool calls — stopping.");
+    }
+
+    private List<ChatTurn> BuildTranscriptFor(ConversationViewModel conv)
+    {
+        var transcript = new List<ChatTurn>();
+        if (!string.IsNullOrWhiteSpace(_activeLoadedProfile?.SystemPrompt))
+        {
+            transcript.Add(new ChatTurn(
+                Id: Guid.NewGuid(),
+                Role: TurnRole.System,
+                Content: _activeLoadedProfile.SystemPrompt,
+                State: TurnState.Complete,
+                CreatedAt: DateTimeOffset.UtcNow));
+        }
+        // Skip the trailing empty/streaming assistant placeholder.
+        transcript.AddRange(conv.Messages
+            .Take(conv.Messages.Count - 1)
+            .Select(m => new ChatTurn(
+                Id: Guid.NewGuid(),
+                Role: m.Role switch
+                {
+                    "user" => TurnRole.User,
+                    "tool" => TurnRole.Tool,
+                    _ => TurnRole.Assistant,
+                },
+                Content: m.Content,
+                State: TurnState.Complete,
+                CreatedAt: DateTimeOffset.UtcNow,
+                Attachments: m.Attachments.Count > 0
+                    ? new List<Attachment>(m.Attachments)
+                    : null)));
+        return transcript;
     }
 
     /// <summary>
@@ -902,6 +1042,27 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             SelectedProfile = Profiles.FirstOrDefault();
         }
     }
+
+    [RelayCommand]
+    private async Task InsertMcpPromptAsync()
+    {
+        var text = await DialogService.ShowMcpPromptPickerAsync();
+        if (string.IsNullOrEmpty(text)) return;
+        UserInput = string.IsNullOrEmpty(UserInput) ? text : UserInput + "\n" + text;
+    }
+
+    [RelayCommand]
+    private async Task AttachMcpResourceAsync()
+    {
+        var picked = await DialogService.ShowMcpResourceBrowserAsync();
+        if (picked is null) return;
+        var (uri, content) = picked.Value;
+        var block = $"<!-- resource: {uri} -->\n{content}";
+        UserInput = string.IsNullOrEmpty(UserInput) ? block : UserInput + "\n\n" + block;
+    }
+
+    [RelayCommand]
+    private async Task ShowMcpLogAsync() => await DialogService.ShowMcpExecutionLogAsync();
 
     [RelayCommand]
     private async Task ShowShortcutsAsync() => await DialogService.ShowShortcutsAsync();
