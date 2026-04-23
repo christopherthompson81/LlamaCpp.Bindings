@@ -321,6 +321,120 @@ public sealed class ChatSession : IDisposable
     }
 
     /// <summary>
+    /// Resume the most-recently generated assistant reply from its current
+    /// KV state, without re-rendering or re-tokenising. Used to implement
+    /// the "Continue" action when a reply hit <c>MaxTokens</c> (or the user
+    /// cancelled mid-stream) and the user wants more output conditioned on
+    /// exactly what came before. Throws if <see cref="ClearKv"/> has run
+    /// since the last generation, because the required KV state is gone.
+    /// </summary>
+    /// <remarks>
+    /// Implementation: trim the last cached token (which is also the token
+    /// whose logits drove the current position) and re-decode it via
+    /// <see cref="LlamaGenerator.GenerateAsync(IReadOnlyList{int}, int, bool, int, Action{int}?, CancellationToken)"/>'s
+    /// back-off-by-one path. That refreshes the logits at the tail, primes
+    /// the sampler with the full cached token history, and enters the sample
+    /// loop. Identical emit/extractor/timing wiring as
+    /// <see cref="StreamAssistantReplyAsync"/>.
+    /// </remarks>
+    public async IAsyncEnumerable<StreamEvent> StreamContinuationAsync(
+        SamplerSettings sampler,
+        GenerationSettings generation,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (_cachedTokens is null || _cachedTokens.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot continue: the KV cache has no prior generation to extend. " +
+                "Run a normal turn first, or avoid calling ClearKv between the " +
+                "last generation and continuation.");
+        }
+
+        using var llamaSampler = SamplerFactory.Build(_model, _model.Vocab, sampler);
+        var generator = new LlamaGenerator(_context, llamaSampler);
+
+        // Trim the last cached token from the KV so the back-off-by-one clause
+        // in LlamaGenerator decodes it again (fresh logits) without
+        // double-writing the position. If the backend refuses partial removal,
+        // fall back to a full rebuild against the cached token list.
+        int firstNew;
+        if (_context.RemoveSequenceRange(0, fromPosition: _cachedTokens.Count - 1, toPosition: -1))
+        {
+            firstNew = _cachedTokens.Count - 1;
+        }
+        else
+        {
+            _context.ClearKvCache();
+            firstNew = 0;
+        }
+
+        var cacheToGrow = new List<int>(_cachedTokens.Count + generation.MaxTokens);
+        cacheToGrow.AddRange(_cachedTokens);
+
+        var stream = generator.GenerateAsync(
+            _cachedTokens,
+            maxTokens: generation.MaxTokens,
+            firstNewIndex: firstNew,
+            onTokenDecoded: t => cacheToGrow.Add(t),
+            cancellationToken: cancellationToken);
+
+        // Reasoning extractor: only relevant if the reply we're continuing
+        // was itself inside a <think> block. The caller already knows the
+        // current content; if the model emits </think> during continuation
+        // we'll handle the transition naturally. Start in Content mode — the
+        // common case is "continue a truncated regular answer."
+        var extractor = generation.ExtractReasoning
+            ? new ReasoningExtractor(startInReasoning: false)
+            : null;
+
+        var sw = Stopwatch.StartNew();
+        var promptStartTicks = sw.ElapsedTicks;
+        TimeSpan? promptTime = null;
+        int completionTokens = 0;
+
+        try
+        {
+            await foreach (var piece in stream)
+            {
+                if (promptTime is null)
+                {
+                    promptTime = TimeSpan.FromSeconds(
+                        (sw.ElapsedTicks - promptStartTicks) / (double)Stopwatch.Frequency);
+                }
+
+                completionTokens++;
+
+                if (extractor is not null)
+                {
+                    var emit = extractor.Push(piece);
+                    if (emit.Content.Length > 0) yield return new StreamEvent.Content(emit.Content);
+                    if (emit.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(emit.Reasoning);
+                }
+                else
+                {
+                    yield return new StreamEvent.Content(piece);
+                }
+            }
+
+            if (extractor is not null)
+            {
+                var tail = extractor.Flush();
+                if (tail.Content.Length > 0) yield return new StreamEvent.Content(tail.Content);
+                if (tail.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(tail.Reasoning);
+            }
+
+            sw.Stop();
+            var total = sw.Elapsed;
+            var genTime = promptTime.HasValue ? total - promptTime.Value : total;
+            yield return new StreamEvent.Done(completionTokens, promptTime ?? TimeSpan.Zero, genTime);
+        }
+        finally
+        {
+            _cachedTokens = cacheToGrow;
+        }
+    }
+
+    /// <summary>
     /// Apply the chat template. If <paramref name="mediaMarker"/> is non-null
     /// and a turn has attachments, prepends one marker per attachment to that
     /// turn's content — mtmd_tokenize scans the rendered prompt for the marker

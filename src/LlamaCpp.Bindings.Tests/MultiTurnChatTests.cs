@@ -240,6 +240,70 @@ public class MultiTurnChatTests
     }
 
     [Fact]
+    public async Task Continue_After_Partial_Generation_Matches_Single_Pass()
+    {
+        // Correctness contract for ChatSession's StreamContinuationAsync: the
+        // back-off-by-one path on LlamaGenerator (seq_rm the last cached
+        // token, re-decode it, continue sampling) must produce the same
+        // stream as a single longer generation call, given identical
+        // prompt tokens and identical sampler seed. This is the invariant
+        // the "Continue" button rides on.
+        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
+
+        var vocab = _fx.Model.Vocab;
+        var prompt = vocab.Tokenize(
+            "List three colors:", addSpecial: false, parseSpecial: false);
+        int totalGen = 16;
+        int firstHalf = 6;
+
+        // Pass A: one shot, generate the full thing.
+        _fx.Context.ClearKvCache();
+        var outputA = new StringBuilder();
+        using (var samplerA = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 13).Build())
+        {
+            var genA = new LlamaGenerator(_fx.Context, samplerA);
+            await foreach (var p in genA.GenerateAsync(prompt, maxTokens: totalGen)) outputA.Append(p);
+        }
+
+        // Pass B: generate first half, then "continue" via back-off-by-one.
+        // Track all tokens that land in the KV cache via onTokenDecoded so we
+        // can pass them as the prompt for the continuation.
+        _fx.Context.ClearKvCache();
+        var decodedSoFar = new List<int>(prompt);
+        var outputB = new StringBuilder();
+        using (var samplerB1 = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 13).Build())
+        {
+            var genB1 = new LlamaGenerator(_fx.Context, samplerB1);
+            await foreach (var p in genB1.GenerateAsync(
+                prompt, maxTokens: firstHalf, onTokenDecoded: decodedSoFar.Add)) outputB.Append(p);
+        }
+
+        // Now do the continuation — back off one, fresh sampler same seed.
+        var trimmed = _fx.Context.RemoveSequenceRange(
+            0, fromPosition: decodedSoFar.Count - 1, toPosition: -1);
+        if (!trimmed)
+        {
+            Assert.True(true, "backend refused partial trim — continuation path not applicable");
+            return;
+        }
+
+        using (var samplerB2 = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 13).Build())
+        {
+            var genB2 = new LlamaGenerator(_fx.Context, samplerB2);
+            await foreach (var p in genB2.GenerateAsync(
+                decodedSoFar,
+                maxTokens: totalGen - firstHalf,
+                firstNewIndex: decodedSoFar.Count - 1,
+                onTokenDecoded: decodedSoFar.Add)) outputB.Append(p);
+        }
+
+        Assert.Equal(outputA.ToString(), outputB.ToString());
+    }
+
+    [Fact]
     public async Task Decoding_After_Tail_Trim_Resumes_From_Trim_Position()
     {
         // This is the invariant prefix-cache reuse rides on: after a

@@ -246,6 +246,17 @@
                                                         IsVisible="{Binding IsAssistant}"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RegenerateMessageCommand}"
                                                         CommandParameter="{Binding}" />
+                                                <!-- Continue: visible on assistant bubbles; the command
+                                                     short-circuits if msg isn't the last one (can only
+                                                     extend current KV state). Keeping it visible on every
+                                                     assistant bubble is simpler than binding a
+                                                     "is-last" flag through the VM, and the short-circuit
+                                                     surfaces a toast if the user clicks it on an old one. -->
+                                                <Button Content="Continue" Classes="ghost sm"
+                                                        IsVisible="{Binding IsAssistant}"
+                                                        ToolTip.Tip="Extend this reply without re-prompting (only works on the most recent message)."
+                                                        Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ContinueMessageCommand}"
+                                                        CommandParameter="{Binding}" />
                                                 <Button Content="Delete" Classes="ghost sm"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteMessageCommand}"
                                                         CommandParameter="{Binding}" />

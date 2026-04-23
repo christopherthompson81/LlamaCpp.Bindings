@@ -410,6 +410,50 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         conv.UpdatedAt = DateTimeOffset.UtcNow;
         RebuildFilteredConversations();
 
+        var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
+        var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
+
+        // Feed everything except the empty assistant placeholder to the
+        // model, prepending the active profile's system prompt if any.
+        var transcript = new List<ChatTurn>();
+        if (!string.IsNullOrWhiteSpace(_activeLoadedProfile.SystemPrompt))
+        {
+            transcript.Add(new ChatTurn(
+                Id: Guid.NewGuid(),
+                Role: TurnRole.System,
+                Content: _activeLoadedProfile.SystemPrompt,
+                State: TurnState.Complete,
+                CreatedAt: DateTimeOffset.UtcNow));
+        }
+        transcript.AddRange(conv.Messages
+            .Take(conv.Messages.Count - 1)
+            .Select(m => new ChatTurn(
+                Id: Guid.NewGuid(),
+                Role: m.IsUser ? TurnRole.User : TurnRole.Assistant,
+                Content: m.Content,
+                State: TurnState.Complete,
+                CreatedAt: DateTimeOffset.UtcNow,
+                Attachments: m.Attachments.Count > 0
+                    ? new List<Attachment>(m.Attachments)
+                    : null)));
+
+        await StreamIntoMessageAsync(
+            conv, assistant,
+            ct => Session.StreamAssistantReplyAsync(transcript, sampler, gen, ct));
+    }
+
+    /// <summary>
+    /// Shared stream-consumer: drives the flush pump, marshalling, timing,
+    /// and error handling for any <see cref="StreamEvent"/> source that's
+    /// targeting a single assistant bubble. Used by both the fresh-turn
+    /// path and the "Continue" path — the only difference between them is
+    /// what source delegate they hand in.
+    /// </summary>
+    private async Task StreamIntoMessageAsync(
+        ConversationViewModel conv,
+        MessageViewModel assistant,
+        Func<CancellationToken, IAsyncEnumerable<StreamEvent>> source)
+    {
         // Batch content + reasoning updates at ~30 fps. We accumulate on the
         // pool thread (the consumer of Session.StreamAssistantReplyAsync runs
         // there thanks to ConfigureAwait(false) below) and only marshal to
@@ -469,42 +513,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         try
         {
-            var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
-            var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
-
-            // Feed everything except the empty assistant placeholder to the
-            // model, prepending the active profile's system prompt if any.
-            var transcript = new List<ChatTurn>();
-            if (!string.IsNullOrWhiteSpace(_activeLoadedProfile.SystemPrompt))
-            {
-                transcript.Add(new ChatTurn(
-                    Id: Guid.NewGuid(),
-                    Role: TurnRole.System,
-                    Content: _activeLoadedProfile.SystemPrompt,
-                    State: TurnState.Complete,
-                    CreatedAt: DateTimeOffset.UtcNow));
-            }
-            transcript.AddRange(conv.Messages
-                .Take(conv.Messages.Count - 1)
-                .Select(m => new ChatTurn(
-                    Id: Guid.NewGuid(),
-                    Role: m.IsUser ? TurnRole.User : TurnRole.Assistant,
-                    Content: m.Content,
-                    State: TurnState.Complete,
-                    CreatedAt: DateTimeOffset.UtcNow,
-                    Attachments: m.Attachments.Count > 0
-                        ? new List<Attachment>(m.Attachments)
-                        : null)));
-
             // .ConfigureAwait(false): each MoveNextAsync resumes on a pool
             // thread rather than posting back to the UI Dispatcher. That
             // eliminates a pool→UI→pool round-trip per token, which is
             // ~0.5-1 ms of Dispatcher-queue latency on hot paths — the
             // suspected source of the 8 tok/s gap vs. llama-server at this
             // workload size.
-            await foreach (var evt in Session
-                .StreamAssistantReplyAsync(transcript, sampler, gen, _generationCts.Token)
-                .ConfigureAwait(false))
+            await foreach (var evt in source(_generationCts.Token).ConfigureAwait(false))
             {
                 switch (evt)
                 {
@@ -733,6 +748,42 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         Session.ClearKv();
         await GenerateAssistantReplyAsync(conv);
+    }
+
+    /// <summary>
+    /// Extend the last assistant message without re-rendering or re-tokenising —
+    /// picks up from the current KV cache. Useful when the reply hit
+    /// <c>MaxTokens</c> (truncated) or the user cancelled mid-stream and now
+    /// wants more output conditioned on what's already there. Only valid for
+    /// the last message in the conversation: older messages don't correspond
+    /// to the current KV state.
+    /// </summary>
+    [RelayCommand]
+    private async Task ContinueMessageAsync(MessageViewModel? msg)
+    {
+        if (msg is null || Session is null || _activeLoadedProfile is null) return;
+        if (SelectedConversation is null) return;
+        if (!msg.IsAssistant) return;
+        // Only the last message can be continued — older ones don't match KV state.
+        var conv = SelectedConversation;
+        if (conv.Messages.LastOrDefault() != msg)
+        {
+            ToastService.Warning("Continue", "Can only continue the last message.");
+            return;
+        }
+        if (msg.IsStreaming || IsGenerating)
+        {
+            return;
+        }
+
+        msg.IsStreaming = true;
+
+        var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
+        var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
+
+        await StreamIntoMessageAsync(
+            conv, msg,
+            ct => Session.StreamContinuationAsync(sampler, gen, ct));
     }
 
     [RelayCommand(CanExecute = nameof(CanCancel))]
