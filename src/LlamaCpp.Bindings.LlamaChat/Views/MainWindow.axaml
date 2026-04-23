@@ -638,11 +638,11 @@
                         </Button>
                     </StackPanel>
 
-                    <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding UserInput, Mode=TwoWay}"
+                    <TextBox Grid.Column="1" Grid.Row="1" Name="ComposeBox"
+                             Text="{Binding UserInput, Mode=TwoWay}"
                              PlaceholderText="Type a message, Shift+Enter for newline..."
-                             AcceptsReturn="False" TextWrapping="Wrap"
-                             MinHeight="56" MaxHeight="200"
-                             KeyDown="OnComposeKeyDown" />
+                             AcceptsReturn="True" TextWrapping="Wrap"
+                             MinHeight="56" MaxHeight="200" />
                     <TextBlock Grid.Column="1" Grid.Row="2" Classes="xs muted"
                                Margin="4,2,0,0"
                                IsVisible="{Binding IsModelLoaded}"

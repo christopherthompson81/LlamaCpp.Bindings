@@ -36,42 +36,40 @@ public partial class MainWindow : Window
         // target catch file paths from the OS file manager.
         AddHandler(DragDrop.DragOverEvent, OnComposeDragOver);
         AddHandler(DragDrop.DropEvent, OnComposeDrop);
+
+        // Wire compose-box key handling after InitializeComponent builds the tree.
+        // Tunnel routing fires BEFORE the TextBox class handler (OnKeyDown), which
+        // is what lets us intercept plain Enter and send instead of inserting a
+        // newline (AcceptsReturn="True" lets newlines in from paste/Shift+Enter).
+        var composeBox = this.FindControl<TextBox>("ComposeBox");
+        if (composeBox is not null)
+        {
+            composeBox.AddHandler(InputElement.KeyDownEvent,
+                OnComposeKeyDownTunnel, RoutingStrategies.Tunnel);
+            composeBox.AddHandler(InputElement.KeyDownEvent,
+                OnComposeKeyDownBubble, RoutingStrategies.Bubble, handledEventsToo: true);
+        }
     }
 
-    // --- Compose (Enter sends; Shift+Enter newline; Ctrl+V may paste image) ---
-    private async void OnComposeKeyDown(object? sender, KeyEventArgs e)
+    // --- Compose key handling ---
+    // AcceptsReturn="True" so the TextBox never strips newlines (paste or Shift+Enter).
+    // Tunnel handler fires BEFORE the TextBox class handler, so we can consume plain
+    // Enter for Send before the class handler would insert a newline.
+    private void OnComposeKeyDownTunnel(object? sender, KeyEventArgs e)
     {
-        if (sender is not TextBox box) return;
-
-        // Ctrl+V: try to intercept clipboard image before the TextBox handles
-        // it as text. If no image data is present, let the default paste run.
-        if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) != 0)
-        {
-            if (await TryPasteImageFromClipboardAsync())
-            {
-                e.Handled = true;
-            }
-            return;
-        }
-
-        if (e.Key != Key.Enter) return;
-
-        if ((e.KeyModifiers & KeyModifiers.Shift) != 0)
-        {
-            var text = box.Text ?? string.Empty;
-            var caret = box.CaretIndex;
-            if (caret < 0 || caret > text.Length) caret = text.Length;
-            box.Text = text.Substring(0, caret) + "\n" + text.Substring(caret);
-            box.CaretIndex = caret + 1;
-            e.Handled = true;
-            return;
-        }
-
+        if (e.Key != Key.Enter || (e.KeyModifiers & KeyModifiers.Shift) != 0) return;
         e.Handled = true;
         if (DataContext is MainWindowViewModel vm && vm.SendCommand.CanExecute(null))
-        {
             vm.SendCommand.Execute(null);
-        }
+    }
+
+    // Bubble handler (handledEventsToo=true) for Ctrl+V image paste. The TextBox
+    // will already have processed Ctrl+V as a text paste; we additionally check
+    // for an image payload and attach it if present.
+    private async void OnComposeKeyDownBubble(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) != 0)
+            await TryPasteImageFromClipboardAsync();
     }
 
     // --- Sidebar Ctrl+K focus-search ------------------------------------
@@ -222,7 +220,6 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    // Clipboard image paste: intercept Ctrl+V in the compose TextBox. If the
     // clipboard has a bitmap payload AND the model supports image input, we
     // re-encode it as PNG bytes and add as an attachment. Other payloads
     // (plain text, audio clips — Avalonia doesn't expose audio clipboard
