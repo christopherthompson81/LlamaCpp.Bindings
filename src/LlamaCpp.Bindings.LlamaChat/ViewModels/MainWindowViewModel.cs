@@ -538,6 +538,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                         pendingReasoning.Append(r.Text);
                         TryFlush();
                         break;
+                    case StreamEvent.Language lang:
+                        // Fires at most once per turn. Marshal directly — no
+                        // batching needed since there's only one event.
+                        var tag = lang.Tag;
+                        Dispatcher.UIThread.Post(
+                            () => assistant.AsrLanguage = tag,
+                            DispatcherPriority.Background);
+                        break;
                     case StreamEvent.Done d:
                         // Force-post the final flush, then InvokeAsync the
                         // Done-handler at the same Background priority. FIFO

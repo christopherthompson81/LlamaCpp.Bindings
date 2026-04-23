@@ -186,6 +186,9 @@ public sealed class ChatSession : IDisposable
         var extractor = generation.ExtractReasoning
             ? new ReasoningExtractor(startInReasoning)
             : null;
+        var asrExtractor = generation.ExtractAsrTranscript
+            ? new AsrTextExtractor()
+            : null;
 
         var sw = Stopwatch.StartNew();
         var promptStartTicks = sw.ElapsedTicks;
@@ -296,23 +299,62 @@ public sealed class ChatSession : IDisposable
 
             completionTokens++;
 
+            // Piece flows: raw → reasoning extractor → asr extractor → UI.
+            // Either extractor may be null; in that case its stage is a
+            // no-op pass-through.
+            string contentSlice;
+            string? reasoningSlice;
             if (extractor is not null)
             {
-                var emit = extractor.Push(piece);
-                if (emit.Content.Length > 0) yield return new StreamEvent.Content(emit.Content);
-                if (emit.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(emit.Reasoning);
+                var re = extractor.Push(piece);
+                contentSlice = re.Content;
+                reasoningSlice = re.Reasoning.Length > 0 ? re.Reasoning : null;
             }
             else
             {
-                yield return new StreamEvent.Content(piece);
+                contentSlice = piece;
+                reasoningSlice = null;
+            }
+            if (reasoningSlice is not null) yield return new StreamEvent.Reasoning(reasoningSlice);
+
+            if (contentSlice.Length > 0)
+            {
+                if (asrExtractor is not null)
+                {
+                    var ae = asrExtractor.Push(contentSlice);
+                    if (ae.Language is not null) yield return new StreamEvent.Language(ae.Language);
+                    if (ae.Content.Length > 0) yield return new StreamEvent.Content(ae.Content);
+                }
+                else
+                {
+                    yield return new StreamEvent.Content(contentSlice);
+                }
             }
         }
 
         if (extractor is not null)
         {
             var tail = extractor.Flush();
-            if (tail.Content.Length > 0) yield return new StreamEvent.Content(tail.Content);
             if (tail.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(tail.Reasoning);
+            if (tail.Content.Length > 0)
+            {
+                if (asrExtractor is not null)
+                {
+                    var ae = asrExtractor.Push(tail.Content);
+                    if (ae.Language is not null) yield return new StreamEvent.Language(ae.Language);
+                    if (ae.Content.Length > 0) yield return new StreamEvent.Content(ae.Content);
+                }
+                else
+                {
+                    yield return new StreamEvent.Content(tail.Content);
+                }
+            }
+        }
+        if (asrExtractor is not null)
+        {
+            var aeTail = asrExtractor.Flush();
+            if (aeTail.Language is not null) yield return new StreamEvent.Language(aeTail.Language);
+            if (aeTail.Content.Length > 0) yield return new StreamEvent.Content(aeTail.Content);
         }
 
         sw.Stop();
@@ -435,6 +477,12 @@ public sealed class ChatSession : IDisposable
         var extractor = generation.ExtractReasoning
             ? new ReasoningExtractor(startInReasoning: resumeInReasoning)
             : null;
+        // Continuation on an ASR turn shouldn't re-parse the preamble —
+        // the language chip was already emitted during the original turn,
+        // and the continuation starts from wherever decoding left off
+        // (typically mid-transcript, past the <asr_text> open tag). Skip
+        // the ASR extractor here.
+        AsrTextExtractor? asrExtractor = null;
 
         var sw = Stopwatch.StartNew();
         var promptStartTicks = sw.ElapsedTicks;
@@ -453,23 +501,38 @@ public sealed class ChatSession : IDisposable
 
                 completionTokens++;
 
+                string contentSlice;
                 if (extractor is not null)
                 {
-                    var emit = extractor.Push(piece);
-                    if (emit.Content.Length > 0) yield return new StreamEvent.Content(emit.Content);
-                    if (emit.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(emit.Reasoning);
+                    var re = extractor.Push(piece);
+                    contentSlice = re.Content;
+                    if (re.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(re.Reasoning);
                 }
                 else
                 {
-                    yield return new StreamEvent.Content(piece);
+                    contentSlice = piece;
+                }
+
+                if (contentSlice.Length > 0)
+                {
+                    if (asrExtractor is not null)
+                    {
+                        var ae = asrExtractor.Push(contentSlice);
+                        if (ae.Language is not null) yield return new StreamEvent.Language(ae.Language);
+                        if (ae.Content.Length > 0) yield return new StreamEvent.Content(ae.Content);
+                    }
+                    else
+                    {
+                        yield return new StreamEvent.Content(contentSlice);
+                    }
                 }
             }
 
             if (extractor is not null)
             {
                 var tail = extractor.Flush();
-                if (tail.Content.Length > 0) yield return new StreamEvent.Content(tail.Content);
                 if (tail.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(tail.Reasoning);
+                if (tail.Content.Length > 0) yield return new StreamEvent.Content(tail.Content);
             }
 
             sw.Stop();
@@ -556,5 +619,12 @@ public abstract record StreamEvent
 {
     public sealed record Content(string Text) : StreamEvent;
     public sealed record Reasoning(string Text) : StreamEvent;
+    /// <summary>
+    /// Detected transcription language from an ASR model (Qwen3-ASR /
+    /// Qwen3-Omni audio). Fires once per turn, when the extractor parses
+    /// the <c>language &lt;LANG&gt;</c> preamble. Consumers surface it as a
+    /// metadata chip next to the content.
+    /// </summary>
+    public sealed record Language(string Tag) : StreamEvent;
     public sealed record Done(int CompletionTokens, TimeSpan PromptTime, TimeSpan GenerationTime) : StreamEvent;
 }

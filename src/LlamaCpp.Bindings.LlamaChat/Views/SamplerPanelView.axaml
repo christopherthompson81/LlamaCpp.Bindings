@@ -24,6 +24,9 @@
             <NumericUpDown Grid.Column="1" Value="{Binding MaxTokens}" Minimum="1" Increment="64" />
         </Grid>
         <CheckBox Content="Extract &lt;think&gt; as reasoning" IsChecked="{Binding ExtractReasoning}" />
+        <CheckBox Content="Extract Qwen3-ASR preamble (language tag + &lt;asr_text&gt;)"
+                  IsChecked="{Binding ExtractAsrTranscript}"
+                  ToolTip.Tip="Enable for Qwen3-ASR / Qwen3-Omni audio replies. The detected language becomes a chip; the transcription renders on its own line." />
 
         <TextBlock Classes="section" Text="Temperature" />
         <Grid Classes="row" ColumnDefinitions="130,*">

@@ -246,6 +246,21 @@
                                                                      Classes="sm muted"
                                                                      TextWrapping="Wrap" />
                                             </Expander>
+                                            <!-- ASR language chip: compact pill
+                                                 showing the detected transcription
+                                                 language (Qwen3-ASR only). Sits
+                                                 above the main content. -->
+                                            <Border IsVisible="{Binding HasAsrLanguage}"
+                                                    HorizontalAlignment="Left"
+                                                    Background="{DynamicResource Muted}"
+                                                    BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                                    CornerRadius="10" Padding="8,2">
+                                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                                    <TextBlock Text="🌐" Classes="xs" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{Binding AsrLanguage}"
+                                                               Classes="xs muted" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Border>
                                             <views:MarkdownView Markdown="{Binding Content}"
                                                                 IsStreaming="{Binding IsStreaming}" />
                                             <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"

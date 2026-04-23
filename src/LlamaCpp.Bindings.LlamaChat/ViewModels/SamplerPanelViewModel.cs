@@ -55,6 +55,7 @@ public partial class SamplerPanelViewModel : ObservableObject
     // --- Generation ---
     [ObservableProperty] private decimal _maxTokens = 1024m;
     [ObservableProperty] private bool _extractReasoning = true;
+    [ObservableProperty] private bool _extractAsrTranscript = false;
 
     public SamplerSettings SnapshotSampler() => new()
     {
@@ -87,6 +88,7 @@ public partial class SamplerPanelViewModel : ObservableObject
     {
         MaxTokens = (int)MaxTokens,
         ExtractReasoning = ExtractReasoning,
+        ExtractAsrTranscript = ExtractAsrTranscript,
     };
 
     public void LoadFrom(SamplerSettings s, GenerationSettings g)
@@ -122,5 +124,6 @@ public partial class SamplerPanelViewModel : ObservableObject
         Grammar = s.GbnfGrammar ?? string.Empty;
         MaxTokens = g.MaxTokens;
         ExtractReasoning = g.ExtractReasoning;
+        ExtractAsrTranscript = g.ExtractAsrTranscript;
     }
 }

@@ -9,6 +9,12 @@ public partial class MessageViewModel : ObservableObject
     [ObservableProperty] private string _role = string.Empty;
     [ObservableProperty] private string _content = string.Empty;
     [ObservableProperty] private string? _reasoning;
+    /// <summary>
+    /// Detected transcription language from an ASR model (e.g. "English",
+    /// "Mandarin"). Rendered as a compact chip above the content when
+    /// present. Null for non-ASR models.
+    /// </summary>
+    [ObservableProperty] private string? _asrLanguage;
     [ObservableProperty] private bool _isReasoningExpanded = false;
     [ObservableProperty] private bool _isStreaming = false;
     [ObservableProperty] private string? _statsSummary;
@@ -37,11 +43,13 @@ public partial class MessageViewModel : ObservableObject
     }
 
     public bool HasReasoning => !string.IsNullOrEmpty(Reasoning);
+    public bool HasAsrLanguage => !string.IsNullOrEmpty(AsrLanguage);
 
     public bool IsUser => Role == "user";
     public bool IsAssistant => Role == "assistant";
 
     partial void OnReasoningChanged(string? value) => OnPropertyChanged(nameof(HasReasoning));
+    partial void OnAsrLanguageChanged(string? value) => OnPropertyChanged(nameof(HasAsrLanguage));
 
     partial void OnRoleChanged(string value)
     {
