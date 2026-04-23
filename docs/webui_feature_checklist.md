@@ -92,8 +92,8 @@ src/
 - [x] **Code-block copy button** — ghost+sm `Copy` button in the code-block header row. Uses `DialogService.CopyToClipboardAsync`.
 - [x] **Code-block preview/expand dialog** — `Views/CodePreviewDialog.cs` — modal window (1000×700, centre-of-owner) that re-renders the same highlighted block at full size, with a footer Copy + Close and Escape-to-close. "Expand" button in each code block opens it.
 - [x] **Incomplete code block / mid-stream robustness** — `Markdown.Parse` is wrapped in `try`; if parsing fails (e.g. unclosed fence mid-stream) we fall back to showing the raw text in a `TextBlock` instead of leaving the bubble blank. Markdig actually tolerates most mid-stream cases — the try is belt-and-braces.
-- [~] **Image display from attachments** — deferred. Precursor: `mtmd_*`/`clip_*` native bindings (see `docs/webui_parity_investigation.md` gap #1).
-- [~] **Image error fallback** — deferred, with images.
+- [x] **Image display from attachments** — attached images render as a `WrapPanel` thumbnail row above the bubble content in the user bubble template, plus a matching 72×72 strip above the compose text box. `byte[] → Avalonia.Bitmap` via `Services/AttachmentThumbnailConverter.cs` (registered as `AttachmentThumbnail` resource in `App.axaml`). Conversations persist attachments inline — `System.Text.Json` serializes `byte[]` as base64 automatically, so a round-trip through `conversations.json` preserves the payload.
+- [x] **Image error fallback** — `AttachmentThumbnailConverter` returns null on decode exception; the `Image` control renders as an empty 72×72 rectangle (with the `Muted` background still visible) without taking down the bubble.
 - [x] **GFM tables** — rendered as a bordered Grid with Auto columns. Header row detected via Markdig's `TableRow.IsHeader`, emitted SemiBold.
 - [~] **Footnotes** — deferred. Not in our `MarkdownPipelineBuilder` extensions; webui doesn't support them either. Low priority.
 - [~] **Mermaid diagrams** — deferred. Would need a SkiaSharp implementation of Mermaid's graph layout engine; nontrivial.
@@ -115,12 +115,12 @@ src/
 ### 5. Compose
 
 - [x] **Textarea input** — the compose TextBox in `MainWindow.axaml` with `MinHeight=56 MaxHeight=200 TextWrapping=Wrap AcceptsReturn=False` + custom Enter/Shift+Enter handling. Webui's auto-height sizing via `field-sizing: content` would be a polish pass; the fixed min/max is serviceable.
-- [~] **File attachment picker** — deferred. Precursor: multimodal (`mtmd_*`) bindings.
-- [~] **Attachment preview** — deferred (with multimodal).
-- [~] **Attachment list modal** — deferred (with multimodal).
-- [~] **Audio recording** — deferred. Precursor: multimodal bindings + NAudio/CoreAudio capture.
-- [~] **Drag-and-drop file upload** — deferred (with multimodal).
-- [~] **Paste handling (files)** — deferred (with multimodal). Plain-text paste already works via default `TextBox` behaviour.
+- [x] **File attachment picker** — `AttachImagesCommand` on `MainWindowViewModel` → `DialogService.PickImageFilesAsync` (`OpenFilePickerAsync`, `AllowMultiple=true`, filters `*.jpg;*.png;*.bmp;*.gif;*.webp`). The 📎 button in the compose bar is gated on `CanAttachImages` — disabled when the loaded profile has no mmproj.
+- [x] **Attachment preview** — the same 72×72 thumbnail Border used in user bubbles sits above the compose `TextBox`, one per `PendingAttachments` entry, each with a × remove button (`RemovePendingAttachmentCommand`). `HasPendingAttachments` collapses the row when empty.
+- [~] **Attachment list modal** — deferred. The inline compose-bar strip covers the typical few-images-per-message case; a dedicated gallery modal is a polish pass that only matters once users attach many items at once.
+- [~] **Audio recording** — deferred. The `mtmd_bitmap_init_from_audio` P/Invoke + `MtmdContext.SupportsAudio` / `AudioSampleRate` properties are already in place; missing pieces are the `MtmdBitmap.FromAudio*` public wrappers and a capture/encode pipeline (NAudio on Windows / PortAudio cross-platform) driving the compose bar's mic button.
+- [x] **Drag-and-drop file upload** — `DragDrop.AllowDrop="True"` on the main `Window`; `OnComposeDragOver` in `MainWindow.axaml.cs` accepts the drop only when the payload contains `DataFormat.File` **and** `CanAttachImages`; `OnComposeDrop` walks `IDataTransfer.TryGetFiles()` and feeds local paths to `MainWindowViewModel.TryAddPendingImage`.
+- [x] **Paste handling (files)** — Ctrl+V in the compose `TextBox` is intercepted by `OnComposeKeyDown`: if the clipboard has a bitmap payload (`IClipboard.TryGetBitmapAsync`), the bitmap is re-encoded to PNG bytes and queued as an attachment, and the default text-paste is suppressed. Non-image clipboard content (plain text, mixed) falls through to the `TextBox`'s native paste.
 - [~] **MCP prompt picker** — deferred. Precursor: MCP client.
 - [~] **MCP resource picker** — deferred (with MCP).
 - [x] **Slash command support** — `SendAsync` intercepts leading `/` and dispatches: `/clear` + `/reset` wipe the current conversation, `/new` creates one, `/settings` opens prefs, `/help` / `/?` show the shortcuts overlay, `/copy` copies the last assistant message. Unknown one-word commands surface a warning toast listing the set; anything with a space falls through to the model.
@@ -171,8 +171,8 @@ This whole section is shaped by webui's server-side model-list model. We use per
 - [-] **Model search/filter** — N/A. Few-profile case; a search box is overkill.
 - [-] **Grouped model list** — N/A.
 - [-] **Model option** — N/A.
-- [~] **Vision modality badge** — deferred. Precursor: multimodal bindings; model capabilities would expose a Vision flag we could surface next to the profile name.
-- [~] **Audio modality badge** — deferred (with multimodal).
+- [~] **Vision modality badge** — deferred. `ChatSession.SupportsImages` / `MtmdContext.SupportsVision` already expose the capability flag; a 👁 badge next to the profile name in the toolbar is a quick UI pass still to do. The paperclip button's enabled state already implicitly signals vision capability.
+- [~] **Audio modality badge** — deferred. `MtmdContext.SupportsAudio` is ready; will land alongside the audio-input UI pass.
 - [x] **Model info dialog** — `Views/ModelInfoDialog.cs`. File → Model info… (disabled when no model is loaded). Shows a summary block (profile / filename / description / parameter count / file size / training context / layers / embedding dim / capabilities / vocab size / template presence) plus the full GGUF key/value bag in a scrollable lower table. Long values clipped to 400 chars so the embedded Jinja template doesn't blow up the dialog.
 - [-] **Model not available dialog** — N/A. We read from a file path; "not available" = file missing, which we already report in the status bar.
 - [-] **Router mode** — N/A.
@@ -373,8 +373,8 @@ All deferred — the app currently uses text labels (Copy / Edit / Delete etc.).
 
 ### Medium effort, well-scoped — status
 - [x] Markdown rendering with remark/rehype analog — Markdig → Avalonia control tree (see Message rendering section for the detailed breakdown).
-- [~] File attachments & drag-drop — deferred (multimodal).
-- [~] Audio recording — deferred (multimodal; NAudio/CoreAudio).
+- [x] File attachments & drag-drop — images only for v1 (compose paperclip + drag-drop + clipboard paste + user-bubble thumbnails). Audio input still deferred.
+- [~] Audio recording — deferred. Multimodal C API bound; wrappers + capture pipeline (NAudio/CoreAudio) still TODO.
 - [~] MCP protocol client — deferred (phase 2; `ModelContextProtocol` NuGet is an option when we take this on).
 - [-] Model selector with search — N/A (profile-based UI instead).
 
