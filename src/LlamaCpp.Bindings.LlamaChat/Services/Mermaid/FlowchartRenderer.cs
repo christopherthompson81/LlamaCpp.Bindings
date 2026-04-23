@@ -55,7 +55,7 @@ public static class FlowchartRenderer
         };
 
         // Edges first so nodes paint over endpoints.
-        foreach (var e in laid.Edges) AddEdge(canvas, e);
+        foreach (var e in laid.Edges) AddEdge(canvas, e, laid.Direction);
         foreach (var n in laid.Nodes) AddNode(canvas, n);
 
         var container = new Border
@@ -125,30 +125,33 @@ public static class FlowchartRenderer
         return new Path { Data = geom };
     }
 
-    private static void AddEdge(Canvas canvas, LaidOutEdge e)
+    private static void AddEdge(Canvas canvas, LaidOutEdge e, FlowchartDirection dir)
     {
         if (e.Points.Length < 2) return;
 
         var (sx, sy) = e.Points[0];
         var (tx, ty) = e.Points[^1];
 
-        var line = new Line
+        // Cubic Bezier control points, biased along the layout's layer axis so
+        // edges leave the source and enter the target tangent to that axis.
+        var (c1x, c1y, c2x, c2y) = BezierControls(sx, sy, tx, ty, dir);
+
+        var path = new Path
         {
-            StartPoint = new Point(sx, sy),
-            EndPoint = new Point(tx, ty),
             StrokeThickness = e.Edge.Style == EdgeStyle.ThickArrow ? ThickStrokeThickness : EdgeStrokeThickness,
+            Data = BuildBezierGeometry(sx, sy, c1x, c1y, c2x, c2y, tx, ty),
         };
-        line[!Shape.StrokeProperty] = new DynamicResourceExtension("Foreground");
+        path[!Shape.StrokeProperty] = new DynamicResourceExtension("Foreground");
         if (e.Edge.Style == EdgeStyle.DottedArrow)
         {
-            line.StrokeDashArray = new AvaloniaList<double> { 2, 3 };
+            path.StrokeDashArray = new AvaloniaList<double> { 2, 3 };
         }
-        canvas.Children.Add(line);
+        canvas.Children.Add(path);
 
-        // Arrowhead (only for arrow styles, not plain SolidLine).
+        // Arrowhead aligned to the Bezier's tangent at t=1 (direction from C2 to end).
         if (e.Edge.Style != EdgeStyle.SolidLine)
         {
-            canvas.Children.Add(Arrowhead(sx, sy, tx, ty));
+            canvas.Children.Add(Arrowhead(c2x, c2y, tx, ty));
         }
 
         // Edge label at the midpoint.
@@ -168,12 +171,61 @@ public static class FlowchartRenderer
             };
             label[!Border.BackgroundProperty] = new DynamicResourceExtension("CodeBackground");
             label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            var midX = (sx + tx) / 2.0 - label.DesiredSize.Width / 2.0;
-            var midY = (sy + ty) / 2.0 - label.DesiredSize.Height / 2.0;
-            Canvas.SetLeft(label, midX);
-            Canvas.SetTop(label, midY);
+            // Bezier midpoint at t = 0.5:
+            //   P(0.5) = 0.125*(P0 + P3) + 0.375*(C1 + C2)
+            var bmx = 0.125 * (sx + tx) + 0.375 * (c1x + c2x);
+            var bmy = 0.125 * (sy + ty) + 0.375 * (c1y + c2y);
+            Canvas.SetLeft(label, bmx - label.DesiredSize.Width / 2.0);
+            Canvas.SetTop(label, bmy - label.DesiredSize.Height / 2.0);
             canvas.Children.Add(label);
         }
+    }
+
+    /// <summary>
+    /// Compute cubic Bezier control points so the curve leaves the source
+    /// and enters the target tangent to the layout's layer axis. Works for
+    /// both forward edges and back-edges (where the target's layer axis
+    /// coordinate is below the source's).
+    /// </summary>
+    private static (double C1x, double C1y, double C2x, double C2y) BezierControls(
+        double sx, double sy, double tx, double ty, FlowchartDirection dir)
+    {
+        var verticalAxis = dir is FlowchartDirection.TopDown or FlowchartDirection.BottomUp;
+        if (verticalAxis)
+        {
+            var dy = ty - sy;
+            var sign = dy >= 0 ? 1.0 : -1.0;
+            // Offset: 40% of axis span, but at least a chunk of the layer gap
+            // so tiny same-layer edges still curve.
+            var offset = Math.Max(Math.Abs(dy) * 0.4, FlowchartLayout.LayerGap * 0.35);
+            return (sx, sy + sign * offset, tx, ty - sign * offset);
+        }
+        else
+        {
+            var dx = tx - sx;
+            var sign = dx >= 0 ? 1.0 : -1.0;
+            var offset = Math.Max(Math.Abs(dx) * 0.4, FlowchartLayout.LayerGap * 0.35);
+            return (sx + sign * offset, sy, tx - sign * offset, ty);
+        }
+    }
+
+    private static PathGeometry BuildBezierGeometry(
+        double sx, double sy, double c1x, double c1y, double c2x, double c2y, double tx, double ty)
+    {
+        var figure = new PathFigure
+        {
+            StartPoint = new Point(sx, sy),
+            IsClosed = false,
+        };
+        figure.Segments!.Add(new BezierSegment
+        {
+            Point1 = new Point(c1x, c1y),
+            Point2 = new Point(c2x, c2y),
+            Point3 = new Point(tx, ty),
+        });
+        var geom = new PathGeometry();
+        geom.Figures!.Add(figure);
+        return geom;
     }
 
     private static Polygon Arrowhead(double sx, double sy, double tx, double ty)

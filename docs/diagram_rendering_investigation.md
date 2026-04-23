@@ -70,3 +70,25 @@ Services/Mermaid/
 And a top-level `Services/MermaidRenderer.cs` as the entrypoint used by `MarkdownRenderer` for `mermaid` fenced code blocks. Parser + layout are Avalonia-free and unit-testable; renderer is the only Avalonia-touching piece.
 
 **Testability:** parser tests in `LlamaCpp.Bindings.Tests` are cheap (pure C#). Layout tests harder to assert — will verify by snapshotting node positions for a couple of reference graphs and manually reviewing the rendered output during dev.
+
+## Run 4 — 2026-04-23 16:30
+
+**Outcome:** v1 pipeline lands in commit `58a6e17`. 28 parser tests + 8 layout tests all pass. Rendering validated in the app against a representative flowchart (start → decision → two branches → join → end). Structurally correct; labels centred; arrowheads aligned.
+
+**Surprises during build:**
+- `LlamaCpp.Bindings.Tests.csproj` only referenced the bindings project; added a second `ProjectReference` to `LlamaCpp.Bindings.LlamaChat` so parser/layout tests can live alongside the existing xUnit suite. No cycle — LlamaChat does not depend on Tests.
+- Avalonia 12: `AvaloniaList<T>` lives in `Avalonia.Collections`, not `Avalonia` namespace root.
+- `MathBlock` extending `FencedCodeBlock` (noted earlier) mattered again here — the `fc.Info == "mermaid"` check lives inside `RenderFencedCodeBlock`, so it catches mermaid-tagged fenced blocks without needing its own switch arm.
+
+**Aesthetic follow-up (same run):** user noted straight-line edge routing reads differently from Mermaid.js. Upgraded `FlowchartRenderer.AddEdge` to cubic Bezier with tangent control points biased along the layout's layer axis (`BezierControls` picks the axis from `FlowchartDirection`; offset = max(40% of axis span, 35% of `LayerGap`) so short edges still curve visibly). Arrowheads tangent to the Bezier at t=1; edge-label anchor uses the Bezier midpoint formula `P(0.5) = 0.125·(P0+P3) + 0.375·(C1+C2)` rather than the straight-line midpoint.
+
+**Still imperfect:** edges can cross unrelated node boxes when siblings converge on a common descendant, because we single-segment through the layer gap without obstacle awareness. Tracked in [#11](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/11). The user accepted v1 as "good enough for now" — revisit when obstacle-aware routing becomes load-bearing.
+
+**Not done (deferred):**
+- Subgraphs (`subgraph name ... end`).
+- `A & B --> C` multi-source/target shorthand.
+- Other graph-shaped diagram types (state, class, ER, C4) — the engine is ready to accept them as node-template / edge-decorator registries; not wired in v1.
+- Linear types (sequence, gantt, journey, timeline, kanban) — each needs its own lane renderer, unrelated to the flowchart engine.
+- Chart types — should lean on `LiveChartsCore` or `OxyPlot` when wired.
+
+**Webui feature checklist:** Mermaid item flips from `[~]` deferred to `[x]` with a scope note about the v1 subset + follow-ups.
