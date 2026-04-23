@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LlamaCpp.Bindings\LlamaCpp.Bindings.csproj" />
+    <ProjectReference Include="..\LlamaCpp.Bindings.LlamaChat\LlamaCpp.Bindings.LlamaChat.csproj" />
   </ItemGroup>
 
   <ItemGroup>

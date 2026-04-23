@@ -193,6 +193,16 @@ public static class MarkdownRenderer
     private static Control RenderFencedCodeBlock(FencedCodeBlock fc)
     {
         var text = ExtractBlockText(fc);
+        if (string.Equals(fc.Info, "mermaid", StringComparison.OrdinalIgnoreCase))
+        {
+            try { return Mermaid.FlowchartRenderer.Render(text); }
+            catch
+            {
+                // Parser or layout blew up on unexpected syntax — fall back to
+                // the raw source so the user can still read it.
+                return BuildCodeBlock(text, "mermaid");
+            }
+        }
         return BuildCodeBlock(text, fc.Info);
     }
 

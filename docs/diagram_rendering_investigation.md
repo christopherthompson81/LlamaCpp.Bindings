@@ -47,3 +47,26 @@
 **Outcome:** KaTeX rendering is live in `MarkdownRenderer`. Block math emits a centred `Image` at display-style size 20; inline math emits an `InlineUIContainer(Image)` at text-style size 16 with `BaselineAlignment.Center`. Foreground colour is baked from the theme's `Foreground` brush at render time; cache key includes the ARGB so light/dark flips repopulate rather than show stale colour.
 
 **Next:** move on to Mermaid (parser → Sugiyama layout → Avalonia canvas renderer). KaTeX item in `webui_feature_checklist.md` §3 flips to `[x]`.
+
+## Run 3 — 2026-04-23 15:00
+
+**Goal:** Mermaid flowchart v1 end-to-end. Scope per plan:
+
+- Parser: `graph TD/LR/RL/BT`, `flowchart TD/LR/RL/BT` headers (header optional, defaults to `TD`); node shapes `A[rect]`, `A(rounded)`, `A([stadium])`, `A((circle))`, `A{rhombus}`; edges `-->`, `---`, `-.->`, `==>`; optional edge label `-->|text|`; node labels inside the shape delimiters. Multi-edge shorthand (`A --> B & C`, `A & B --> C`) deferred. Subgraphs (`subgraph name ... end`) deferred.
+- Layout: Sugiyama layered. Cycle removal via DFS (reverse back-edges). Layer assignment via longest-path from sources. Crossing reduction via median heuristic, several downward/upward passes. Coordinate assignment: evenly spaced within each layer, layer gap = max node size + padding. Direction baked into layout axes (TD: layers run Y+, nodes within layer run X; LR: layers run X+, nodes within layer run Y).
+- Edge routing v1: straight line segments with arrowheads. Orthogonal routing deferred — straight lines are acceptable for flowcharts up to ~20 nodes and hugely simpler to implement. Revisit if visual quality demands it.
+- Renderer: Avalonia `Canvas`. Each node placed via `Canvas.SetLeft`/`SetTop`; shape drawn via `Rectangle`/`Ellipse`/`Path` with `DynamicResource Foreground`/`Muted` brushes; label `TextBlock` centred inside. Edges as `Polyline` + arrowhead `Polygon`. Label sizing measured via `FormattedText` with our `CodeFontFamily`... no, with the default app font, at 12px.
+
+**File layout:**
+
+```
+Services/Mermaid/
+  FlowchartGraph.cs     data model (POCO)
+  FlowchartParser.cs    string → FlowchartGraph
+  FlowchartLayout.cs    FlowchartGraph → LaidOutGraph (positions)
+  FlowchartRenderer.cs  LaidOutGraph → Avalonia Control
+```
+
+And a top-level `Services/MermaidRenderer.cs` as the entrypoint used by `MarkdownRenderer` for `mermaid` fenced code blocks. Parser + layout are Avalonia-free and unit-testable; renderer is the only Avalonia-touching piece.
+
+**Testability:** parser tests in `LlamaCpp.Bindings.Tests` are cheap (pure C#). Layout tests harder to assert — will verify by snapshotting node positions for a couple of reference graphs and manually reviewing the rendered output during dev.
