@@ -32,3 +32,5 @@ Thumbs.db
 
 # Investigation scratch (investigation docs themselves are checked in under docs/)
 *.scratch.md
+
+.claude/
