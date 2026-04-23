@@ -116,26 +116,52 @@ internal static class DialogService
     }
 
     /// <summary>
-    /// Open-file picker for image attachments. Returns an array of local paths.
-    /// Returns an empty array on cancel.
+    /// Open-file picker for media attachments — images, audio, or both
+    /// depending on what the caller's model consumes. Returns an array of
+    /// local paths (empty on cancel). At least one of
+    /// <paramref name="allowImages"/> or <paramref name="allowAudio"/>
+    /// should be true; if both are false the picker returns empty without
+    /// opening.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> PickImageFilesAsync()
+    public static async Task<IReadOnlyList<string>> PickMediaFilesAsync(
+        bool allowImages = true, bool allowAudio = true)
     {
         var owner = Owner;
         if (owner is null) return System.Array.Empty<string>();
+        if (!allowImages && !allowAudio) return System.Array.Empty<string>();
+
+        var filters = new List<FilePickerFileType>();
+        if (allowImages)
+        {
+            filters.Add(new FilePickerFileType("Images")
+            {
+                Patterns = new[] { "*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp" },
+                MimeTypes = new[] { "image/*" },
+            });
+        }
+        if (allowAudio)
+        {
+            filters.Add(new FilePickerFileType("Audio")
+            {
+                Patterns = new[] { "*.wav", "*.mp3", "*.flac", "*.ogg", "*.m4a" },
+                MimeTypes = new[] { "audio/*" },
+            });
+        }
+        filters.Add(FilePickerFileTypes.All);
+
+        var title = (allowImages, allowAudio) switch
+        {
+            (true, true)  => "Attach image or audio",
+            (true, false) => "Attach images",
+            (false, true) => "Attach audio",
+            _             => "Attach",
+        };
+
         var result = await owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Attach images",
+            Title = title,
             AllowMultiple = true,
-            FileTypeFilter = new[]
-            {
-                new FilePickerFileType("Images")
-                {
-                    Patterns = new[] { "*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp" },
-                    MimeTypes = new[] { "image/*" },
-                },
-                FilePickerFileTypes.All,
-            },
+            FileTypeFilter = filters.ToArray(),
         });
         var paths = new List<string>(result.Count);
         foreach (var file in result)

@@ -52,10 +52,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     // Session
     // ============================================================
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend), nameof(CanAttachImages))]
+    [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend), nameof(CanAttachMedia))]
     [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand),
                                  nameof(UnloadCommand), nameof(ShowModelInfoCommand),
-                                 nameof(AttachImagesCommand))]
+                                 nameof(AttachMediaCommand))]
     private ChatSession? _session;
 
     [ObservableProperty]
@@ -88,8 +88,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     public bool HasPendingAttachments => PendingAttachments.Count > 0;
 
-    /// <summary>Disables the paperclip when the loaded model can't consume images.</summary>
+    /// <summary>Disables the paperclip when the loaded model can't consume any media.</summary>
+    public bool CanAttachMedia => Session?.SupportsMedia == true;
+
+    /// <summary>
+    /// File-picker filter hints. Image models get image filters; audio models
+    /// get audio filters; omni models get both.
+    /// </summary>
     public bool CanAttachImages => Session?.SupportsImages == true;
+    public bool CanAttachAudio => Session?.SupportsAudio == true;
 
     private readonly Avalonia.Threading.DispatcherTimer _tokenCountTimer = new()
     {
@@ -367,7 +374,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         // Move pending attachments onto the outgoing message. We drain the
         // pending list so the paperclip strip empties and the next compose
         // starts fresh.
-        if (PendingAttachments.Count > 0 && CanAttachImages)
+        if (PendingAttachments.Count > 0 && CanAttachMedia)
         {
             foreach (var a in PendingAttachments) user.Attachments.Add(a);
         }
@@ -958,16 +965,18 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     // ============================================================
 
     /// <summary>
-    /// Open an image file picker and queue the selected files as pending
-    /// attachments. No-op if the loaded model has no mmproj.
+    /// Open a media file picker and queue the selected files as pending
+    /// attachments. Filter extensions depend on which modalities the loaded
+    /// model advertises (images only, audio only, or both).
     /// </summary>
-    [RelayCommand(CanExecute = nameof(CanAttachImages))]
-    private async Task AttachImagesAsync()
+    [RelayCommand(CanExecute = nameof(CanAttachMedia))]
+    private async Task AttachMediaAsync()
     {
-        var paths = await DialogService.PickImageFilesAsync();
+        var paths = await DialogService.PickMediaFilesAsync(
+            allowImages: CanAttachImages, allowAudio: CanAttachAudio);
         foreach (var p in paths)
         {
-            TryAddPendingImage(p);
+            TryAddPendingMedia(p);
         }
     }
 
@@ -979,11 +988,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Add image bytes to the pending list — used by the image-file picker,
-    /// drag-drop, and clipboard paste. Guessed MIME from extension; defaults
-    /// to image/png for clipboard pastes.
+    /// Add a media file to the pending list — used by the file picker, drag-
+    /// drop, and clipboard paste. Guessed MIME from extension; rejects
+    /// anything that isn't image or audio, or that the loaded model can't
+    /// consume (an audio-only model dropping an image, or vice versa).
     /// </summary>
-    internal void TryAddPendingImage(string path)
+    internal void TryAddPendingMedia(string path)
     {
         if (!File.Exists(path)) return;
         try
@@ -997,9 +1007,26 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 ".gif"            => "image/gif",
                 ".bmp"            => "image/bmp",
                 ".webp"           => "image/webp",
+                ".wav"            => "audio/wav",
+                ".mp3"            => "audio/mpeg",
+                ".flac"           => "audio/flac",
+                ".ogg"            => "audio/ogg",
+                ".m4a"            => "audio/mp4",
                 _                 => "application/octet-stream",
             };
-            if (!mime.StartsWith("image/")) return;
+            bool isImage = mime.StartsWith("image/");
+            bool isAudio = mime.StartsWith("audio/");
+            if (!isImage && !isAudio) return;
+            if (isImage && !CanAttachImages)
+            {
+                ToastService.Warning("Attach rejected", "Loaded model doesn't consume images.");
+                return;
+            }
+            if (isAudio && !CanAttachAudio)
+            {
+                ToastService.Warning("Attach rejected", "Loaded model doesn't consume audio.");
+                return;
+            }
             PendingAttachments.Add(new Attachment(bytes, mime, Path.GetFileName(path)));
         }
         catch (Exception ex)
@@ -1008,7 +1035,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    internal void AddPendingImageBytes(byte[] bytes, string mime, string? fileName = null)
+    internal void AddPendingMediaBytes(byte[] bytes, string mime, string? fileName = null)
     {
         PendingAttachments.Add(new Attachment(bytes, mime, fileName));
     }

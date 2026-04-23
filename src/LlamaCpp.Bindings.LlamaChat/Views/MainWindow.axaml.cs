@@ -184,13 +184,14 @@ public partial class MainWindow : Window
     // --- Compose: drag-drop + clipboard-paste image attachments ---------
     //
     // Drop target is the whole window. We only accept the drop when the model
-    // can consume images and the payload contains file paths. Any other
-    // payload (plain text, URIs, etc.) is ignored so the default TextBox
-    // paste behavior keeps working.
+    // can consume media (images or audio) and the payload contains file paths.
+    // Any other payload (plain text, URIs, etc.) is ignored so the default
+    // TextBox paste behavior keeps working. TryAddPendingMedia filters out
+    // non-media extensions per-file.
 
     private void OnComposeDragOver(object? sender, DragEventArgs e)
     {
-        if (_vm?.CanAttachImages == true &&
+        if (_vm?.CanAttachMedia == true &&
             e.DataTransfer is { } xfer &&
             xfer.Contains(DataFormat.File))
         {
@@ -204,7 +205,7 @@ public partial class MainWindow : Window
 
     private void OnComposeDrop(object? sender, DragEventArgs e)
     {
-        if (_vm is null || !_vm.CanAttachImages) return;
+        if (_vm is null || !_vm.CanAttachMedia) return;
         var xfer = e.DataTransfer;
         if (xfer is null) return;
 
@@ -215,16 +216,17 @@ public partial class MainWindow : Window
             var path = file.TryGetLocalPath();
             if (!string.IsNullOrEmpty(path))
             {
-                _vm.TryAddPendingImage(path);
+                _vm.TryAddPendingMedia(path);
             }
         }
         e.Handled = true;
     }
 
     // Clipboard image paste: intercept Ctrl+V in the compose TextBox. If the
-    // clipboard has a bitmap payload AND the model supports attachments, we
-    // re-encode it as PNG bytes and add as an attachment. Any other payload
-    // falls through to the TextBox's normal text paste.
+    // clipboard has a bitmap payload AND the model supports image input, we
+    // re-encode it as PNG bytes and add as an attachment. Other payloads
+    // (plain text, audio clips — Avalonia doesn't expose audio clipboard
+    // formats portably) fall through to the TextBox's default paste.
     private async System.Threading.Tasks.Task<bool> TryPasteImageFromClipboardAsync()
     {
         if (_vm is null || !_vm.CanAttachImages) return false;
@@ -241,7 +243,7 @@ public partial class MainWindow : Window
             var bytes = ms.ToArray();
             if (bytes.Length == 0) return false;
 
-            _vm.AddPendingImageBytes(bytes, "image/png", fileName: null);
+            _vm.AddPendingMediaBytes(bytes, "image/png", fileName: null);
             return true;
         }
         catch

@@ -42,6 +42,12 @@ public sealed class ChatSession : IDisposable
     /// <summary>True if this session can accept image attachments on user turns.</summary>
     public bool SupportsImages => _mtmd?.SupportsVision == true;
 
+    /// <summary>True if this session can accept audio attachments on user turns.</summary>
+    public bool SupportsAudio => _mtmd?.SupportsAudio == true;
+
+    /// <summary>True if this session can accept any mtmd media (image or audio).</summary>
+    public bool SupportsMedia => SupportsImages || SupportsAudio;
+
     private ChatSession(LlamaModel model, LlamaContext context, MtmdContext? mtmd, string? template)
     {
         _model = model;
@@ -157,7 +163,12 @@ public sealed class ChatSession : IDisposable
         {
             if (t.Attachments is { Count: > 0 }) { hasAttachments = true; break; }
         }
-        bool multimodal = hasAttachments && _mtmd is not null && _mtmd.SupportsVision;
+        // mtmd routes both images and audio through the same tokenize +
+        // eval_chunks pipeline. Gate on either modality so audio-only models
+        // (Qwen3-ASR) and omni models (Qwen3-Omni) both take this branch.
+        bool multimodal = hasAttachments
+            && _mtmd is not null
+            && (_mtmd.SupportsVision || _mtmd.SupportsAudio);
 
         var prompt = RenderPromptForCompletion(transcript, multimodal ? _mtmd!.DefaultMediaMarker : null);
 
@@ -198,14 +209,16 @@ public sealed class ChatSession : IDisposable
             newCachedTokens = null;
 
             // Decode image/audio bytes into native bitmaps on the background
-            // thread that eval_chunks runs on — cheap for JPEGs, would be
-            // O(seconds) for huge PNGs.
+            // thread that eval_chunks runs on. FromBytes routes through
+            // mtmd_helper_bitmap_init_from_buf which auto-detects format
+            // (stb_image for images, miniaudio for audio) via magic bytes,
+            // so we just need to forward everything that's image-or-audio.
             foreach (var t in transcript)
             {
                 if (t.Attachments is null) continue;
                 foreach (var a in t.Attachments)
                 {
-                    if (!a.IsImage) continue;
+                    if (!a.IsImage && !a.IsAudio) continue;
                     bitmaps.Add(MtmdBitmap.FromBytes(_mtmd!, a.Data));
                 }
             }

@@ -118,7 +118,7 @@ src/
 - [x] **File attachment picker** — `AttachImagesCommand` on `MainWindowViewModel` → `DialogService.PickImageFilesAsync` (`OpenFilePickerAsync`, `AllowMultiple=true`, filters `*.jpg;*.png;*.bmp;*.gif;*.webp`). The 📎 button in the compose bar is gated on `CanAttachImages` — disabled when the loaded profile has no mmproj.
 - [x] **Attachment preview** — the same 72×72 thumbnail Border used in user bubbles sits above the compose `TextBox`, one per `PendingAttachments` entry, each with a × remove button (`RemovePendingAttachmentCommand`). `HasPendingAttachments` collapses the row when empty.
 - [~] **Attachment list modal** — deferred. The inline compose-bar strip covers the typical few-images-per-message case; a dedicated gallery modal is a polish pass that only matters once users attach many items at once.
-- [~] **Audio recording** — deferred. The `mtmd_bitmap_init_from_audio` P/Invoke + `MtmdContext.SupportsAudio` / `AudioSampleRate` properties are already in place; missing pieces are the `MtmdBitmap.FromAudio*` public wrappers and a capture/encode pipeline (NAudio on Windows / PortAudio cross-platform) driving the compose bar's mic button.
+- [~] **Audio recording** — partially landed. Audio **file attachment** works end-to-end via the same compose paperclip + drag-drop + `ChatSession` multimodal path as images; `MtmdBitmap.FromAudioSamples` is the public wrapper over `mtmd_bitmap_init_from_audio` for future callers with raw PCM-F32 buffers. What's still deferred is **mic capture** — the compose bar doesn't have a record button yet, because that needs a platform-specific audio-capture pipeline (NAudio on Windows, PortAudio/ALSA cross-platform).
 - [x] **Drag-and-drop file upload** — `DragDrop.AllowDrop="True"` on the main `Window`; `OnComposeDragOver` in `MainWindow.axaml.cs` accepts the drop only when the payload contains `DataFormat.File` **and** `CanAttachImages`; `OnComposeDrop` walks `IDataTransfer.TryGetFiles()` and feeds local paths to `MainWindowViewModel.TryAddPendingImage`.
 - [x] **Paste handling (files)** — Ctrl+V in the compose `TextBox` is intercepted by `OnComposeKeyDown`: if the clipboard has a bitmap payload (`IClipboard.TryGetBitmapAsync`), the bitmap is re-encoded to PNG bytes and queued as an attachment, and the default text-paste is suppressed. Non-image clipboard content (plain text, mixed) falls through to the `TextBox`'s native paste.
 - [~] **MCP prompt picker** — deferred. Precursor: MCP client.
@@ -172,7 +172,7 @@ This whole section is shaped by webui's server-side model-list model. We use per
 - [-] **Grouped model list** — N/A.
 - [-] **Model option** — N/A.
 - [~] **Vision modality badge** — deferred. `ChatSession.SupportsImages` / `MtmdContext.SupportsVision` already expose the capability flag; a 👁 badge next to the profile name in the toolbar is a quick UI pass still to do. The paperclip button's enabled state already implicitly signals vision capability.
-- [~] **Audio modality badge** — deferred. `MtmdContext.SupportsAudio` is ready; will land alongside the audio-input UI pass.
+- [~] **Audio modality badge** — deferred. `ChatSession.SupportsAudio` exposes the capability and the compose paperclip is now gated on `CanAttachMedia` (images OR audio), so the enable-state signals audio-capable models implicitly. A dedicated 🎵 badge next to the profile name is a polish pass still to do.
 - [x] **Model info dialog** — `Views/ModelInfoDialog.cs`. File → Model info… (disabled when no model is loaded). Shows a summary block (profile / filename / description / parameter count / file size / training context / layers / embedding dim / capabilities / vocab size / template presence) plus the full GGUF key/value bag in a scrollable lower table. Long values clipped to 400 chars so the embedded Jinja template doesn't blow up the dialog.
 - [-] **Model not available dialog** — N/A. We read from a file path; "not available" = file missing, which we already report in the status bar.
 - [-] **Router mode** — N/A.
@@ -374,7 +374,7 @@ All deferred — the app currently uses text labels (Copy / Edit / Delete etc.).
 ### Medium effort, well-scoped — status
 - [x] Markdown rendering with remark/rehype analog — Markdig → Avalonia control tree (see Message rendering section for the detailed breakdown).
 - [x] File attachments & drag-drop — images only for v1 (compose paperclip + drag-drop + clipboard paste + user-bubble thumbnails). Audio input still deferred.
-- [~] Audio recording — deferred. Multimodal C API bound; wrappers + capture pipeline (NAudio/CoreAudio) still TODO.
+- [~] Audio recording — file attachment works (compose paperclip, drag-drop, audio chip in bubble). Mic capture still deferred — needs platform-specific capture pipeline (NAudio / PortAudio).
 - [~] MCP protocol client — deferred (phase 2; `ModelContextProtocol` NuGet is an option when we take this on).
 - [-] Model selector with search — N/A (profile-based UI instead).
 

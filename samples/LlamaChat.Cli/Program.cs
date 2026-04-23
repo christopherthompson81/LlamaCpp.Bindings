@@ -96,16 +96,18 @@ Console.CancelKeyPress += (_, ev) =>
 // reproduce crashes in the mtmd path outside of the desktop app where
 // stderr survives and we can attach a debugger if needed.
 // =====================================================================
-if (opts.MmprojPath is not null && opts.ImagePath is not null)
+if (opts.MmprojPath is not null && (opts.ImagePath is not null || opts.AudioPath is not null))
 {
     if (!File.Exists(opts.MmprojPath))
     {
         Console.Error.WriteLine($"mmproj file not found: {opts.MmprojPath}");
         return 1;
     }
-    if (!File.Exists(opts.ImagePath))
+    var mediaPath = opts.ImagePath ?? opts.AudioPath!;
+    var mediaKind = opts.ImagePath is not null ? "image" : "audio";
+    if (!File.Exists(mediaPath))
     {
-        Console.Error.WriteLine($"image file not found: {opts.ImagePath}");
+        Console.Error.WriteLine($"{mediaKind} file not found: {mediaPath}");
         return 1;
     }
 
@@ -121,13 +123,22 @@ if (opts.MmprojPath is not null && opts.ImagePath is not null)
     Console.Error.WriteLine(
         $"Mtmd: vision={mtmd.SupportsVision}, audio={mtmd.SupportsAudio}, " +
         $"mrope={mtmd.UsesMRope}, non_causal={mtmd.UsesNonCausalMask}, " +
+        $"audio_sample_rate={mtmd.AudioSampleRate?.ToString() ?? "n/a"}, " +
         $"marker='{mtmd.DefaultMediaMarker}'");
 
-    Console.Error.WriteLine($"Loading image {opts.ImagePath} ...");
-    using var bitmap = MtmdBitmap.FromFile(mtmd, opts.ImagePath);
-    Console.Error.WriteLine($"Bitmap: {bitmap.Width}x{bitmap.Height}, {bitmap.ByteCount} bytes");
+    Console.Error.WriteLine($"Loading {mediaKind} {mediaPath} ...");
+    // mtmd_helper_bitmap_init_from_file auto-detects image vs audio by
+    // magic bytes and routes to stb_image or miniaudio accordingly — so
+    // the FromFile factory handles both without special-casing here.
+    using var bitmap = MtmdBitmap.FromFile(mtmd, mediaPath);
+    Console.Error.WriteLine(
+        bitmap.IsAudio
+            ? $"Audio bitmap: {bitmap.ByteCount} bytes of PCM-F32"
+            : $"Image bitmap: {bitmap.Width}x{bitmap.Height}, {bitmap.ByteCount} bytes");
 
-    var userText = opts.Prompt ?? "Describe this image.";
+    var userText = opts.Prompt ?? (mediaKind == "image"
+        ? "Describe this image."
+        : "Transcribe this audio.");
     var userContent = $"{mtmd.DefaultMediaMarker}\n{userText}";
 
     string renderedPrompt = RenderPrompt(template, new[] { new ChatMessage("user", userContent) });
@@ -305,6 +316,7 @@ record Options(
     bool Verbose,
     string? MmprojPath,
     string? ImagePath,
+    string? AudioPath,
     string? Prompt,
     int? ImageMaxTokens,
     bool CpuEncode)
@@ -319,6 +331,7 @@ record Options(
         Verbose: false,
         MmprojPath: null,
         ImagePath: null,
+        AudioPath: null,
         Prompt: null,
         ImageMaxTokens: null,
         CpuEncode: false);
@@ -344,6 +357,7 @@ record Options(
                 case "--verbose":     o = o with { Verbose = true }; break;
                 case "--mmproj":      o = o with { MmprojPath = Next(a) }; break;
                 case "--image":       o = o with { ImagePath = Next(a) }; break;
+                case "--audio":       o = o with { AudioPath = Next(a) }; break;
                 case "--prompt":      o = o with { Prompt = Next(a) }; break;
                 case "--image-max-tokens":
                                       o = o with { ImageMaxTokens = int.Parse(Next(a)) }; break;
@@ -368,8 +382,8 @@ record Options(
         Console.Error.WriteLine("    LlamaChat.Cli [--model PATH] [--ctx N] [--temp F] [--seed N]");
         Console.Error.WriteLine("                  [--max N] [--gpu-layers N] [--verbose]");
         Console.Error.WriteLine("  Multimodal single-shot:");
-        Console.Error.WriteLine("    LlamaChat.Cli --model PATH --mmproj PATH --image PATH [--prompt TEXT]");
-        Console.Error.WriteLine("                  [--image-max-tokens N] [--cpu-encode]");
+        Console.Error.WriteLine("    LlamaChat.Cli --model PATH --mmproj PATH (--image PATH | --audio PATH)");
+        Console.Error.WriteLine("                  [--prompt TEXT] [--image-max-tokens N] [--cpu-encode]");
         Console.Error.WriteLine("                  [--ctx N] [--gpu-layers N] [--max N] [--seed N]");
     }
 }

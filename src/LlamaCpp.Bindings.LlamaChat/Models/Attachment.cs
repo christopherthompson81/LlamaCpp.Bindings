@@ -18,4 +18,5 @@ public sealed record Attachment(
     string? FileName = null)
 {
     public bool IsImage => MimeType.StartsWith("image/", System.StringComparison.OrdinalIgnoreCase);
+    public bool IsAudio => MimeType.StartsWith("audio/", System.StringComparison.OrdinalIgnoreCase);
 }

@@ -147,6 +147,35 @@ public sealed class MtmdBitmap : IDisposable
         }
     }
 
+    /// <summary>
+    /// Build a bitmap from a raw PCM-F32 mono audio buffer. Bypasses
+    /// miniaudio's format detection — useful when the caller already has
+    /// the samples in memory (mic capture, synthesized test tones, a
+    /// format we've decoded ourselves).
+    /// </summary>
+    /// <param name="pcmF32">
+    /// Mono 32-bit float samples in <c>[-1.0, 1.0]</c>. Length is the number
+    /// of samples. The bitmap retains its own copy on the native side; the
+    /// span only needs to live for the duration of this call. The caller is
+    /// responsible for resampling to the encoder's expected rate (typically
+    /// 16000 Hz — see <see cref="MtmdContext.AudioSampleRate"/>).
+    /// </param>
+    public static unsafe MtmdBitmap FromAudioSamples(ReadOnlySpan<float> pcmF32)
+    {
+        if (pcmF32.IsEmpty) throw new ArgumentException("PCM buffer is empty.", nameof(pcmF32));
+        fixed (float* ptr = pcmF32)
+        {
+            var raw = NativeMethods.mtmd_bitmap_init_from_audio((nuint)pcmF32.Length, ptr);
+            if (raw == IntPtr.Zero)
+            {
+                throw new LlamaException(
+                    nameof(NativeMethods.mtmd_bitmap_init_from_audio),
+                    "mtmd_bitmap_init_from_audio returned NULL.");
+            }
+            return new MtmdBitmap(SafeMtmdBitmapHandle.FromUnsafeHandle(raw));
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
