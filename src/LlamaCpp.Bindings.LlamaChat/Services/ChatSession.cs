@@ -23,6 +23,17 @@ public sealed class ChatSession : IDisposable
     private readonly MtmdContext? _mtmd;
     private readonly string? _chatTemplate;
 
+    /// <summary>
+    /// Tokens currently decoded into the KV cache for seq 0 (including both
+    /// prompt and previously-generated assistant tokens). Used to compute the
+    /// longest common prefix with each new turn's prompt so we only decode
+    /// the delta rather than the full transcript every turn. <c>null</c>
+    /// when we can't reason about the cache contents (fresh load, after a
+    /// multimodal turn whose image chunks we didn't token-record, after an
+    /// explicit <see cref="ClearKv"/>).
+    /// </summary>
+    private List<int>? _cachedTokens;
+
     public LlamaModel Model => _model;
     public LlamaContext Context => _context;
     public MtmdContext? Mtmd => _mtmd;
@@ -111,8 +122,17 @@ public sealed class ChatSession : IDisposable
         catch { }
     }
 
-    /// <summary>Drop the KV cache. Called when switching conversations.</summary>
-    public void ClearKv() => _context.ClearKvCache();
+    /// <summary>
+    /// Drop the KV cache and the prompt-token cache. Call when switching
+    /// conversations, after an edit/delete/regenerate that reshapes the
+    /// transcript, or any other time the caller can't guarantee the cached
+    /// tokens still reflect what's in the KV cache.
+    /// </summary>
+    public void ClearKv()
+    {
+        _context.ClearKvCache();
+        _cachedTokens = null;
+    }
 
     /// <summary>
     /// Render <paramref name="transcript"/> through the model's chat template
@@ -141,11 +161,6 @@ public sealed class ChatSession : IDisposable
 
         var prompt = RenderPromptForCompletion(transcript, multimodal ? _mtmd!.DefaultMediaMarker : null);
 
-        // v1 cache policy: clear and re-decode the full transcript every turn.
-        // O(total tokens) per turn, correct, trivially debuggable. Prefix-cache
-        // reuse is tracked as Run-2 work in docs/webui_parity_investigation.md.
-        _context.ClearKvCache();
-
         using var llamaSampler = SamplerFactory.Build(_model, _model.Vocab, sampler);
         var generator = new LlamaGenerator(_context, llamaSampler);
 
@@ -167,9 +182,21 @@ public sealed class ChatSession : IDisposable
         int completionTokens = 0;
 
         IAsyncEnumerable<string> stream;
+        // Grows with each emitted token so the next turn can diff against it.
+        // Null when we lose track of what's in the cache (multimodal prefill
+        // writes image tokens we can't reconstruct by tokenising text).
+        List<int>? newCachedTokens;
 
         if (multimodal)
         {
+            // Image turns: full prefill through mtmd_helper_eval_chunks. We
+            // can't build a text-token list that matches what mtmd wrote into
+            // the KV (image chunks have bespoke positions), so we clear the
+            // cache and mark it null — next turn will start fresh.
+            _context.ClearKvCache();
+            _cachedTokens = null;
+            newCachedTokens = null;
+
             // Decode image/audio bytes into native bitmaps on the background
             // thread that eval_chunks runs on — cheap for JPEGs, would be
             // O(seconds) for huge PNGs.
@@ -205,11 +232,42 @@ public sealed class ChatSession : IDisposable
         }
         else
         {
+            // Text-only: tokenize the new prompt, diff against what's in the
+            // KV cache, re-decode only the delta. Sampler still gets primed
+            // with every prompt token so penalty/DRY state is correct.
+            var promptTokens = _model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
+            int firstNew = ComputeCommonPrefixLength(_cachedTokens, promptTokens);
+
+            if (_cachedTokens is not null && firstNew < _cachedTokens.Count)
+            {
+                // Cache had a tail beyond the common prefix — trim it. If the
+                // backend refuses partial removal (some SWA/quantised caches
+                // do), fall back to a clean rebuild.
+                var trimmed = _context.RemoveSequenceRange(
+                    sequenceId: 0, fromPosition: firstNew, toPosition: -1);
+                if (!trimmed)
+                {
+                    _context.ClearKvCache();
+                    firstNew = 0;
+                }
+            }
+            else if (_cachedTokens is null)
+            {
+                _context.ClearKvCache();
+                firstNew = 0;
+            }
+
+            newCachedTokens = new List<int>(promptTokens.Length + generation.MaxTokens);
+            newCachedTokens.AddRange(promptTokens);
+
+            // Capture the local for the closure — newCachedTokens is non-null
+            // in this branch and won't be reassigned.
+            var cacheToGrow = newCachedTokens;
             stream = generator.GenerateAsync(
-                prompt,
+                promptTokens,
                 maxTokens: generation.MaxTokens,
-                addSpecial: false,
-                parseSpecial: true,
+                firstNewIndex: firstNew,
+                onTokenDecoded: t => cacheToGrow.Add(t),
                 cancellationToken: cancellationToken);
         }
 
@@ -252,6 +310,12 @@ public sealed class ChatSession : IDisposable
         }
         finally
         {
+            // Commit the prompt-token cache so the next turn can prefix-diff
+            // against it. Runs even on cancel/exception: whatever tokens the
+            // generator did decode before bailing are now in the KV, so the
+            // cache needs to reflect that — `newCachedTokens` grew via the
+            // onTokenDecoded callback exactly in lockstep with DecodeSingleToken.
+            _cachedTokens = newCachedTokens;
             foreach (var b in bitmaps) b.Dispose();
         }
     }
@@ -292,6 +356,21 @@ public sealed class ChatSession : IDisposable
             .Select(t => new ChatMessage(RoleLabel(t.Role), Expand(t)))
             .ToArray();
         return LlamaChatTemplate.Apply(_chatTemplate, messages, addAssistantPrefix: true);
+    }
+
+    /// <summary>
+    /// Length of the longest prefix on which both sequences agree token-for-
+    /// token. Returns 0 when either side is null/empty. Called by the text-
+    /// only generation path to figure out how much of the cached prompt can
+    /// be reused for the next turn.
+    /// </summary>
+    private static int ComputeCommonPrefixLength(IReadOnlyList<int>? cached, IReadOnlyList<int> incoming)
+    {
+        if (cached is null || cached.Count == 0 || incoming.Count == 0) return 0;
+        int max = Math.Min(cached.Count, incoming.Count);
+        int i = 0;
+        while (i < max && cached[i] == incoming[i]) i++;
+        return i;
     }
 
     private static string RoleLabel(TurnRole role) => role switch

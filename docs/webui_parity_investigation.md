@@ -104,3 +104,66 @@ deferred to a separate investigation doc when we start phase 2.
 **Next:** scaffold `src/LlamaCpp.Bindings.LlamaChat` with MVVM, wire a basic
 streaming chat loop, confirm it builds and runs against a real model. Iterate
 on the sampler panel and logprobs next.
+
+### Run 2 — 2026-04-23 — prefix-cache reuse landed
+
+**Goal:** close gap #6 from the table. The v1 app called
+`ClearKvCache()` + re-decoded the full transcript on every turn (see comment
+that used to live in `ChatSession.StreamAssistantReplyAsync`). Fine for
+short chats, O(total tokens) per turn as history grows.
+
+**Approach.** Same shape as `llama.cpp/tools/server` server-context.cpp's
+prefix-cache handling, reduced to the single-slot / single-sequence case:
+
+1. Tokenize the new turn's prompt → `promptTokens`.
+2. Compute the longest common prefix with `ChatSession._cachedTokens`
+   (the tokens previously decoded into KV for this session).
+3. `llama_memory_seq_rm(seq=0, from=common, to=-1)` to trim any stale
+   suffix. If the backend refuses (SWA/quantised caches can), fall back to
+   a full `ClearKvCache` + re-decode.
+4. `LlamaGenerator.GenerateAsync(promptTokens, firstNewIndex=common, …)`
+   decodes only `promptTokens[common..]`, primes the sampler with **all**
+   prompt tokens (so penalty/DRY state reflects the full visible prompt),
+   then runs the normal sample/decode loop.
+5. `ChatSession` passes an `onTokenDecoded` callback into the generator so
+   its cache grows by each decoded token in lockstep with `DecodeSingleToken`.
+   Committed to `_cachedTokens` in the `finally` block — on cancel or
+   exception the partial cache still reflects what's in the KV.
+
+**Key bindings-layer changes:**
+
+- `LlamaGenerator.GenerateAsync(IReadOnlyList<int>, …)` grew two optional
+  parameters: `int firstNewIndex = 0` (skip count; default preserves old
+  behaviour) and `Action<int>? onTokenDecoded = null` (fires after every
+  `DecodeSingleToken`).
+- `ChatSession` gained `List<int>? _cachedTokens`, plus the common-prefix
+  + trim logic in `StreamAssistantReplyAsync`. `ClearKv` resets it.
+- Multimodal turns short-circuit the text path: they always `ClearKv` and
+  set `_cachedTokens = null`, because `mtmd_helper_eval_chunks` writes
+  image-chunk positions that don't correspond to a tokenisable string.
+
+**Correctness tests (both pass):**
+
+- `Decoding_After_Tail_Trim_Resumes_From_Trim_Position` — confirms the
+  native invariant we ride on: `llama_batch_get_one` auto-positioning
+  resumes from the trim point after `seq_rm(0, K, -1)`. If this ever
+  fails we'd need to switch to explicit-position batches.
+- `Prefix_Reuse_Produces_Same_Output_As_Full_Rebuild` — greedy (T=0)
+  sampling with a fixed seed produces a byte-identical stream whether the
+  KV was built from scratch or split into `decode(T[..half]) + seq_rm
+  + decode(T, firstNewIndex=half)`.
+
+**Not doing (yet):**
+
+- Cross-turn sampler penalty continuity. Each turn we build a fresh
+  sampler and re-prime it with the whole prompt; the previous turn's
+  post-generation sampler state is discarded. llama-server's slot carries
+  the sampler across turns; adding this is a polish pass if users report
+  penalty behaviour differing from the web UI.
+- Mid-sequence shift (context shift) when the cache fills. Out-of-scope
+  for v1; easy to add later via `llama_memory_seq_add` which we already
+  bind.
+- Explicit "reuse % this turn" telemetry in the UI. The data is readily
+  available (`firstNewIndex` vs. `promptTokens.Count`); surface it if the
+  perf win becomes the thing users care about measuring.
+

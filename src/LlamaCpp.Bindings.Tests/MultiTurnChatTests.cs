@@ -172,6 +172,129 @@ public class MultiTurnChatTests
     }
 
     [Fact]
+    public async Task Prefix_Reuse_Produces_Same_Output_As_Full_Rebuild()
+    {
+        // Correctness contract for ChatSession prefix-cache reuse: given
+        // identical prompt tokens and identical sampler seed, running
+        // GenerateAsync with firstNewIndex=0 (full rebuild) must produce the
+        // same stream as GenerateAsync with firstNewIndex=N when the KV
+        // already contains the first N tokens. This is the invariant that
+        // lets ChatSession skip re-decoding the common prefix each turn.
+        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
+
+        var vocab = _fx.Model.Vocab;
+        var tokens = vocab.Tokenize(
+            "The rain in Spain falls mainly on the plain, and the hills are alive.",
+            addSpecial: false, parseSpecial: false);
+        Assert.True(tokens.Length >= 8, "test prompt should be at least 8 tokens");
+        int maxGen = 8;
+
+        // Pass A: full rebuild, greedy sampling with fixed seed.
+        _fx.Context.ClearKvCache();
+        var outputA = new StringBuilder();
+        using (var samplerA = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 7).Build())
+        {
+            var genA = new LlamaGenerator(_fx.Context, samplerA);
+            await foreach (var p in genA.GenerateAsync(tokens, maxTokens: maxGen,
+                                                        firstNewIndex: 0)) outputA.Append(p);
+        }
+
+        // Pass B: split decode. Decode tokens[0..half-1] via a throwaway
+        // generator, trim the one bonus token it emitted, then run the
+        // real generator with firstNewIndex=half against a fresh sampler
+        // using the same seed as pass A.
+        int half = tokens.Length / 2;
+        var firstHalf = new int[half];
+        Array.Copy(tokens, firstHalf, half);
+
+        _fx.Context.ClearKvCache();
+        using (var throwaway = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 9999).Build())
+        {
+            var genThrow = new LlamaGenerator(_fx.Context, throwaway);
+            await foreach (var _ in genThrow.GenerateAsync(firstHalf, maxTokens: 1,
+                                                            firstNewIndex: 0)) { }
+        }
+        // Strip the throwaway's generated token so KV is exactly [0..half-1].
+        var trimmed = _fx.Context.RemoveSequenceRange(0, fromPosition: half, toPosition: -1);
+        if (!trimmed)
+        {
+            // Backend refused partial removal — test doesn't apply. (Compact
+            // SWA / quantised caches may reject this; UseFullSwaCache default
+            // is true so usually succeeds.)
+            Assert.True(true, "backend refused partial trim — prefix-reuse test not applicable");
+            return;
+        }
+
+        var outputB = new StringBuilder();
+        using (var samplerB = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 7).Build())
+        {
+            var genB = new LlamaGenerator(_fx.Context, samplerB);
+            await foreach (var p in genB.GenerateAsync(tokens, maxTokens: maxGen,
+                                                        firstNewIndex: half)) outputB.Append(p);
+        }
+
+        Assert.Equal(outputA.ToString(), outputB.ToString());
+    }
+
+    [Fact]
+    public async Task Decoding_After_Tail_Trim_Resumes_From_Trim_Position()
+    {
+        // This is the invariant prefix-cache reuse rides on: after a
+        // seq_rm(seq, K, -1) that succeeds, the next llama_batch_get_one
+        // decode should position its tokens starting at K, not at the
+        // pre-trim length. If this test ever fails we have to switch the
+        // ChatSession prefix-reuse path to explicit-position batches.
+        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
+        _fx.Context.ClearKvCache();
+
+        using var sampler = new LlamaSamplerBuilder()
+            .WithTemperature(0.7f).WithDistribution(seed: 41).Build();
+        var gen = new LlamaGenerator(_fx.Context, sampler);
+
+        // Step 1: decode a prompt + ~10 tokens. Captures (min=0, max=some N).
+        await foreach (var _ in gen.GenerateAsync("Count: one two three", maxTokens: 10,
+                                                   addSpecial: false, parseSpecial: false)) { }
+        var (_, maxBefore) = _fx.Context.SequencePositionRange(0);
+        Assert.NotNull(maxBefore);
+        int lenBefore = maxBefore!.Value + 1; // positions are 0-indexed inclusive
+
+        // Step 2: trim to half. Skip rest of test if backend refused.
+        int trimAt = lenBefore / 2;
+        if (!_fx.Context.RemoveSequenceRange(0, fromPosition: trimAt, toPosition: -1))
+        {
+            Assert.True(true, "backend refused mid-sequence trim — test does not apply");
+            return;
+        }
+        var (_, maxAfterTrim) = _fx.Context.SequencePositionRange(0);
+        Assert.Equal(trimAt - 1, maxAfterTrim);
+
+        // Step 3: decode one more piece through LlamaGenerator. If auto-
+        // positioning after seq_rm is correct, positions should extend from
+        // trimAt onward; the new max should be > trimAt-1 but <= trimAt + new.
+        int emittedSecond = 0;
+        await foreach (var _ in gen.GenerateAsync(" four", maxTokens: 5,
+                                                   addSpecial: false, parseSpecial: false))
+        {
+            emittedSecond++;
+        }
+        var (_, maxAfterResume) = _fx.Context.SequencePositionRange(0);
+        Assert.NotNull(maxAfterResume);
+        Assert.True(maxAfterResume > maxAfterTrim,
+            $"Decoding after seq_rm should extend positions from the trim point. " +
+            $"Got max={maxAfterResume}, expected > {maxAfterTrim}.");
+        // The new max must be close to trimAt + (new prompt tokens + generated) —
+        // if it landed near lenBefore + new, that's the bug we're guarding
+        // against (auto-positioning didn't reset).
+        Assert.True(maxAfterResume < lenBefore + 50,
+            $"Suspicious: decode resumed at an implausibly high position. " +
+            $"max={maxAfterResume}, lenBefore={lenBefore}. Possibly auto-positioning " +
+            $"didn't reset after seq_rm.");
+    }
+
+    [Fact]
     public async Task Removing_Tail_Trims_Sequence_Position_Range_When_Backend_Supports_It()
     {
         if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }

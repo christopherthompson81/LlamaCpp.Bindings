@@ -64,7 +64,11 @@ public sealed class LlamaGenerator
         var vocab = _context.Model.Vocab;
         var promptTokens = vocab.Tokenize(prompt, addSpecial, parseSpecial);
 
-        await foreach (var piece in GenerateAsync(promptTokens, maxTokens, renderSpecialPieces, cancellationToken)
+        await foreach (var piece in GenerateAsync(
+                                       promptTokens,
+                                       maxTokens: maxTokens,
+                                       renderSpecialPieces: renderSpecialPieces,
+                                       cancellationToken: cancellationToken)
                                        .ConfigureAwait(false))
         {
             yield return piece;
@@ -141,10 +145,23 @@ public sealed class LlamaGenerator
     /// tokens directly (e.g. from a chat-template pass) or splices prior
     /// conversation tokens.
     /// </summary>
+    /// <param name="firstNewIndex">
+    /// Index into <paramref name="promptTokens"/> of the first token not yet
+    /// decoded into the KV cache. Tokens at <c>[0, firstNewIndex)</c> are
+    /// assumed to be already present and are skipped by the prompt batch —
+    /// the caller is responsible for having decoded them previously (and for
+    /// having trimmed any stale suffix via
+    /// <see cref="LlamaContext.RemoveSequenceRange"/> if the cache had more
+    /// tokens than the common prefix). The sampler is still primed with the
+    /// full <paramref name="promptTokens"/>, so penalty/DRY state reflects the
+    /// whole visible prompt. Default 0 — decode the whole prompt fresh.
+    /// </param>
     public async IAsyncEnumerable<string> GenerateAsync(
         IReadOnlyList<int> promptTokens,
         int maxTokens = 512,
         bool renderSpecialPieces = false,
+        int firstNewIndex = 0,
+        Action<int>? onTokenDecoded = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(promptTokens);
@@ -152,26 +169,41 @@ public sealed class LlamaGenerator
         {
             throw new ArgumentException("Prompt must contain at least one token.", nameof(promptTokens));
         }
+        if (firstNewIndex < 0 || firstNewIndex > promptTokens.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(firstNewIndex),
+                $"firstNewIndex must be in [0, {promptTokens.Count}]; got {firstNewIndex}.");
+        }
 
         var vocab = _context.Model.Vocab;
 
-        // 1) Ingest the prompt as a single batch. llama_batch_get_one references
-        //    the caller's array directly, so we copy to a dedicated array we
-        //    control and pin for the call. Running the blocking native work on
-        //    a pool thread keeps UI callers responsive.
-        var promptArray = promptTokens as int[] ?? promptTokens.ToArray();
+        // 1) Ingest the suffix of the prompt that isn't already in the KV cache.
+        //    llama_batch_get_one references the caller's array directly, so we
+        //    copy to a dedicated array we control and pin for the call. When
+        //    the full prompt is already cached (firstNewIndex == Count),
+        //    llama_decode would reject an empty batch — the "must evaluate at
+        //    least one token" constraint — so we back off one token in that
+        //    case, mirroring llama.cpp/tools/server's handling.
+        int skipCount = firstNewIndex;
+        if (skipCount == promptTokens.Count && skipCount > 0) skipCount -= 1;
+
+        var suffixArray = new int[promptTokens.Count - skipCount];
+        for (int i = 0; i < suffixArray.Length; i++)
+        {
+            suffixArray[i] = promptTokens[skipCount + i];
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
-        await Task.Run(() => DecodePromptBatch(promptArray), cancellationToken).ConfigureAwait(false);
+        await Task.Run(() => DecodePromptBatch(suffixArray), cancellationToken).ConfigureAwait(false);
 
-        // Prime the sampler chain with prompt tokens. Mirrors llama.cpp's
-        // common_sampler_accept(.., accept_grammar=false) for prompt tokens:
-        // penalties (and any other history-aware sampler) must see the prompt
-        // so they treat repetition of prompt words as repetition. Grammar is
-        // intentionally NOT primed here — it only constrains generation, and
-        // since e1423ef the grammar is held outside the chain, so this loop
-        // can't accidentally touch it.
-        foreach (var t in promptArray) _sampler.Accept(t);
+        // Prime the sampler chain with the full prompt — even the part that
+        // was cached. Mirrors llama.cpp's common_sampler_accept(.., accept_grammar=false)
+        // for prompt tokens: penalties (and any other history-aware sampler)
+        // must see the prompt so they treat repetition of prompt words as
+        // repetition. Grammar is intentionally NOT primed here — it only
+        // constrains generation, and since e1423ef the grammar is held
+        // outside the chain, so this loop can't accidentally touch it.
+        foreach (var t in promptTokens) _sampler.Accept(t);
 
         // 2) Sampling loop. At each step: sample one token from the logits of
         //    the last decoded position; accept it into sampler state; exit on
@@ -231,8 +263,12 @@ public sealed class LlamaGenerator
             }
 
             // Feed the accepted token back into the context as a 1-token batch
-            // so the next decode attends over it.
+            // so the next decode attends over it. The onTokenDecoded callback
+            // fires immediately after — callers (e.g. ChatSession's prompt-
+            // cache tracker) can append to their "what's in the KV" log here
+            // knowing the token is now actually in the cache.
             await Task.Run(() => DecodeSingleToken(nextToken), cancellationToken).ConfigureAwait(false);
+            onTokenDecoded?.Invoke(nextToken);
 
             emitted++;
         }

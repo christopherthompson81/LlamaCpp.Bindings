@@ -106,7 +106,7 @@ src/
 - [x] **Copy message** — `CopyMessageCommand` → `DialogService.CopyToClipboardAsync` (wraps `Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync`). Button bound in the bubble template.
 - [x] **Edit message** — inline edit surface (TextBox + Save / Cancel) replaces the read-only bubble body while `MessageViewModel.IsEditing`. On Save: user message → truncate downstream + regenerate; assistant message → overwrite in place. `EditDraft` is the buffer; `Content` only commits on Save.
 - [x] **Regenerate response** — `RegenerateMessageCommand` truncates the transcript starting at the target message (or right after, if the target was a user turn), `ClearKv()`s the session, and re-enters `GenerateAssistantReplyAsync`. Extracted from `SendAsync` so both share the same streaming path.
-- [~] **Continue generation** — deferred. Precursor: `LlamaGenerator` support for resuming from a position in an already-decoded transcript (we re-prefill each turn today — see `docs/webui_parity_investigation.md` Run 1 item 6 "Prefix-cache reuse").
+- [~] **Continue generation** — deferred. The binding-level precursor (prefix-cache reuse) landed in `docs/webui_parity_investigation.md` Run 2, and `LlamaGenerator.GenerateAsync(tokens, firstNewIndex=tokens.Count)` + the back-off-by-one path already "continue from current KV"; what's still missing is the UI plumbing — a "Continue" button on the last assistant bubble that re-enters `GenerateAssistantReplyAsync` with the partial reply treated as the assistant prefix.
 - [x] **Delete message** — `DeleteMessageCommand` removes the single clicked message (not downstream) and clears the KV cache. No confirmation dialog yet.
 - [~] **Branch navigation** — deferred. Precursor: tree-shaped transcript with `parentId` on each turn.
 - [~] **Fork conversation** — deferred. Trivial wrapper once branching or a "duplicate-up-to-here" command lands.
@@ -382,7 +382,7 @@ All deferred — the app currently uses text labels (Copy / Edit / Delete etc.).
 - [-] **Multi-model routing** — N/A. Single model per profile-load; no "model per conversation" concept.
 - [~] **MCP resource browser** — deferred (phase 2 with MCP client).
 - [~] **Tool calling / prompt picker** — deferred (phase 2 with MCP).
-- [~] **Continue generation** — deferred. Precursor: `LlamaGenerator` resume-from-offset support.
+- [~] **Continue generation** — deferred. `LlamaGenerator` resume-from-offset support is in (landed with prefix-cache reuse in webui_parity_investigation.md Run 2); remaining work is a "Continue" button wiring into `GenerateAssistantReplyAsync`.
 - [x] **Token count estimation** — `UserInputTokenCount` on the main VM, debounced 150 ms, shown under the compose box.
 
 ### Visual implementation notes
