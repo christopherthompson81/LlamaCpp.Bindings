@@ -15,5 +15,19 @@ public sealed record Conversation
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
     public bool Pinned { get; init; } = false;
+
+    /// <summary>
+    /// Every turn in the tree — not just the active path. Each turn links
+    /// upward via <see cref="ChatTurn.ParentId"/>. The ordering here is
+    /// insertion order; siblings can be recovered by grouping on ParentId.
+    /// </summary>
     public List<ChatTurn> Turns { get; init; } = new();
+
+    /// <summary>
+    /// Points at the leaf of the currently-active branch; the UI renders
+    /// the path from root to this leaf. Null for empty conversations and
+    /// for legacy files written before tree support — the loader infers
+    /// it from the last entry in <see cref="Turns"/> in that case.
+    /// </summary>
+    public Guid? ActiveLeafId { get; init; }
 }

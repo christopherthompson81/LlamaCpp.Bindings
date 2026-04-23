@@ -399,7 +399,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             foreach (var a in PendingAttachments) user.Attachments.Add(a);
         }
         PendingAttachments.Clear();
-        conv.Messages.Add(user);
+        conv.AppendToActivePath(user);
         conv.UpdatedAt = DateTimeOffset.UtcNow;
 
         // Auto-title off the first user message so the sidebar item is legible.
@@ -433,7 +433,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             // Done, so the user's manual toggle during/after streaming wins.
             IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
         };
-        conv.Messages.Add(assistant);
+        conv.AppendToActivePath(assistant);
         conv.UpdatedAt = DateTimeOffset.UtcNow;
         RebuildFilteredConversations();
 
@@ -521,7 +521,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                     }
                 }
 
-                conv.Messages.Add(new MessageViewModel
+                conv.AppendToActivePath(new MessageViewModel
                 {
                     Role = "tool",
                     ToolName = call.Name,
@@ -538,7 +538,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 IsStreaming = true,
                 IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
             };
-            conv.Messages.Add(next);
+            conv.AppendToActivePath(next);
 
             var sampler = _activeLoadedProfile!.SamplerPanel.SnapshotSampler();
             var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
@@ -797,8 +797,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     /// <summary>
     /// Commit the inline edit. For a user message we also truncate everything
     /// after it and regenerate — the previous assistant reply was conditioned
-    /// on the old prompt, so keeping it would be inconsistent. For an
-    /// assistant message we just overwrite its text.
+    /// on the old prompt. In the tree model this is a *branch*, not a
+    /// destructive truncate — we add the edited text as a sibling user
+    /// turn and then regenerate a fresh assistant reply under it. The
+    /// original user turn and its assistant reply stay in the tree,
+    /// reachable via the sibling-nav control. Assistant edits just
+    /// overwrite text in place (no branch).
     /// </summary>
     [RelayCommand]
     private async Task CommitEditMessageAsync(MessageViewModel? msg)
@@ -807,23 +811,28 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         var conv = SelectedConversation;
         var newText = msg.EditDraft;
-        msg.Content = newText;
-        msg.IsEditing = false;
-        msg.EditDraft = string.Empty;
 
         if (msg.IsUser)
         {
-            var idx = conv.Messages.IndexOf(msg);
-            if (idx < 0) return;
-            // Remove everything after the edited user message.
-            while (conv.Messages.Count > idx + 1) conv.Messages.RemoveAt(idx + 1);
+            msg.IsEditing = false;
+            msg.EditDraft = string.Empty;
+
+            // Sibling user turn with the new content + copied attachments.
+            var replacement = new MessageViewModel { Role = "user", Content = newText };
+            foreach (var a in msg.Attachments) replacement.Attachments.Add(a);
+            conv.AddSibling(msg.Id, replacement);
+
             Session?.ClearKv();
             if (Session is not null) await GenerateAssistantReplyAsync(conv);
             else SaveConversations();
         }
         else
         {
-            // Assistant edit: overwrite in place, no regeneration.
+            // Assistant edit: overwrite in place, no regeneration, no new
+            // branch — we're just correcting text the user doesn't like.
+            msg.Content = newText;
+            msg.IsEditing = false;
+            msg.EditDraft = string.Empty;
             conv.UpdatedAt = DateTimeOffset.UtcNow;
             SaveConversations();
         }
@@ -834,75 +843,202 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     {
         if (msg is null || SelectedConversation is null) return;
         var conv = SelectedConversation;
-        var idx = conv.Messages.IndexOf(msg);
-        if (idx < 0) return;
 
-        var downstreamCount = conv.Messages.Count - idx - 1;
+        int siblingCount = conv.GetSiblingCount(msg.Id);
+        bool hasSiblings = siblingCount > 1;
+        int subtreeSize = CountSubtree(conv, msg.Id);
+        int descendants = subtreeSize - 1;
 
-        // Single message with nothing after it: delete straight away, no
-        // need to interrupt the user with a dialog for an obvious case.
-        if (downstreamCount == 0)
+        // Leaf with nothing around it — a single isolated turn. Obvious
+        // delete, no prompt worth interrupting the user for.
+        if (!hasSiblings && descendants == 0)
         {
-            conv.Messages.RemoveAt(idx);
+            conv.RemoveSubtree(msg.Id);
             Session?.ClearKv();
             SaveConversations();
             return;
         }
 
-        var choice = await DialogService.ConfirmAsync(
-            "Delete message",
-            $"There {(downstreamCount == 1 ? "is" : "are")} {downstreamCount} message(s) after this one. " +
-            "Keeping them would leave the conversation inconsistent with the deleted turn.",
-            new (string, string, bool, bool)[]
+        // Build options driven by the tree shape around this message. With
+        // siblings, the interesting choice is "this version" (drop this
+        // branch) vs "all versions" (drop every alternative at this fork
+        // point). Without siblings, only the subtree-delete is meaningful.
+        var options = new List<(string Key, string Label, bool Destructive, bool Primary)>
+        {
+            ("cancel", "Cancel", false, false),
+        };
+
+        string msgBody;
+        int allVersionsTurnCount = 0;
+        if (hasSiblings)
+        {
+            var plurSelf = subtreeSize == 1 ? "turn" : "turns";
+            options.Add(("this", $"Delete this version ({subtreeSize} {plurSelf})", true, true));
+
+            // Footprint of nuking every alternative branch at this fork.
+            foreach (var sib in GetSiblings(conv, msg.Id))
             {
-                ("cancel",     "Cancel",                        false, false),
-                ("just",       "Just this",                     true,  false),
-                ("downstream", $"This + {downstreamCount} after", true,  true),
-            });
+                allVersionsTurnCount += CountSubtree(conv, sib.Id);
+            }
+            var plurAll = allVersionsTurnCount == 1 ? "turn" : "turns";
+            options.Add(("all", $"Delete all {siblingCount} versions ({allVersionsTurnCount} {plurAll})", true, false));
+
+            msgBody = descendants > 0
+                ? $"This message has {siblingCount - 1} sibling branch(es). Its own branch contains {descendants} descendant(s)."
+                : $"This message has {siblingCount - 1} sibling branch(es).";
+        }
+        else
+        {
+            var plur = subtreeSize == 1 ? "turn" : "turns";
+            options.Add(("subtree", $"Delete subtree ({subtreeSize} {plur})", true, true));
+            msgBody = $"This message has {descendants} descendant(s) below it in the tree.";
+        }
+
+        var choice = await DialogService.ConfirmAsync("Delete message", msgBody, options);
 
         switch (choice)
         {
-            case "just":
-                conv.Messages.RemoveAt(idx);
+            case "this":
+            case "subtree":
+                conv.RemoveSubtree(msg.Id);
                 break;
-            case "downstream":
-                while (conv.Messages.Count > idx) conv.Messages.RemoveAt(idx);
+            case "all":
+                // Snapshot the sibling ids before we start mutating —
+                // RemoveSubtree edits AllMessages, which would invalidate
+                // a lazy enumeration mid-iteration.
+                var siblingIds = GetSiblings(conv, msg.Id)
+                    .Select(s => s.Id)
+                    .ToList();
+                foreach (var id in siblingIds)
+                {
+                    conv.RemoveSubtree(id);
+                }
                 break;
             default:
-                return;   // cancelled
+                return;
         }
 
         Session?.ClearKv();
         SaveConversations();
     }
 
+    private static IEnumerable<MessageViewModel> GetSiblings(ConversationViewModel conv, Guid messageId)
+    {
+        var node = conv.FindById(messageId);
+        if (node is null) yield break;
+        foreach (var m in conv.AllMessages)
+        {
+            if (m.ParentId == node.ParentId) yield return m;
+        }
+    }
+
+    private static int CountSubtree(ConversationViewModel conv, Guid rootId)
+    {
+        var ids = new HashSet<Guid> { rootId };
+        bool grew;
+        do
+        {
+            grew = false;
+            foreach (var m in conv.AllMessages)
+            {
+                if (m.ParentId is { } p && ids.Contains(p) && ids.Add(m.Id)) grew = true;
+            }
+        } while (grew);
+        return ids.Count;
+    }
+
     /// <summary>
-    /// Remove the given assistant message (and anything after it) and
-    /// re-stream a new reply against the preceding transcript. If called on
-    /// a user message we re-generate the assistant reply *to* that user turn.
+    /// Regenerate a reply. In the tree model this creates a sibling
+    /// (parented to the target's parent) rather than truncating, so the
+    /// original reply stays reachable via sibling-nav. Called on an
+    /// assistant turn: add a new assistant sibling with the same parent
+    /// user turn. Called on a user turn: same idea — add an assistant
+    /// sibling as a direct child, preserving whichever assistant reply
+    /// was already there.
     /// </summary>
     [RelayCommand]
     private async Task RegenerateMessageAsync(MessageViewModel? msg)
     {
         if (msg is null || Session is null || SelectedConversation is null) return;
         var conv = SelectedConversation;
-        var idx = conv.Messages.IndexOf(msg);
-        if (idx < 0) return;
 
-        // Truncate: drop this message (assistant or user) and everything past
-        // it. If it was a user turn we leave nothing for the model to reply
-        // to, which we guard against below.
-        var truncateFrom = msg.IsUser ? idx + 1 : idx;
-        while (conv.Messages.Count > truncateFrom) conv.Messages.RemoveAt(truncateFrom);
-
-        if (conv.Messages.Count == 0 || !conv.Messages[^1].IsUser)
+        // Determine the parent-user turn the new assistant reply should
+        // hang from. If msg is assistant → its parent is the user. If
+        // msg is user → msg itself is the user.
+        var userAnchorId = msg.IsAssistant ? msg.ParentId : msg.Id;
+        if (userAnchorId is null)
         {
             StatusText = "Nothing to regenerate from.";
             return;
         }
 
+        // Hang the new assistant bubble off the user anchor — if there's
+        // already an assistant reply on that anchor, the two become
+        // siblings, and the new one wins as the active leaf.
+        var newAssistant = new MessageViewModel
+        {
+            Role = "assistant",
+            IsStreaming = true,
+            IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
+        };
+        conv.AddChildOf(userAnchorId, newAssistant);
+
         Session.ClearKv();
-        await GenerateAssistantReplyAsync(conv);
+        await StreamIntoNewAssistantAsync(conv, newAssistant);
+    }
+
+    /// <summary>
+    /// Drive the generation stream into an already-placed assistant
+    /// bubble. Peels the nested-await shape of
+    /// <see cref="GenerateAssistantReplyAsync"/> apart so the regenerate
+    /// path can use it directly on a node it already parented into the tree.
+    /// </summary>
+    private async Task StreamIntoNewAssistantAsync(
+        ConversationViewModel conv, MessageViewModel assistant)
+    {
+        if (Session is null || _activeLoadedProfile is null) return;
+
+        conv.UpdatedAt = DateTimeOffset.UtcNow;
+        RebuildFilteredConversations();
+
+        var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
+        var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
+
+        var transcript = new List<ChatTurn>();
+        if (!string.IsNullOrWhiteSpace(_activeLoadedProfile.SystemPrompt))
+        {
+            transcript.Add(new ChatTurn(
+                Id: Guid.NewGuid(),
+                Role: TurnRole.System,
+                Content: _activeLoadedProfile.SystemPrompt,
+                State: TurnState.Complete,
+                CreatedAt: DateTimeOffset.UtcNow));
+        }
+        // Active path minus the streaming assistant placeholder.
+        transcript.AddRange(conv.Messages
+            .Take(conv.Messages.Count - 1)
+            .Select(m => new ChatTurn(
+                Id: Guid.NewGuid(),
+                Role: m.Role switch
+                {
+                    "user" => TurnRole.User,
+                    "tool" => TurnRole.Tool,
+                    _ => TurnRole.Assistant,
+                },
+                Content: m.Content,
+                State: TurnState.Complete,
+                CreatedAt: DateTimeOffset.UtcNow,
+                Attachments: m.Attachments.Count > 0
+                    ? new List<Attachment>(m.Attachments)
+                    : null)));
+
+        var tools = McpClientService.Instance.BuildToolsForTemplate();
+
+        await StreamIntoMessageAsync(
+            conv, assistant,
+            ct => Session.StreamAssistantReplyAsync(transcript, sampler, gen, tools, ct));
+
+        await MaybeExecuteToolCallsAsync(conv, assistant);
     }
 
     /// <summary>
@@ -960,6 +1096,51 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private void Cancel() => _generationCts?.Cancel();
 
     /// <summary>
+    /// Generate an assistant reply to a dangling user turn — the case
+    /// where the active path's leaf is a user message with no response
+    /// (e.g. after deleting the previous assistant reply, or cancelling
+    /// mid-stream before any tokens landed). The remedy card in the
+    /// compose area binds to this command and is only visible when
+    /// <see cref="ConversationViewModel.NeedsAssistantReply"/> is true.
+    /// </summary>
+    [RelayCommand]
+    private async Task GenerateReplyAsync()
+    {
+        if (Session is null || SelectedConversation is null) return;
+        if (IsGenerating) return;
+        if (!SelectedConversation.NeedsAssistantReply) return;
+        await GenerateAssistantReplyAsync(SelectedConversation);
+    }
+
+    /// <summary>
+    /// Switch to the previous branch at this point in the tree. Finds the
+    /// sibling just before <paramref name="msg"/> (cyclic), then points
+    /// ActiveLeafId at that sibling's deepest descendant — restoring the
+    /// full path through that branch, not just the single turn.
+    /// </summary>
+    [RelayCommand]
+    private void SwitchPrevSibling(MessageViewModel? msg)
+    {
+        if (msg is null || SelectedConversation is null) return;
+        var prev = SelectedConversation.PrevSibling(msg.Id);
+        if (prev is null) return;
+        SelectedConversation.SwitchToSibling(prev.Id);
+        Session?.ClearKv();
+        SaveConversations();
+    }
+
+    [RelayCommand]
+    private void SwitchNextSibling(MessageViewModel? msg)
+    {
+        if (msg is null || SelectedConversation is null) return;
+        var next = SelectedConversation.NextSibling(msg.Id);
+        if (next is null) return;
+        SelectedConversation.SwitchToSibling(next.Id);
+        Session?.ClearKv();
+        SaveConversations();
+    }
+
+    /// <summary>
     /// Handle a "/command" typed in the compose box. Returns true if the
     /// command matched; false to let <see cref="SendAsync"/> send the
     /// text through to the model as-is.
@@ -974,7 +1155,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             case "/reset":
                 if (SelectedConversation is not null)
                 {
-                    SelectedConversation.Messages.Clear();
+                    SelectedConversation.ClearAll();
                     Session?.ClearKv();
                     SaveConversations();
                     ToastService.Info("Conversation cleared");
@@ -1020,7 +1201,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private void ClearConversation()
     {
         if (SelectedConversation is null) return;
-        SelectedConversation.Messages.Clear();
+        SelectedConversation.ClearAll();
         Session?.ClearKv();
         StatusText = IsModelLoaded ? "Conversation cleared." : "Not loaded.";
         SaveConversations();

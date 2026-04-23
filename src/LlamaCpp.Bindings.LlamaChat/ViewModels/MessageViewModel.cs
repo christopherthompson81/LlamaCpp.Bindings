@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -8,6 +9,56 @@ namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 
 public partial class MessageViewModel : ObservableObject
 {
+    /// <summary>
+    /// Stable identity for this turn. Used as the source of
+    /// <see cref="ParentId"/> links, the <c>ActiveLeafId</c> pointer on
+    /// <see cref="ConversationViewModel"/>, and sibling-navigation
+    /// commands. Assigned once at construction and never rotated — the
+    /// persistence layer round-trips it so branches reconstruct correctly.
+    /// </summary>
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    /// <summary>
+    /// Id of the turn immediately preceding this one in the tree. Null for
+    /// the root turn of a conversation. A set of turns sharing the same
+    /// <see cref="ParentId"/> are siblings — alternative branches the user
+    /// can switch between via the sibling-nav control.
+    /// </summary>
+    [ObservableProperty] private Guid? _parentId;
+
+    /// <summary>
+    /// Back-reference to the owning conversation, set by
+    /// <see cref="ConversationViewModel"/> when this message is inserted
+    /// into the tree. Lets the bubble template ask its conversation about
+    /// sibling counts / positions / navigation commands without threading
+    /// a conversation reference through every binding path. Nullable only
+    /// during the narrow window between construction and insertion.
+    /// </summary>
+    public ConversationViewModel? Owner { get; internal set; }
+
+    /// <summary>Number of siblings this message has (including itself). 1 when there are no alternatives.</summary>
+    public int SiblingCount => Owner?.GetSiblingCount(Id) ?? 1;
+
+    /// <summary>1-based index of this message among its siblings, ordered by creation order.</summary>
+    public int SiblingIndex => Owner?.GetSiblingIndex(Id) ?? 1;
+
+    /// <summary>True if this message has at least one sibling branch.</summary>
+    public bool HasSiblings => SiblingCount > 1;
+
+    /// <summary>
+    /// Emitted by <see cref="ConversationViewModel"/> when the tree changes
+    /// in a way that could affect this message's sibling display. Fires on
+    /// tree mutations (append, retry-as-sibling, subtree delete) and path
+    /// switches. Message subscribers re-raise PropertyChanged for their
+    /// sibling-derived bindings.
+    /// </summary>
+    internal void NotifySiblingInfoChanged()
+    {
+        OnPropertyChanged(nameof(SiblingCount));
+        OnPropertyChanged(nameof(SiblingIndex));
+        OnPropertyChanged(nameof(HasSiblings));
+    }
+
     [ObservableProperty] private string _role = string.Empty;
     [ObservableProperty] private string _content = string.Empty;
     [ObservableProperty] private string? _reasoning;
@@ -199,6 +250,8 @@ public partial class MessageViewModel : ObservableObject
     {
         var vm = new MessageViewModel
         {
+            Id = t.Id,
+            ParentId = t.ParentId,
             Role = t.Role.ToString().ToLowerInvariant(),
             Content = t.Content,
             Reasoning = t.Reasoning,

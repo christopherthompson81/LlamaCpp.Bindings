@@ -38,6 +38,18 @@
         <Setter Property="FontSize" Value="{DynamicResource FontSizeLg}" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <!-- TextBlocks inside Buttons inherit the Button's Foreground rather
+         than the global window Foreground. Without this, a plain <TextBlock
+         Text="Load" /> inside a primary Button (near-white background in
+         dark theme) renders near-white-on-near-white — invisible. The
+         base `TextBlock` style above forces Foreground to the window-level
+         resource, which is what breaks the Button's normal inheritance
+         path; this override pulls it back. Explicit classes like `.muted`
+         still win because they're more specific. -->
+    <Style Selector="Button TextBlock">
+        <Setter Property="Foreground" Value="{Binding $parent[Button].Foreground}" />
+    </Style>
+
     <Style Selector="TextBlock.section">
         <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
         <Setter Property="FontWeight" Value="SemiBold" />

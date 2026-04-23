@@ -71,7 +71,7 @@ src/
 - [x] **Create new conversation** — `NewConversationCommand` (Ctrl+N / Ctrl+Shift+O, File menu item). Auto-selects the new one.
 - [x] **Rename conversation** — inline edit in sidebar (right-click → Rename or F2-style — currently via context menu). Commit on Enter/LostFocus via `EndRenameCommand`; Escape cancels.
 - [x] **Delete conversation** — right-click → Delete, or Chat menu. No confirmation yet — deferred.
-- [~] **Conversation tree/forking** — deferred. Needs `Conversation` refactored from a flat `Turns` list to a tree with `parentId` on each turn, plus sibling-nav UI.
+- [x] **Conversation tree/forking** — `ChatTurn` gained `ParentId` and `Conversation` gained `ActiveLeafId`. `ConversationViewModel` keeps `AllMessages` as the full tree and recomputes `Messages` as the root → active-leaf path. Tree mutations go through `AppendToActivePath` / `AddSibling` / `AddChildOf` / `RemoveSubtree` / `SwitchToSibling`. Legacy files with flat `Turns` load as a linear chain (each turn parented to the previous one's Id). Forking happens implicitly on Retry and user-message edits.
 - [x] **Search conversations** — case-insensitive substring on Title + Preview, live-filtered as user types. Ctrl+K focuses the search box.
 - [x] **Active conversation highlight** — `ListBox.SelectedItem` bound to `SelectedConversation`; styled via existing `ListBoxItem:selected` accent from Theme/Controls.
 - [x] **Conversation preview text** — `ConversationViewModel.Preview` — first user message truncated to 80 chars, rendered below the title in the sidebar.
@@ -108,8 +108,8 @@ src/
 - [x] **Regenerate response** — `RegenerateMessageCommand` truncates the transcript starting at the target message (or right after, if the target was a user turn), `ClearKv()`s the session, and re-enters `GenerateAssistantReplyAsync`. Extracted from `SendAsync` so both share the same streaming path.
 - [x] **Continue generation** — `ContinueMessageCommand` on `MainWindowViewModel`, Continue button in the assistant bubble's action bar. Routes to `ChatSession.StreamContinuationAsync` which trims the last cached token from the KV and re-decodes it via the back-off-by-one path in `LlamaGenerator` so sampler priming happens against the full cached history. Only the *last* assistant message can be extended — clicking it on an older bubble surfaces a toast; extending an older message would require re-decoding the intervening transcript which the v1 flow doesn't cover.
 - [x] **Delete message** — `DeleteMessageCommand` removes the single clicked message (not downstream) and clears the KV cache. No confirmation dialog yet.
-- [~] **Branch navigation** — deferred. Precursor: tree-shaped transcript with `parentId` on each turn.
-- [~] **Fork conversation** — deferred. Trivial wrapper once branching or a "duplicate-up-to-here" command lands.
+- [x] **Branch navigation** — compact `‹ N/M ›` pill in each bubble header when `HasSiblings` is true. `SwitchPrevSibling` / `SwitchNextSibling` commands on `MainWindowViewModel` cycle through the siblings; `ConversationViewModel.SwitchToSibling` walks down to the most-recently-added leaf of the chosen branch so switching restores the sub-path through that branch, not just the single turn. Clears the KV cache on switch — next turn re-prefills through the prefix-cache path.
+- [x] **Fork conversation** — effectively covered by the tree + sibling-nav pair. Retry on an assistant creates a sibling reply under the same user turn; editing a user message adds a sibling user turn + regenerates under it. Both preserve the original branch. A dedicated "duplicate up to here into a new conversation" command is still a nice-to-have but not load-bearing.
 - [x] **Message deletion dialog** — `DialogService.ConfirmAsync` + `ConfirmDialog` (multi-choice). `DeleteMessageAsync` skips the prompt when there's nothing downstream; otherwise offers Cancel / Just this / This + N after.
 
 ### 5. Compose

@@ -223,7 +223,7 @@
             </Border>
 
             <!-- ================= Main (messages + compose) ================= -->
-            <Grid Grid.Column="1" RowDefinitions="*,Auto" Margin="16,12,16,12">
+            <Grid Grid.Column="1" RowDefinitions="*,Auto,Auto" Margin="16,12,16,12">
 
                 <!-- Empty-conversation placeholder: centred hint when the
                      selected conversation has no messages. Sits behind the
@@ -248,12 +248,46 @@
                                         Classes.assistant="{Binding IsAssistant}"
                                         Classes.tool="{Binding IsTool}">
                                     <StackPanel Spacing="6">
-                                        <!-- Role header — user/assistant only. The tool
+                                        <!-- Role header row — user/assistant only. The tool
                                              bubble's Expander.Header carries 🔧 + the tool
-                                             name instead, so this line would duplicate it. -->
-                                        <TextBlock Text="{Binding Role}" Classes="xs"
-                                                   FontWeight="SemiBold" Opacity="0.7"
-                                                   IsVisible="{Binding !IsTool}" />
+                                             name instead, so this line would duplicate it.
+                                             When the message has siblings a compact
+                                             ‹ N/M › nav pill appears next to the role label. -->
+                                        <StackPanel Orientation="Horizontal" Spacing="8"
+                                                    IsVisible="{Binding !IsTool}">
+                                            <TextBlock Text="{Binding Role}" Classes="xs"
+                                                       FontWeight="SemiBold" Opacity="0.7"
+                                                       VerticalAlignment="Center" />
+                                            <Border Classes="toolchip"
+                                                    IsVisible="{Binding HasSiblings}"
+                                                    Padding="2,0"
+                                                    VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal" Spacing="2">
+                                                    <Button Classes="ghost icon sm"
+                                                            ToolTip.Tip="Previous branch"
+                                                            Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).SwitchPrevSiblingCommand}"
+                                                            CommandParameter="{Binding}">
+                                                        <TextBlock Text="‹" FontSize="14"
+                                                                   VerticalAlignment="Center" />
+                                                    </Button>
+                                                    <TextBlock Classes="xs muted"
+                                                               VerticalAlignment="Center"
+                                                               Text="{Binding SiblingIndex, StringFormat='{}{0}'}" />
+                                                    <TextBlock Classes="xs muted" Text="/"
+                                                               VerticalAlignment="Center" />
+                                                    <TextBlock Classes="xs muted"
+                                                               VerticalAlignment="Center"
+                                                               Text="{Binding SiblingCount}" />
+                                                    <Button Classes="ghost icon sm"
+                                                            ToolTip.Tip="Next branch"
+                                                            Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).SwitchNextSiblingCommand}"
+                                                            CommandParameter="{Binding}">
+                                                        <TextBlock Text="›" FontSize="14"
+                                                                   VerticalAlignment="Center" />
+                                                    </Button>
+                                                </StackPanel>
+                                            </Border>
+                                        </StackPanel>
 
                                         <!-- Read-only view -->
                                         <StackPanel Spacing="6" IsVisible="{Binding !IsEditing}">
@@ -479,7 +513,35 @@
                     </ScrollViewer>
                 </Panel>
 
-                <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,*,Auto"
+                <!-- Remedy card: surfaces when the active path's leaf is a
+                     user turn (e.g. after deleting the last assistant reply
+                     with a tree-aware delete). One click regenerates a
+                     fresh reply; the card hides itself once something answers
+                     the dangling turn. -->
+                <Border Grid.Row="1"
+                        Classes="panel"
+                        Padding="12,8"
+                        Margin="0,8,0,0"
+                        CornerRadius="{DynamicResource RadiusMd}"
+                        IsVisible="{Binding SelectedConversation.NeedsAssistantReply}">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Classes="sm muted"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="The last turn is a user message with no reply." />
+                        <Button Grid.Column="1" Classes="sm"
+                                Command="{Binding GenerateReplyCommand}"
+                                IsEnabled="{Binding IsModelLoaded}"
+                                ToolTip.Tip="Generate a reply to the dangling user turn">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Path Classes="icon xs" Data="{StaticResource IconPlay}" />
+                                <TextBlock Text="Generate reply" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="2" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,*,Auto"
                       Margin="0,12,0,0">
                     <!-- Pending-attachment thumbnail strip. Sits above the
                          TextBox and only renders when there's something to
