@@ -63,7 +63,7 @@ src/
 - [x] **Sidebar header/footer slots** — RowDefinitions="Auto,Auto,*" lays out New button + Search + list; footer slot free for future (model-status pill, etc.).
 - [x] **Main content inset** — main area uses `Margin="16,12,16,12"` for consistent gutter against the sidebar.
 - [~] **Tooltip provider context** — deferred. Waits on a tooltip component pass; no visible tooltips in the app yet.
-- [~] **Error boundary** — deferred. Generation/load errors are caught in-VM and surfaced to the status bar + `last-error.log`; a proper boundary wrapping the whole app would catch view-tree exceptions too.
+- [x] **Error boundary** — `Services/ErrorBoundary.cs` hooks the three exception funnels at `App.OnFrameworkInitializationCompleted`: `Dispatcher.UIThread.UnhandledException` (UI-thread handlers, layout, rendering), `TaskScheduler.UnobservedTaskException` (forgotten async tasks), and `AppDomain.CurrentDomain.UnhandledException` (last-chance fatals from any thread). UI-thread exceptions are marked `Handled=true` and routed to the error splash; unobserved-task exceptions are treated as non-fatal (log + toast). VMs can also call `ErrorBoundary.ReportFatal`/`ReportNonFatal` to funnel caught exceptions through the same path. `Services/ErrorLog.cs` is the single writer for `last-error.log` (replaces the inline writer that used to live in `MainWindowViewModel.GenerateAssistantReplyAsync`).
 
 ### 2. Conversation list
 
@@ -193,7 +193,7 @@ This whole section is shaped by webui's server-side model-list model. We use per
 - [-] **Empty state — no conversations** — N/A. Ctor guarantees at least one conversation exists (auto-creates a blank one if the store is empty), so the sidebar is never empty in practice.
 - [x] **Empty state — empty conversation** — centred "Start the conversation" hint shown in the chat area when `SelectedConversation.Messages.Count == 0`; sits behind the ScrollViewer.
 - [x] **Loading splash screen** — full-window overlay on MainWindow, visible while `IsBusy`. Shows profile name + indeterminate progress bar + current status text. Blocks interaction during `ChatSession.Load`.
-- [~] **Error splash screen** — deferred. Precursor: formal app-wide error boundary. For now load/generation errors go to `last-error.log` + status bar.
+- [x] **Error splash screen** — `Views/ErrorSplashDialog.cs`, opened by `Services/ErrorBoundary` on any UI-thread unhandled exception (or by an explicit `ReportFatal` call). Heading + one-line exception summary + optional context + scrollable full trace in a monospace TextBox. Actions: Copy details (full trace + timestamp to clipboard), Try to continue (dismiss — may or may not leave a usable app, the splash warns about this), Close application (clean `Shutdown()`). Escape = close. Reentrancy-guarded so a cascade of errors shows only the first splash.
 - [-] **Onboarding / feature tour** — N/A. Probably out of scope for a developer-oriented desktop app.
 
 ## Visual theming

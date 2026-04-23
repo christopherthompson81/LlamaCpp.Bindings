@@ -719,23 +719,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             PostFlush();
 
-            // Dump the full exception (type + message + full stack trace) to a
-            // sibling of the app's other config files. Writing a file is safe
-            // from any thread — only touching VM state needs the UI thread.
-            try
-            {
-                var dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "LlamaChat");
-                Directory.CreateDirectory(dir);
-                File.WriteAllText(
-                    Path.Combine(dir, "last-error.log"),
-                    $"{DateTime.Now:o}\n" +
-                    $"{ex.GetType().FullName}: {ex.Message}\n\n" +
-                    $"{ex}\n");
-            }
-            catch { /* ignore log-write failures */ }
-            System.Diagnostics.Debug.WriteLine($"[error] {ex}");
+            ErrorLog.Write(ex, "generation");
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
