@@ -16,6 +16,7 @@ namespace LlamaCpp.Bindings.Native;
 internal static partial class NativeMethods
 {
     private const string LibName = "llama";
+    private const string LibMtmd = "mtmd";
 
     // ----- Backend lifecycle -----
 
@@ -609,4 +610,147 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibName)]
     internal static unsafe partial int llama_chat_builtin_templates(IntPtr* output, nuint len);
+
+    // ----- Multimodal (libmtmd) -----
+    //
+    // mtmd is a sibling library to libllama (libmtmd.so / mtmd.dll /
+    // libmtmd.dylib). The NativeLibraryResolver knows how to map "mtmd" to
+    // the correct on-disk filename per OS. C names mirrored verbatim per
+    // CLAUDE.md.
+
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_default_marker();
+
+    [LibraryImport(LibMtmd)]
+    internal static partial mtmd_context_params mtmd_context_params_default();
+
+    [LibraryImport(LibMtmd, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr mtmd_init_from_file(
+        string mmproj_fname,
+        IntPtr text_model,
+        mtmd_context_params ctx_params);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial void mtmd_free(IntPtr ctx);
+
+    [LibraryImport(LibMtmd)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool mtmd_decode_use_non_causal(IntPtr ctx);
+
+    [LibraryImport(LibMtmd)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool mtmd_decode_use_mrope(IntPtr ctx);
+
+    [LibraryImport(LibMtmd)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool mtmd_support_vision(IntPtr ctx);
+
+    [LibraryImport(LibMtmd)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool mtmd_support_audio(IntPtr ctx);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial int mtmd_get_audio_sample_rate(IntPtr ctx);
+
+    // Bitmap
+    [LibraryImport(LibMtmd)]
+    internal static unsafe partial IntPtr mtmd_bitmap_init(uint nx, uint ny, byte* data);
+
+    [LibraryImport(LibMtmd)]
+    internal static unsafe partial IntPtr mtmd_bitmap_init_from_audio(nuint n_samples, float* data);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial uint mtmd_bitmap_get_nx(IntPtr bitmap);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial uint mtmd_bitmap_get_ny(IntPtr bitmap);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_bitmap_get_data(IntPtr bitmap);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial nuint mtmd_bitmap_get_n_bytes(IntPtr bitmap);
+
+    [LibraryImport(LibMtmd)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool mtmd_bitmap_is_audio(IntPtr bitmap);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial void mtmd_bitmap_free(IntPtr bitmap);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_bitmap_get_id(IntPtr bitmap);
+
+    [LibraryImport(LibMtmd, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial void mtmd_bitmap_set_id(IntPtr bitmap, string id);
+
+    // Input chunks
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_input_chunks_init();
+
+    [LibraryImport(LibMtmd)]
+    internal static partial nuint mtmd_input_chunks_size(IntPtr chunks);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_input_chunks_get(IntPtr chunks, nuint idx);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial void mtmd_input_chunks_free(IntPtr chunks);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial mtmd_input_chunk_type mtmd_input_chunk_get_type(IntPtr chunk);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial nuint mtmd_input_chunk_get_n_tokens(IntPtr chunk);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial int mtmd_input_chunk_get_n_pos(IntPtr chunk);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_input_chunk_get_id(IntPtr chunk);
+
+    // Tokenize: output chunks get filled from (text + image markers + bitmaps).
+    // Status: 0 ok, 1 bitmap count != marker count, 2 image preprocessing failure.
+    [LibraryImport(LibMtmd)]
+    internal static unsafe partial int mtmd_tokenize(
+        IntPtr ctx,
+        IntPtr output,
+        in mtmd_input_text text,
+        IntPtr* bitmaps,
+        nuint n_bitmaps);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial void mtmd_log_set(IntPtr log_callback, IntPtr user_data);
+
+    // ----- Multimodal helper (libmtmd) -----
+
+    [LibraryImport(LibMtmd)]
+    internal static partial void mtmd_helper_log_set(IntPtr log_callback, IntPtr user_data);
+
+    [LibraryImport(LibMtmd, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr mtmd_helper_bitmap_init_from_file(IntPtr ctx, string fname);
+
+    [LibraryImport(LibMtmd)]
+    internal static unsafe partial IntPtr mtmd_helper_bitmap_init_from_buf(
+        IntPtr ctx, byte* buf, nuint len);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial nuint mtmd_helper_get_n_tokens(IntPtr chunks);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial int mtmd_helper_get_n_pos(IntPtr chunks);
+
+    // Runs mtmd_encode + llama_decode across every chunk. Returns 0 on success,
+    // forwards the first nonzero status otherwise. NOT thread-safe (documented
+    // on the header). new_n_past receives the post-prefill position.
+    [LibraryImport(LibMtmd)]
+    internal static partial int mtmd_helper_eval_chunks(
+        IntPtr ctx,
+        IntPtr lctx,
+        IntPtr chunks,
+        int n_past,
+        int seq_id,
+        int n_batch,
+        [MarshalAs(UnmanagedType.I1)] bool logits_last,
+        out int new_n_past);
 }

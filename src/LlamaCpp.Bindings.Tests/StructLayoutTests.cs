@@ -86,6 +86,44 @@ public class StructLayoutTests
     }
 
     [Fact]
+    public void MtmdContextParams_Size_Matches_Pinned()
+    {
+        Assert.Equal(56, Unsafe.SizeOf<mtmd_context_params>());
+    }
+
+    [Theory]
+    [InlineData(nameof(mtmd_context_params.use_gpu),            0)]
+    [InlineData(nameof(mtmd_context_params.print_timings),      1)]
+    [InlineData(nameof(mtmd_context_params.n_threads),          4)]
+    [InlineData(nameof(mtmd_context_params.image_marker),       8)]
+    [InlineData(nameof(mtmd_context_params.media_marker),      16)]
+    [InlineData(nameof(mtmd_context_params.flash_attn_type),   24)]
+    [InlineData(nameof(mtmd_context_params.warmup),            28)]
+    [InlineData(nameof(mtmd_context_params.image_min_tokens),  32)]
+    [InlineData(nameof(mtmd_context_params.image_max_tokens),  36)]
+    [InlineData(nameof(mtmd_context_params.cb_eval),           40)]
+    [InlineData(nameof(mtmd_context_params.cb_eval_user_data), 48)]
+    public void MtmdContextParams_Field_Offsets_Match_Pinned(string field, int expected)
+    {
+        Assert.Equal(expected, Marshal.OffsetOf<mtmd_context_params>(field).ToInt32());
+    }
+
+    [Fact]
+    public void MtmdInputText_Size_Matches_Pinned()
+    {
+        Assert.Equal(16, Unsafe.SizeOf<mtmd_input_text>());
+    }
+
+    [Theory]
+    [InlineData(nameof(mtmd_input_text.text),          0)]
+    [InlineData(nameof(mtmd_input_text.add_special),   8)]
+    [InlineData(nameof(mtmd_input_text.parse_special), 9)]
+    public void MtmdInputText_Field_Offsets_Match_Pinned(string field, int expected)
+    {
+        Assert.Equal(expected, Marshal.OffsetOf<mtmd_input_text>(field).ToInt32());
+    }
+
+    [Fact]
     public void NativeLayout_Verify_Does_Not_Throw()
     {
         // If this throws the binding refuses to load, so it must pass whenever

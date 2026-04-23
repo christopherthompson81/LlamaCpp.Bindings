@@ -85,6 +85,26 @@ MODELS: list[Model] = [
         approx_size_mb=366,
         why="Cross-encoder reranker — classifier head (ClassifierOutputCount > 1).",
     ),
+    Model(
+        key="smolvlm-256m-text",
+        filename="SmolVLM-256M-Instruct-Q8_0.gguf",
+        url=(
+            "https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF"
+            "/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf"
+        ),
+        approx_size_mb=200,
+        why="Smallest vision-capable text model — for multimodal smoke tests.",
+    ),
+    Model(
+        key="smolvlm-256m-mmproj",
+        filename="mmproj-SmolVLM-256M-Instruct-Q8_0.gguf",
+        url=(
+            "https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF"
+            "/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf"
+        ),
+        approx_size_mb=90,
+        why="SmolVLM-256M vision projector — paired with smolvlm-256m-text.",
+    ),
 ]
 
 BY_KEY = {m.key: m for m in MODELS}

@@ -15,9 +15,9 @@
 set -euo pipefail
 
 LLAMA_DIR="${1:-$HOME/Programming/llama.cpp}"
-if [[ ! -d "$LLAMA_DIR/include" ]] || [[ ! -d "$LLAMA_DIR/ggml/include" ]]; then
+if [[ ! -d "$LLAMA_DIR/include" ]] || [[ ! -d "$LLAMA_DIR/ggml/include" ]] || [[ ! -d "$LLAMA_DIR/tools/mtmd" ]]; then
     echo "error: not a llama.cpp checkout: $LLAMA_DIR" >&2
-    echo "       expected include/ and ggml/include/ subdirs" >&2
+    echo "       expected include/, ggml/include/, tools/mtmd/ subdirs" >&2
     exit 1
 fi
 
@@ -29,6 +29,7 @@ trap 'rm -f "$TMPBIN"' EXIT
 cc -std=c11 -O0 -Wno-error \
     -I"$LLAMA_DIR/include" \
     -I"$LLAMA_DIR/ggml/include" \
+    -I"$LLAMA_DIR/tools/mtmd" \
     "$SRC" -o "$TMPBIN"
 
 "$TMPBIN"

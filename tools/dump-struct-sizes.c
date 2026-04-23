@@ -9,6 +9,7 @@
 #include <stdio.h>
 
 #include "llama.h"
+#include "mtmd.h"
 
 #define SZ(T)      printf("    \"sizeof_" #T "\": %zu,\n",      sizeof(T))
 #define OFF(T, F)  printf("    \"offsetof_" #T "__" #F "\": %zu,\n", offsetof(T, F))
@@ -122,6 +123,26 @@ int main(void) {
     OFF(llama_token_data_array, size);
     OFF(llama_token_data_array, selected);
     OFF(llama_token_data_array, sorted);
+
+    // ----- mtmd_context_params -----
+    SZ(struct mtmd_context_params);
+    OFF(struct mtmd_context_params, use_gpu);
+    OFF(struct mtmd_context_params, print_timings);
+    OFF(struct mtmd_context_params, n_threads);
+    OFF(struct mtmd_context_params, image_marker);
+    OFF(struct mtmd_context_params, media_marker);
+    OFF(struct mtmd_context_params, flash_attn_type);
+    OFF(struct mtmd_context_params, warmup);
+    OFF(struct mtmd_context_params, image_min_tokens);
+    OFF(struct mtmd_context_params, image_max_tokens);
+    OFF(struct mtmd_context_params, cb_eval);
+    OFF(struct mtmd_context_params, cb_eval_user_data);
+
+    // ----- mtmd_input_text -----
+    SZ(struct mtmd_input_text);
+    OFF(struct mtmd_input_text, text);
+    OFF(struct mtmd_input_text, add_special);
+    OFF(struct mtmd_input_text, parse_special);
 
     // Terminator to keep JSON valid without worrying about trailing comma.
     printf("    \"_end\": 0\n");

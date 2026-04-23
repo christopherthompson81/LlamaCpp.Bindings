@@ -245,6 +245,55 @@ internal struct llama_token_data_array
     public const int ExpectedSize = 32;
 }
 
+// ----- Multimodal (mtmd.h) -----
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct mtmd_context_params
+{
+    // 0   | bool use_gpu
+    [MarshalAs(UnmanagedType.I1)] public bool use_gpu;
+    // 1   | bool print_timings
+    [MarshalAs(UnmanagedType.I1)] public bool print_timings;
+    // 2-3 | padding
+    // 4   | int n_threads
+    public int n_threads;
+    // 8   | const char * image_marker — deprecated, prefer media_marker.
+    public IntPtr image_marker;
+    // 16  | const char * media_marker
+    public IntPtr media_marker;
+    // 24  | enum llama_flash_attn_type flash_attn_type
+    public llama_flash_attn_type flash_attn_type;
+    // 28  | bool warmup
+    [MarshalAs(UnmanagedType.I1)] public bool warmup;
+    // 29-31 | padding
+    // 32  | int image_min_tokens
+    public int image_min_tokens;
+    // 36  | int image_max_tokens
+    public int image_max_tokens;
+    // 40  | ggml_backend_sched_eval_callback cb_eval — fn ptr, IntPtr.Zero ok.
+    public IntPtr cb_eval;
+    // 48  | void * cb_eval_user_data
+    public IntPtr cb_eval_user_data;
+
+    public const int ExpectedSize = 56;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct mtmd_input_text
+{
+    // 0  | const char * text — UTF-8, caller-owned. We pin a byte span and
+    //      assign the address directly, so this stays as IntPtr rather than a
+    //      marshaled string.
+    public IntPtr text;
+    // 8  | bool add_special
+    [MarshalAs(UnmanagedType.I1)] public bool add_special;
+    // 9  | bool parse_special
+    [MarshalAs(UnmanagedType.I1)] public bool parse_special;
+    // 10-15 | padding
+
+    public const int ExpectedSize = 16;
+}
+
 /// <summary>
 /// Struct layout assertions. Called once from <see cref="LlamaBackend"/>'s
 /// static constructor before any native call is made. If the native struct
@@ -265,6 +314,8 @@ internal static class NativeLayout
         Check<llama_logit_bias>(llama_logit_bias.ExpectedSize);
         Check<llama_token_data>(llama_token_data.ExpectedSize);
         Check<llama_token_data_array>(llama_token_data_array.ExpectedSize);
+        Check<mtmd_context_params>(mtmd_context_params.ExpectedSize);
+        Check<mtmd_input_text>(mtmd_input_text.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct

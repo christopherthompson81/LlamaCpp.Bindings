@@ -75,8 +75,12 @@ public static class LlamaBackend
         {
             if (!_initialized) return;
 
-            // Detach our log callback before the backend goes away.
+            // Detach our log callback before the backend goes away. mtmd has
+            // its own log sink (set in InstallLogSink if mtmd is loaded) — we
+            // try to detach it too, but swallow failures so shutdown works
+            // even when libmtmd was never loaded.
             NativeMethods.llama_log_set(IntPtr.Zero, IntPtr.Zero);
+            TryClearMtmdLogSink();
             _logCallback = null;
             _logSink = null;
 
@@ -100,6 +104,50 @@ public static class LlamaBackend
         _logCallback = LogTrampoline;
         var fp = Marshal.GetFunctionPointerForDelegate(_logCallback);
         NativeMethods.llama_log_set(fp, IntPtr.Zero);
+        TrySetMtmdLogSink(fp);
+    }
+
+    // mtmd is a separately loaded native library. If this install happens
+    // before anything has touched the mtmd surface, libmtmd may not be loaded
+    // and the P/Invoke will fail with a DllNotFoundException. Consumers that
+    // never use multimodal shouldn't pay that cost, so the mtmd log plumbing
+    // is best-effort — wrap the call and swallow load failures.
+    private static void TrySetMtmdLogSink(IntPtr fp)
+    {
+        try
+        {
+            NativeMethods.mtmd_log_set(fp, IntPtr.Zero);
+            NativeMethods.mtmd_helper_log_set(fp, IntPtr.Zero);
+        }
+        catch (DllNotFoundException)
+        {
+            // libmtmd not present or not loaded yet — caller will wire up the
+            // sink themselves the first time they construct an MtmdContext.
+        }
+    }
+
+    private static void TryClearMtmdLogSink()
+    {
+        try
+        {
+            NativeMethods.mtmd_log_set(IntPtr.Zero, IntPtr.Zero);
+            NativeMethods.mtmd_helper_log_set(IntPtr.Zero, IntPtr.Zero);
+        }
+        catch (DllNotFoundException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Re-binds the installed log sink to libmtmd. Called from
+    /// <see cref="MtmdContext"/>'s constructor so that mtmd logs show up even
+    /// when the library wasn't loaded at <see cref="Initialize"/> time.
+    /// </summary>
+    internal static void RebindMtmdLogSink()
+    {
+        if (_logCallback is null) return;
+        var fp = Marshal.GetFunctionPointerForDelegate(_logCallback);
+        TrySetMtmdLogSink(fp);
     }
 
     private static void LogTrampoline(ggml_log_level level, IntPtr text, IntPtr userData)

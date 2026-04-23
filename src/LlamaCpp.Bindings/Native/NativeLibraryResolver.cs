@@ -21,7 +21,6 @@ namespace LlamaCpp.Bindings.Native;
 /// </remarks>
 internal static class NativeLibraryResolver
 {
-    private const string LibName = "llama";
     private static int _registered;
 
     /// <summary>Call once at startup (from <c>LlamaBackend.Initialize</c>).</summary>
@@ -33,9 +32,11 @@ internal static class NativeLibraryResolver
 
     private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
     {
-        if (libraryName != LibName) return IntPtr.Zero; // not ours — let default resolver handle it
+        // Only intercept libraries we ship under runtimes/. Everything else
+        // goes to the default resolver unchanged.
+        if (libraryName != "llama" && libraryName != "mtmd") return IntPtr.Zero;
 
-        var probes = CandidatePaths(assembly);
+        var probes = CandidatePaths(assembly, libraryName);
         foreach (var candidate in probes)
         {
             if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out var handle))
@@ -49,10 +50,10 @@ internal static class NativeLibraryResolver
         return IntPtr.Zero;
     }
 
-    private static IEnumerable<string> CandidatePaths(Assembly assembly)
+    private static IEnumerable<string> CandidatePaths(Assembly assembly, string libraryName)
     {
         var rid = CurrentRid();
-        var filename = OsLibName();
+        var filename = OsLibName(libraryName);
 
         var baseDir = Path.GetDirectoryName(assembly.Location);
         if (!string.IsNullOrEmpty(baseDir))
@@ -89,10 +90,10 @@ internal static class NativeLibraryResolver
         return "unknown";
     }
 
-    private static string OsLibName()
+    private static string OsLibName(string libraryName)
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "llama.dll";
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))     return "libllama.dylib";
-        return "libllama.so"; // Linux and fallback
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return libraryName + ".dll";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))     return "lib" + libraryName + ".dylib";
+        return "lib" + libraryName + ".so"; // Linux and fallback
     }
 }

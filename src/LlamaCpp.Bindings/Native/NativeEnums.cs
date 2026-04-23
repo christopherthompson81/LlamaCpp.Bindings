@@ -133,6 +133,14 @@ internal enum ggml_log_level : int
     GGML_LOG_LEVEL_CONT  = 5,
 }
 
+// From tools/mtmd/mtmd.h — the kind of content a chunk carries.
+internal enum mtmd_input_chunk_type : int
+{
+    MTMD_INPUT_CHUNK_TYPE_TEXT  = 0,
+    MTMD_INPUT_CHUNK_TYPE_IMAGE = 1,
+    MTMD_INPUT_CHUNK_TYPE_AUDIO = 2,
+}
+
 // From ggml-cpu.h — consumed by llama_numa_init.
 internal enum ggml_numa_strategy : int
 {
