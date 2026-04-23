@@ -4,7 +4,9 @@ using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using LlamaCpp.Bindings.LlamaChat.ViewModels;
 
@@ -28,12 +30,31 @@ public partial class MainWindow : Window
         _streamScrollTimer.Tick += (_, _) => ScrollToEndIfEnabled();
 
         DataContextChanged += OnDataContextChanged;
+
+        // Drag-drop of image files onto the compose area. Listening on the
+        // window (with AllowDrop=true on the compose grid) lets the drop
+        // target catch file paths from the OS file manager.
+        AddHandler(DragDrop.DragOverEvent, OnComposeDragOver);
+        AddHandler(DragDrop.DropEvent, OnComposeDrop);
     }
 
-    // --- Compose (Enter sends; Shift+Enter newline) ---------------------
-    private void OnComposeKeyDown(object? sender, KeyEventArgs e)
+    // --- Compose (Enter sends; Shift+Enter newline; Ctrl+V may paste image) ---
+    private async void OnComposeKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || sender is not TextBox box) return;
+        if (sender is not TextBox box) return;
+
+        // Ctrl+V: try to intercept clipboard image before the TextBox handles
+        // it as text. If no image data is present, let the default paste run.
+        if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) != 0)
+        {
+            if (await TryPasteImageFromClipboardAsync())
+            {
+                e.Handled = true;
+            }
+            return;
+        }
+
+        if (e.Key != Key.Enter) return;
 
         if ((e.KeyModifiers & KeyModifiers.Shift) != 0)
         {
@@ -158,5 +179,74 @@ public partial class MainWindow : Window
         if (_vm?.AppSettings.AutoScroll != true) return;
         var scroll = this.FindControl<ScrollViewer>("ChatScroll");
         scroll?.ScrollToEnd();
+    }
+
+    // --- Compose: drag-drop + clipboard-paste image attachments ---------
+    //
+    // Drop target is the whole window. We only accept the drop when the model
+    // can consume images and the payload contains file paths. Any other
+    // payload (plain text, URIs, etc.) is ignored so the default TextBox
+    // paste behavior keeps working.
+
+    private void OnComposeDragOver(object? sender, DragEventArgs e)
+    {
+        if (_vm?.CanAttachImages == true &&
+            e.DataTransfer is { } xfer &&
+            xfer.Contains(DataFormat.File))
+        {
+            e.DragEffects = DragDropEffects.Copy;
+        }
+        else
+        {
+            e.DragEffects = DragDropEffects.None;
+        }
+    }
+
+    private void OnComposeDrop(object? sender, DragEventArgs e)
+    {
+        if (_vm is null || !_vm.CanAttachImages) return;
+        var xfer = e.DataTransfer;
+        if (xfer is null) return;
+
+        var files = xfer.TryGetFiles();
+        if (files is null) return;
+        foreach (var file in files)
+        {
+            var path = file.TryGetLocalPath();
+            if (!string.IsNullOrEmpty(path))
+            {
+                _vm.TryAddPendingImage(path);
+            }
+        }
+        e.Handled = true;
+    }
+
+    // Clipboard image paste: intercept Ctrl+V in the compose TextBox. If the
+    // clipboard has a bitmap payload AND the model supports attachments, we
+    // re-encode it as PNG bytes and add as an attachment. Any other payload
+    // falls through to the TextBox's normal text paste.
+    private async System.Threading.Tasks.Task<bool> TryPasteImageFromClipboardAsync()
+    {
+        if (_vm is null || !_vm.CanAttachImages) return false;
+        var clipboard = Clipboard;
+        if (clipboard is null) return false;
+
+        try
+        {
+            var bitmap = await clipboard.TryGetBitmapAsync();
+            if (bitmap is null) return false;
+
+            using var ms = new System.IO.MemoryStream();
+            bitmap.Save(ms);
+            var bytes = ms.ToArray();
+            if (bytes.Length == 0) return false;
+
+            _vm.AddPendingImageBytes(bytes, "image/png", fileName: null);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

@@ -85,6 +85,7 @@ public partial class ConversationViewModel : ObservableObject
             State: TurnState.Complete,
             CreatedAt: UpdatedAt,
             Reasoning: m.Reasoning,
-            Stats: null)).ToList(),
+            Stats: null,
+            Attachments: m.Attachments.Count > 0 ? new System.Collections.Generic.List<Attachment>(m.Attachments) : null)).ToList(),
     };
 }

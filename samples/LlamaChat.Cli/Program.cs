@@ -5,12 +5,17 @@ using LlamaCpp.Bindings;
 // one file, no MVVM, native logs go straight to stderr so we can see what
 // llama.cpp is complaining about when things break.
 //
-// Usage:
-//   dotnet run --project samples/LlamaChat.Cli -- [--model PATH] [--ctx N]
-//                                                 [--temp F] [--seed N]
-//                                                 [--gpu-layers N] [--verbose]
+// Two modes depending on flags:
+//   - Text REPL (default): --model PATH [--ctx N] [--temp F] [--seed N]
+//                          [--gpu-layers N] [--verbose]
+//   - Multimodal single-shot:
+//       --model PATH --mmproj PATH --image PATH [--prompt TEXT]
+//       [--image-max-tokens N] [--cpu-encode] [--ctx N] [--gpu-layers N]
+//     Exercises the exact MtmdContext/EvalPromptAsync path the desktop app
+//     uses, so when something breaks in multimodal we can see the native
+//     log on stderr instead of relying on a managed-exception handler.
 //
-// In-session commands:
+// In-session commands (REPL mode only):
 //   /clear    — drop conversation history + KV cache
 //   /quit     — exit
 //   /help     — show commands
@@ -26,11 +31,16 @@ if (!File.Exists(opts.ModelPath))
     return 1;
 }
 
+// In multimodal single-shot mode we always want full native log output —
+// the whole point of this harness is to see what mtmd/clip print before
+// it explodes. Suppress otherwise.
+bool verboseLogs = opts.Verbose || opts.MmprojPath is not null;
+
 // Route native logs to stderr. In verbose mode every line; otherwise only
 // warnings and errors so an interactive session isn't drowned.
 LlamaBackend.Initialize(logSink: (level, msg) =>
 {
-    if (opts.Verbose || level is LlamaLogLevel.Warn or LlamaLogLevel.Error)
+    if (verboseLogs || level is LlamaLogLevel.Warn or LlamaLogLevel.Error)
     {
         Console.Error.WriteLine($"[native:{level}] {msg}");
     }
@@ -63,11 +73,9 @@ if (string.IsNullOrEmpty(template))
     Console.Error.WriteLine("Warning: model has no embedded chat template; using plain role prefixes.");
 }
 
-var history = new List<ChatMessage>();
 var sessionCts = new CancellationTokenSource();
-
+CancellationTokenSource? turnCts = null; // mutated in the REPL loop below
 // Ctrl+C: if generating, cancel the turn. Otherwise exit cleanly.
-CancellationTokenSource? turnCts = null;
 Console.CancelKeyPress += (_, ev) =>
 {
     if (turnCts is not null && !turnCts.IsCancellationRequested)
@@ -82,6 +90,89 @@ Console.CancelKeyPress += (_, ev) =>
         sessionCts.Cancel();
     }
 };
+
+// =====================================================================
+// Multimodal single-shot mode. Fires once, prints, exits. Used to
+// reproduce crashes in the mtmd path outside of the desktop app where
+// stderr survives and we can attach a debugger if needed.
+// =====================================================================
+if (opts.MmprojPath is not null && opts.ImagePath is not null)
+{
+    if (!File.Exists(opts.MmprojPath))
+    {
+        Console.Error.WriteLine($"mmproj file not found: {opts.MmprojPath}");
+        return 1;
+    }
+    if (!File.Exists(opts.ImagePath))
+    {
+        Console.Error.WriteLine($"image file not found: {opts.ImagePath}");
+        return 1;
+    }
+
+    Console.Error.WriteLine($"Loading mmproj {opts.MmprojPath} (use_gpu={!opts.CpuEncode}) ...");
+    var mtmdParams = new MtmdContextParameters
+    {
+        UseGpu = !opts.CpuEncode,
+        Warmup = true,
+    };
+    if (opts.ImageMaxTokens is int cap) mtmdParams.ImageMaxTokens = cap;
+
+    using var mtmd = new MtmdContext(model, opts.MmprojPath, mtmdParams);
+    Console.Error.WriteLine(
+        $"Mtmd: vision={mtmd.SupportsVision}, audio={mtmd.SupportsAudio}, " +
+        $"mrope={mtmd.UsesMRope}, non_causal={mtmd.UsesNonCausalMask}, " +
+        $"marker='{mtmd.DefaultMediaMarker}'");
+
+    Console.Error.WriteLine($"Loading image {opts.ImagePath} ...");
+    using var bitmap = MtmdBitmap.FromFile(mtmd, opts.ImagePath);
+    Console.Error.WriteLine($"Bitmap: {bitmap.Width}x{bitmap.Height}, {bitmap.ByteCount} bytes");
+
+    var userText = opts.Prompt ?? "Describe this image.";
+    var userContent = $"{mtmd.DefaultMediaMarker}\n{userText}";
+
+    string renderedPrompt = RenderPrompt(template, new[] { new ChatMessage("user", userContent) });
+    Console.Error.WriteLine($"Prompt ({renderedPrompt.Length} chars):");
+    Console.Error.WriteLine("---");
+    Console.Error.WriteLine(renderedPrompt);
+    Console.Error.WriteLine("---");
+
+    Console.Error.WriteLine("Prefilling via mtmd_helper_eval_chunks ...");
+    var prefillCts = new CancellationTokenSource();
+    int newNPast;
+    try
+    {
+        newNPast = await mtmd.EvalPromptAsync(
+            context, renderedPrompt, new[] { bitmap },
+            nPast: 0, seqId: 0,
+            nBatch: (int)context.LogicalBatchSize,
+            logitsLast: true, addSpecial: false, parseSpecial: true,
+            prefillCts.Token);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"EvalPromptAsync threw: {ex.GetType().Name}: {ex.Message}");
+        return 1;
+    }
+    Console.Error.WriteLine($"Prefill done. n_past={newNPast}. Streaming reply ...");
+
+    using var samplerMm = new LlamaSamplerBuilder()
+        .WithTopK(40).WithTopP(0.9f).WithMinP(0.05f)
+        .WithTemperature(opts.Temperature)
+        .WithDistribution(opts.Seed)
+        .Build();
+    var generatorMm = new LlamaGenerator(context, samplerMm);
+
+    Console.Write("assistant> ");
+    await foreach (var piece in generatorMm.StreamFromCurrentStateAsync(
+        maxTokens: opts.MaxTokens, cancellationToken: sessionCts.Token))
+    {
+        Console.Write(piece);
+    }
+    Console.WriteLine();
+    return 0;
+}
+
+var history = new List<ChatMessage>();
 
 PrintBanner();
 
@@ -211,7 +302,12 @@ record Options(
     uint Seed,
     int MaxTokens,
     int GpuLayers,
-    bool Verbose)
+    bool Verbose,
+    string? MmprojPath,
+    string? ImagePath,
+    string? Prompt,
+    int? ImageMaxTokens,
+    bool CpuEncode)
 {
     public static Options Default() => new(
         ModelPath: "/mnt/data/models/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
@@ -220,7 +316,12 @@ record Options(
         Seed: 42,
         MaxTokens: 512,
         GpuLayers: -1,
-        Verbose: false);
+        Verbose: false,
+        MmprojPath: null,
+        ImagePath: null,
+        Prompt: null,
+        ImageMaxTokens: null,
+        CpuEncode: false);
 
     public static Options? Parse(string[] args)
     {
@@ -241,6 +342,12 @@ record Options(
                 case "--max":         o = o with { MaxTokens = int.Parse(Next(a)) }; break;
                 case "--gpu-layers":  o = o with { GpuLayers = int.Parse(Next(a)) }; break;
                 case "--verbose":     o = o with { Verbose = true }; break;
+                case "--mmproj":      o = o with { MmprojPath = Next(a) }; break;
+                case "--image":       o = o with { ImagePath = Next(a) }; break;
+                case "--prompt":      o = o with { Prompt = Next(a) }; break;
+                case "--image-max-tokens":
+                                      o = o with { ImageMaxTokens = int.Parse(Next(a)) }; break;
+                case "--cpu-encode":  o = o with { CpuEncode = true }; break;
                 case "-h":
                 case "--help":
                     Usage();
@@ -254,6 +361,15 @@ record Options(
         return o;
     }
 
-    static void Usage() => Console.Error.WriteLine(
-        "Usage: LlamaChat.Cli [--model PATH] [--ctx N] [--temp F] [--seed N] [--max N] [--gpu-layers N] [--verbose]");
+    static void Usage()
+    {
+        Console.Error.WriteLine("Usage:");
+        Console.Error.WriteLine("  Text REPL:");
+        Console.Error.WriteLine("    LlamaChat.Cli [--model PATH] [--ctx N] [--temp F] [--seed N]");
+        Console.Error.WriteLine("                  [--max N] [--gpu-layers N] [--verbose]");
+        Console.Error.WriteLine("  Multimodal single-shot:");
+        Console.Error.WriteLine("    LlamaChat.Cli --model PATH --mmproj PATH --image PATH [--prompt TEXT]");
+        Console.Error.WriteLine("                  [--image-max-tokens N] [--cpu-encode]");
+        Console.Error.WriteLine("                  [--ctx N] [--gpu-layers N] [--max N] [--seed N]");
+    }
 }

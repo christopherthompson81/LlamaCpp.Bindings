@@ -115,6 +115,36 @@ internal static class DialogService
         return result?.TryGetLocalPath();
     }
 
+    /// <summary>
+    /// Open-file picker for image attachments. Returns an array of local paths.
+    /// Returns an empty array on cancel.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> PickImageFilesAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return System.Array.Empty<string>();
+        var result = await owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Attach images",
+            AllowMultiple = true,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Images")
+                {
+                    Patterns = new[] { "*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp" },
+                    MimeTypes = new[] { "image/*" },
+                },
+                FilePickerFileTypes.All,
+            },
+        });
+        var paths = new List<string>(result.Count);
+        foreach (var file in result)
+        {
+            if (file.TryGetLocalPath() is { } p) paths.Add(p);
+        }
+        return paths;
+    }
+
     public static async Task<string?> PickGgufFileAsync()
     {
         var owner = Owner;

@@ -37,6 +37,25 @@
             <Button Grid.Column="2" Content="Browse..." Margin="4,0,0,0"
                     Command="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).BrowseModelPathCommand}" />
         </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*,Auto,Auto">
+            <TextBlock Grid.Column="0" Text="mmproj (optional)" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" Text="{Binding MmprojPath}"
+                     PlaceholderText="Vision/audio projector .gguf — required for image attachments" />
+            <Button Grid.Column="2" Content="Browse..." Margin="4,0,0,0"
+                    Command="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).BrowseMmprojPathCommand}" />
+            <Button Grid.Column="3" Content="Clear" Classes="ghost" Margin="4,0,0,0"
+                    Command="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).ClearMmprojPathCommand}" />
+        </Grid>
+        <CheckBox Content="Force vision encoder on CPU (fallback for buggy CUDA CLIP graphs, e.g. Qwen3-VL)"
+                  IsChecked="{Binding MmprojOnCpu}"
+                  IsEnabled="{Binding MmprojPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Min image tokens" VerticalAlignment="Center"
+                       ToolTip.Tip="0 = auto. Set to 1024+ for Qwen-VL grounding tasks." />
+            <NumericUpDown Grid.Column="1" Value="{Binding MmprojImageMinTokens}"
+                           Minimum="0" Maximum="4096" Increment="128" FormatString="F0"
+                           IsEnabled="{Binding MmprojPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </Grid>
 
         <TextBlock Classes="section" Text="Load" />
         <Grid Classes="row" ColumnDefinitions="130,*">

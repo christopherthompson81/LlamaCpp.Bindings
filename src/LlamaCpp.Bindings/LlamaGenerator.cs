@@ -72,6 +72,70 @@ public sealed class LlamaGenerator
     }
 
     /// <summary>
+    /// Stream generation from the context's current state, skipping the prompt
+    /// prefill + sampler priming. Use this when another code path (e.g.
+    /// <see cref="MtmdContext.EvalPromptAsync"/>) has already populated the KV
+    /// cache and left the last-position logits ready for sampling.
+    /// </summary>
+    /// <remarks>
+    /// No prompt tokens are fed to the sampler, so history-aware stages
+    /// (repetition penalty, presence penalty) start empty for this turn.
+    /// Matches mtmd-cli.cpp's behavior — the prompt contributes to the KV
+    /// cache but not to sampler history.
+    /// </remarks>
+    public async IAsyncEnumerable<string> StreamFromCurrentStateAsync(
+        int maxTokens = 512,
+        bool renderSpecialPieces = false,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (maxTokens <= 0) throw new ArgumentOutOfRangeException(nameof(maxTokens));
+
+        var vocab = _context.Model.Vocab;
+        var decoder = Encoding.UTF8.GetDecoder();
+        var charBuf = new char[64];
+        int emitted = 0;
+
+        while (emitted < maxTokens)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int nextToken = await Task.Run(() => _sampler.Sample(_context), cancellationToken).ConfigureAwait(false);
+
+            if (vocab.IsEndOfGeneration(nextToken))
+            {
+                int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
+                if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
+                yield break;
+            }
+
+            var pieceBytes = GetPieceBytes(nextToken, renderSpecialPieces);
+            if (pieceBytes.Length > 0)
+            {
+                int charCount = decoder.GetChars(pieceBytes, charBuf, flush: false);
+                while (charCount == 0 && pieceBytes.Length > charBuf.Length)
+                {
+                    Array.Resize(ref charBuf, pieceBytes.Length * 2);
+                    charCount = decoder.GetChars(pieceBytes, charBuf, flush: false);
+                }
+                if (charCount > 0) yield return new string(charBuf, 0, charCount);
+            }
+
+            if (_sampler.HasGrammar && _sampler.IsGrammarSatisfied(vocab))
+            {
+                int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
+                if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
+                yield break;
+            }
+
+            await Task.Run(() => DecodeSingleToken(nextToken), cancellationToken).ConfigureAwait(false);
+            emitted++;
+        }
+
+        int trailing = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
+        if (trailing > 0) yield return new string(charBuf, 0, trailing);
+    }
+
+    /// <summary>
     /// Like <see cref="GenerateAsync(string, int, bool, bool, bool, CancellationToken)"/>
     /// but starts from a pre-tokenized prompt. Useful when the host assembles
     /// tokens directly (e.g. from a chat-template pass) or splices prior

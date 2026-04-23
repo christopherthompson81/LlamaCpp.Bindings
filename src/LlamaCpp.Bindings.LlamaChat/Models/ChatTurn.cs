@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace LlamaCpp.Bindings.LlamaChat.Models;
 
@@ -13,7 +14,8 @@ public sealed record ChatTurn(
     TurnState State,
     DateTimeOffset CreatedAt,
     string? Reasoning = null,
-    TurnStats? Stats = null)
+    TurnStats? Stats = null,
+    List<Attachment>? Attachments = null)
 {
     public static ChatTurn NewUser(string content) =>
         new(Guid.NewGuid(), TurnRole.User, content, TurnState.Complete, DateTimeOffset.UtcNow);

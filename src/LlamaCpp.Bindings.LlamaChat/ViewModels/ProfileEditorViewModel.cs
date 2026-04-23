@@ -15,6 +15,9 @@ public partial class ProfileEditorViewModel : ObservableObject
 
     // --- Load settings ---
     [ObservableProperty] private string _modelPath = string.Empty;
+    [ObservableProperty] private string _mmprojPath = string.Empty;
+    [ObservableProperty] private bool _mmprojOnCpu;
+    [ObservableProperty] private decimal _mmprojImageMinTokens;
     [ObservableProperty] private decimal _contextSize = 4096m;
     [ObservableProperty] private decimal _gpuLayerCount = -1m;
     [ObservableProperty] private decimal _logicalBatchSize = 512m;
@@ -34,6 +37,9 @@ public partial class ProfileEditorViewModel : ObservableObject
         Name = profile.Name;
         SystemPrompt = profile.SystemPrompt;
         ModelPath = profile.Load.ModelPath;
+        MmprojPath = profile.Load.MmprojPath;
+        MmprojOnCpu = profile.Load.MmprojOnCpu;
+        MmprojImageMinTokens = profile.Load.MmprojImageMinTokens ?? 0;
         ContextSize = profile.Load.ContextSize;
         GpuLayerCount = profile.Load.GpuLayerCount;
         LogicalBatchSize = profile.Load.LogicalBatchSize;
@@ -48,6 +54,9 @@ public partial class ProfileEditorViewModel : ObservableObject
     public ModelLoadSettings SnapshotLoad() => new()
     {
         ModelPath = ModelPath,
+        MmprojPath = MmprojPath,
+        MmprojOnCpu = MmprojOnCpu,
+        MmprojImageMinTokens = MmprojImageMinTokens > 0 ? (int)MmprojImageMinTokens : null,
         ContextSize = (uint)ContextSize,
         GpuLayerCount = (int)GpuLayerCount,
         LogicalBatchSize = (uint)LogicalBatchSize,

@@ -20,16 +20,22 @@ public sealed class ChatSession : IDisposable
 {
     private readonly LlamaModel _model;
     private readonly LlamaContext _context;
+    private readonly MtmdContext? _mtmd;
     private readonly string? _chatTemplate;
 
     public LlamaModel Model => _model;
     public LlamaContext Context => _context;
+    public MtmdContext? Mtmd => _mtmd;
     public string? ChatTemplate => _chatTemplate;
 
-    private ChatSession(LlamaModel model, LlamaContext context, string? template)
+    /// <summary>True if this session can accept image attachments on user turns.</summary>
+    public bool SupportsImages => _mtmd?.SupportsVision == true;
+
+    private ChatSession(LlamaModel model, LlamaContext context, MtmdContext? mtmd, string? template)
     {
         _model = model;
         _context = context;
+        _mtmd = mtmd;
         _chatTemplate = template;
     }
 
@@ -45,6 +51,7 @@ public sealed class ChatSession : IDisposable
         });
 
         LlamaContext? context = null;
+        MtmdContext? mtmd = null;
         try
         {
             context = new LlamaContext(model, new LlamaContextParameters
@@ -56,16 +63,31 @@ public sealed class ChatSession : IDisposable
                 OffloadKQV = settings.OffloadKQV,
                 FlashAttention = settings.FlashAttention,
             });
+
+            if (!string.IsNullOrWhiteSpace(settings.MmprojPath) && System.IO.File.Exists(settings.MmprojPath))
+            {
+                var mtmdParams = new MtmdContextParameters
+                {
+                    UseGpu = !settings.MmprojOnCpu,
+                };
+                if (settings.MmprojImageMinTokens is int minTokens)
+                {
+                    mtmdParams.ImageMinTokens = minTokens;
+                }
+                mtmd = new MtmdContext(model, settings.MmprojPath, mtmdParams);
+            }
         }
         catch
         {
+            mtmd?.Dispose();
+            context?.Dispose();
             model.Dispose();
             throw;
         }
 
         var template = model.GetChatTemplate();
         DumpChatTemplate(template);
-        return new ChatSession(model, context, template);
+        return new ChatSession(model, context, mtmd, template);
     }
 
     /// <summary>
@@ -104,7 +126,20 @@ public sealed class ChatSession : IDisposable
         GenerationSettings generation,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var prompt = RenderPromptForCompletion(transcript);
+        // Gather attachments in transcript order. When any turn has images and
+        // the session has a loaded MtmdContext, we take the multimodal branch:
+        // prefill via mtmd_helper_eval_chunks (which encodes images + text),
+        // then generate from the primed KV. Otherwise fall through to the
+        // text-only tokenize+decode path.
+        var bitmaps = new List<MtmdBitmap>();
+        bool hasAttachments = false;
+        foreach (var t in transcript)
+        {
+            if (t.Attachments is { Count: > 0 }) { hasAttachments = true; break; }
+        }
+        bool multimodal = hasAttachments && _mtmd is not null && _mtmd.SupportsVision;
+
+        var prompt = RenderPromptForCompletion(transcript, multimodal ? _mtmd!.DefaultMediaMarker : null);
 
         // v1 cache policy: clear and re-decode the full transcript every turn.
         // O(total tokens) per turn, correct, trivially debuggable. Prefix-cache
@@ -131,13 +166,55 @@ public sealed class ChatSession : IDisposable
         TimeSpan? promptTime = null;
         int completionTokens = 0;
 
-        var stream = generator.GenerateAsync(
-            prompt,
-            maxTokens: generation.MaxTokens,
-            addSpecial: false,
-            parseSpecial: true,
-            cancellationToken: cancellationToken);
+        IAsyncEnumerable<string> stream;
 
+        if (multimodal)
+        {
+            // Decode image/audio bytes into native bitmaps on the background
+            // thread that eval_chunks runs on — cheap for JPEGs, would be
+            // O(seconds) for huge PNGs.
+            foreach (var t in transcript)
+            {
+                if (t.Attachments is null) continue;
+                foreach (var a in t.Attachments)
+                {
+                    if (!a.IsImage) continue;
+                    bitmaps.Add(MtmdBitmap.FromBytes(_mtmd!, a.Data));
+                }
+            }
+
+            try
+            {
+                await _mtmd!.EvalPromptAsync(
+                    _context, prompt, bitmaps,
+                    nPast: 0, seqId: 0,
+                    nBatch: (int)_context.LogicalBatchSize,
+                    logitsLast: true,
+                    addSpecial: false, parseSpecial: true,
+                    cancellationToken);
+            }
+            catch
+            {
+                foreach (var b in bitmaps) b.Dispose();
+                throw;
+            }
+
+            stream = generator.StreamFromCurrentStateAsync(
+                maxTokens: generation.MaxTokens,
+                cancellationToken: cancellationToken);
+        }
+        else
+        {
+            stream = generator.GenerateAsync(
+                prompt,
+                maxTokens: generation.MaxTokens,
+                addSpecial: false,
+                parseSpecial: true,
+                cancellationToken: cancellationToken);
+        }
+
+        try
+        {
         await foreach (var piece in stream)
         {
             if (promptTime is null)
@@ -172,24 +249,47 @@ public sealed class ChatSession : IDisposable
         var genTime = promptTime.HasValue ? total - promptTime.Value : total;
 
         yield return new StreamEvent.Done(completionTokens, promptTime ?? TimeSpan.Zero, genTime);
+        }
+        finally
+        {
+            foreach (var b in bitmaps) b.Dispose();
+        }
     }
 
-    private string RenderPromptForCompletion(IReadOnlyList<ChatTurn> transcript)
+    /// <summary>
+    /// Apply the chat template. If <paramref name="mediaMarker"/> is non-null
+    /// and a turn has attachments, prepends one marker per attachment to that
+    /// turn's content — mtmd_tokenize scans the rendered prompt for the marker
+    /// and splices the corresponding image chunk into the token stream.
+    /// </summary>
+    private string RenderPromptForCompletion(IReadOnlyList<ChatTurn> transcript, string? mediaMarker)
     {
+        string Expand(ChatTurn t)
+        {
+            if (mediaMarker is null || t.Attachments is not { Count: > 0 }) return t.Content;
+            var sb = new StringBuilder();
+            for (int i = 0; i < t.Attachments.Count; i++)
+            {
+                sb.Append(mediaMarker).Append('\n');
+            }
+            sb.Append(t.Content);
+            return sb.ToString();
+        }
+
         if (string.IsNullOrEmpty(_chatTemplate))
         {
             // Model has no embedded template. Fall back to naked role-prefixed concat.
             var sb = new StringBuilder();
             foreach (var t in transcript)
             {
-                sb.Append(RoleLabel(t.Role)).Append(": ").AppendLine(t.Content);
+                sb.Append(RoleLabel(t.Role)).Append(": ").AppendLine(Expand(t));
             }
             sb.Append("assistant: ");
             return sb.ToString();
         }
 
         var messages = transcript
-            .Select(t => new ChatMessage(RoleLabel(t.Role), t.Content))
+            .Select(t => new ChatMessage(RoleLabel(t.Role), Expand(t)))
             .ToArray();
         return LlamaChatTemplate.Apply(_chatTemplate, messages, addAssistantPrefix: true);
     }
@@ -204,6 +304,7 @@ public sealed class ChatSession : IDisposable
 
     public void Dispose()
     {
+        _mtmd?.Dispose();
         _context.Dispose();
         _model.Dispose();
     }

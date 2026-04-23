@@ -67,6 +67,21 @@ public partial class SettingsWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private async Task BrowseMmprojPathAsync()
+    {
+        if (SelectedProfile is null) return;
+        var path = await DialogService.PickGgufFileAsync();
+        if (!string.IsNullOrEmpty(path)) SelectedProfile.MmprojPath = path;
+    }
+
+    [RelayCommand]
+    private void ClearMmprojPath()
+    {
+        if (SelectedProfile is null) return;
+        SelectedProfile.MmprojPath = string.Empty;
+    }
+
+    [RelayCommand]
     private void Save()
     {
         try

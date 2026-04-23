@@ -52,9 +52,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     // Session
     // ============================================================
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend))]
+    [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend), nameof(CanAttachImages))]
     [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand),
-                                 nameof(UnloadCommand), nameof(ShowModelInfoCommand))]
+                                 nameof(UnloadCommand), nameof(ShowModelInfoCommand),
+                                 nameof(AttachImagesCommand))]
     private ChatSession? _session;
 
     [ObservableProperty]
@@ -77,6 +78,18 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     /// <summary>Token count of <see cref="UserInput"/> for the currently loaded vocab, debounced.</summary>
     [ObservableProperty] private int _userInputTokenCount;
+
+    /// <summary>
+    /// Images the user has added via the attach button, drag-drop, or clipboard
+    /// paste for the next send. Drained on <see cref="SendAsync"/>; each image
+    /// moves from here onto the outgoing user <see cref="MessageViewModel"/>.
+    /// </summary>
+    public ObservableCollection<Attachment> PendingAttachments { get; } = new();
+
+    public bool HasPendingAttachments => PendingAttachments.Count > 0;
+
+    /// <summary>Disables the paperclip when the loaded model can't consume images.</summary>
+    public bool CanAttachImages => Session?.SupportsImages == true;
 
     private readonly Avalonia.Threading.DispatcherTimer _tokenCountTimer = new()
     {
@@ -116,6 +129,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     // ============================================================
     public MainWindowViewModel()
     {
+        PendingAttachments.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasPendingAttachments));
+        };
+
         AppSettings = new AppSettingsViewModel(AppSettingsStore.Load());
         // Apply theme once on startup based on the persisted setting.
         // Subsequent changes through the Settings panel are caught by
@@ -346,6 +364,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         var conv = SelectedConversation;
         var user = new MessageViewModel { Role = "user", Content = text };
+        // Move pending attachments onto the outgoing message. We drain the
+        // pending list so the paperclip strip empties and the next compose
+        // starts fresh.
+        if (PendingAttachments.Count > 0 && CanAttachImages)
+        {
+            foreach (var a in PendingAttachments) user.Attachments.Add(a);
+        }
+        PendingAttachments.Clear();
         conv.Messages.Add(user);
         conv.UpdatedAt = DateTimeOffset.UtcNow;
 
@@ -465,7 +491,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                     Role: m.IsUser ? TurnRole.User : TurnRole.Assistant,
                     Content: m.Content,
                     State: TurnState.Complete,
-                    CreatedAt: DateTimeOffset.UtcNow)));
+                    CreatedAt: DateTimeOffset.UtcNow,
+                    Attachments: m.Attachments.Count > 0
+                        ? new List<Attachment>(m.Attachments)
+                        : null)));
 
             // .ConfigureAwait(false): each MoveNextAsync resumes on a pool
             // thread rather than posting back to the UI Dispatcher. That
@@ -856,6 +885,66 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             d.Shutdown();
         }
+    }
+
+    // ============================================================
+    // Attachments
+    // ============================================================
+
+    /// <summary>
+    /// Open an image file picker and queue the selected files as pending
+    /// attachments. No-op if the loaded model has no mmproj.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanAttachImages))]
+    private async Task AttachImagesAsync()
+    {
+        var paths = await DialogService.PickImageFilesAsync();
+        foreach (var p in paths)
+        {
+            TryAddPendingImage(p);
+        }
+    }
+
+    [RelayCommand]
+    private void RemovePendingAttachment(Attachment? a)
+    {
+        if (a is null) return;
+        PendingAttachments.Remove(a);
+    }
+
+    /// <summary>
+    /// Add image bytes to the pending list — used by the image-file picker,
+    /// drag-drop, and clipboard paste. Guessed MIME from extension; defaults
+    /// to image/png for clipboard pastes.
+    /// </summary>
+    internal void TryAddPendingImage(string path)
+    {
+        if (!File.Exists(path)) return;
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            var mime = ext switch
+            {
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".png"            => "image/png",
+                ".gif"            => "image/gif",
+                ".bmp"            => "image/bmp",
+                ".webp"           => "image/webp",
+                _                 => "application/octet-stream",
+            };
+            if (!mime.StartsWith("image/")) return;
+            PendingAttachments.Add(new Attachment(bytes, mime, Path.GetFileName(path)));
+        }
+        catch (Exception ex)
+        {
+            ToastService.Warning("Attach failed", $"{Path.GetFileName(path)}: {ex.Message}");
+        }
+    }
+
+    internal void AddPendingImageBytes(byte[] bytes, string mime, string? fileName = null)
+    {
+        PendingAttachments.Add(new Attachment(bytes, mime, fileName));
     }
 
     // ============================================================

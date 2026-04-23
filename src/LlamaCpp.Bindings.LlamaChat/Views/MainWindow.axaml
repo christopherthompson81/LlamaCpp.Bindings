@@ -10,7 +10,8 @@
         x:DataType="vm:MainWindowViewModel"
         Title="LlamaChat"
         Width="1200" Height="800"
-        MinWidth="800" MinHeight="500">
+        MinWidth="800" MinHeight="500"
+        DragDrop.AllowDrop="True">
 
     <Window.KeyBindings>
         <KeyBinding Gesture="Ctrl+N" Command="{Binding NewConversationCommand}" />
@@ -196,6 +197,30 @@
 
                                         <!-- Read-only view -->
                                         <StackPanel Spacing="6" IsVisible="{Binding !IsEditing}">
+                                            <!-- Attached images (if any). A simple horizontal strip
+                                                 above the text content; clicking not yet wired to a
+                                                 full-size preview. Keeps the bubble visual even after
+                                                 a conversation is reloaded from the JSON store. -->
+                                            <ItemsControl ItemsSource="{Binding Attachments}"
+                                                          IsVisible="{Binding HasAttachments}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel Orientation="Horizontal" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,0,6,6" CornerRadius="6"
+                                                                BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                                                Background="{DynamicResource Muted}"
+                                                                ClipToBounds="True">
+                                                            <Image Source="{Binding Converter={StaticResource AttachmentThumbnail}}"
+                                                                   Width="180" MaxHeight="200"
+                                                                   Stretch="Uniform" />
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                             <Expander Header="Reasoning"
                                                       IsVisible="{Binding HasReasoning}"
                                                       IsExpanded="{Binding IsReasoningExpanded}">
@@ -250,23 +275,67 @@
                     </ScrollViewer>
                 </Panel>
 
-                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" RowDefinitions="*,Auto"
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,*,Auto"
                       Margin="0,12,0,0">
-                    <TextBox Grid.Column="0" Grid.Row="0" Text="{Binding UserInput, Mode=TwoWay}"
+                    <!-- Pending-attachment thumbnail strip. Sits above the
+                         TextBox and only renders when there's something to
+                         show — keeps the compose area compact otherwise. -->
+                    <ItemsControl Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="3"
+                                  ItemsSource="{Binding PendingAttachments}"
+                                  IsVisible="{Binding HasPendingAttachments}"
+                                  Margin="0,0,0,6">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                        CornerRadius="6" Background="{DynamicResource Muted}"
+                                        Padding="2" Width="72" Height="72">
+                                    <Grid>
+                                        <Image Source="{Binding Converter={StaticResource AttachmentThumbnail}}"
+                                               Stretch="UniformToFill" />
+                                        <Button Classes="ghost sm"
+                                                Content="×"
+                                                HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                Width="18" Height="18" Padding="0"
+                                                FontSize="13"
+                                                Background="{DynamicResource Card}"
+                                                CornerRadius="9" Margin="0,-4,-4,0"
+                                                Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemovePendingAttachmentCommand}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip.Tip="Remove" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Attach-image button. Only enabled when the loaded
+                         model has a matching mmproj loaded. -->
+                    <Button Grid.Column="0" Grid.Row="1" Content="📎" Classes="ghost"
+                            ToolTip.Tip="Attach image (paste or drop works too)"
+                            Command="{Binding AttachImagesCommand}"
+                            IsEnabled="{Binding CanAttachImages}"
+                            Margin="0,0,6,0" VerticalAlignment="Top" Padding="8,6" />
+
+                    <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding UserInput, Mode=TwoWay}"
                              PlaceholderText="Type a message, Shift+Enter for newline..."
                              AcceptsReturn="False" TextWrapping="Wrap"
                              MinHeight="56" MaxHeight="200"
                              KeyDown="OnComposeKeyDown" />
-                    <TextBlock Grid.Column="0" Grid.Row="1" Classes="xs muted"
+                    <TextBlock Grid.Column="1" Grid.Row="2" Classes="xs muted"
                                Margin="4,2,0,0"
                                IsVisible="{Binding IsModelLoaded}"
                                Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
                     <!-- Send and Stop share a column — only one is visible at a
                          time depending on IsGenerating. Matches webui's toggle. -->
-                    <Button Grid.Column="1" Grid.Row="0" Content="Send" Margin="8,0,0,0"
+                    <Button Grid.Column="2" Grid.Row="1" Content="Send" Margin="8,0,0,0"
                             Command="{Binding SendCommand}" IsDefault="True"
                             IsVisible="{Binding !IsGenerating}" />
-                    <Button Grid.Column="1" Grid.Row="0" Content="Stop" Classes="destructive" Margin="8,0,0,0"
+                    <Button Grid.Column="2" Grid.Row="1" Content="Stop" Classes="destructive" Margin="8,0,0,0"
                             Command="{Binding CancelCommand}"
                             IsVisible="{Binding IsGenerating}" />
                 </Grid>

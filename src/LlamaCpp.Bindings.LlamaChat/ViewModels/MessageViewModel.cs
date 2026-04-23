@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using LlamaCpp.Bindings.LlamaChat.Models;
 
@@ -22,6 +23,19 @@ public partial class MessageViewModel : ObservableObject
     /// </summary>
     [ObservableProperty] private string _editDraft = string.Empty;
 
+    /// <summary>
+    /// Images (and later, audio) attached to this turn. Observable so the
+    /// bubble template refreshes when attachments are pruned during an edit.
+    /// </summary>
+    public ObservableCollection<Attachment> Attachments { get; } = new();
+
+    public bool HasAttachments => Attachments.Count > 0;
+
+    public MessageViewModel()
+    {
+        Attachments.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasAttachments));
+    }
+
     public bool HasReasoning => !string.IsNullOrEmpty(Reasoning);
 
     public bool IsUser => Role == "user";
@@ -35,14 +49,22 @@ public partial class MessageViewModel : ObservableObject
         OnPropertyChanged(nameof(IsAssistant));
     }
 
-    public static MessageViewModel FromTurn(ChatTurn t) => new()
+    public static MessageViewModel FromTurn(ChatTurn t)
     {
-        Role = t.Role.ToString().ToLowerInvariant(),
-        Content = t.Content,
-        Reasoning = t.Reasoning,
-        IsStreaming = t.State == TurnState.Streaming,
-        StatsSummary = t.Stats is { } s
-            ? $"{s.CompletionTokens} tok · {s.TokensPerSecond:F1} tok/s"
-            : null,
-    };
+        var vm = new MessageViewModel
+        {
+            Role = t.Role.ToString().ToLowerInvariant(),
+            Content = t.Content,
+            Reasoning = t.Reasoning,
+            IsStreaming = t.State == TurnState.Streaming,
+            StatsSummary = t.Stats is { } s
+                ? $"{s.CompletionTokens} tok · {s.TokensPerSecond:F1} tok/s"
+                : null,
+        };
+        if (t.Attachments is { Count: > 0 })
+        {
+            foreach (var a in t.Attachments) vm.Attachments.Add(a);
+        }
+        return vm;
+    }
 }
