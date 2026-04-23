@@ -776,6 +776,21 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        // Strip the "(cancelled)" placeholder we put in Content when a turn
+        // was cancelled with zero visible output — otherwise the continuation
+        // text appends after it and the bubble reads "(cancelled)X Y Z...".
+        if (msg.Content == "(cancelled)") msg.Content = string.Empty;
+
+        // Heuristic: if the previous turn accumulated reasoning text but
+        // never produced any regular content, the model was still inside
+        // the <think> block when it stopped. Resume the extractor there so
+        // the continuation's stray </think> marker is consumed by the state
+        // machine instead of landing in the Content stream (which would
+        // break markdown rendering downstream — CommonMark reads a loose
+        // </think> as an HTML-block opener).
+        bool resumeInReasoning =
+            !string.IsNullOrEmpty(msg.Reasoning) && string.IsNullOrEmpty(msg.Content);
+
         msg.IsStreaming = true;
 
         var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
@@ -783,7 +798,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         await StreamIntoMessageAsync(
             conv, msg,
-            ct => Session.StreamContinuationAsync(sampler, gen, ct));
+            ct => Session.StreamContinuationAsync(sampler, gen, resumeInReasoning, ct));
     }
 
     [RelayCommand(CanExecute = nameof(CanCancel))]

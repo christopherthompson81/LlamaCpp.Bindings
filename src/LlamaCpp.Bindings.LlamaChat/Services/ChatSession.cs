@@ -325,66 +325,102 @@ public sealed class ChatSession : IDisposable
     /// KV state, without re-rendering or re-tokenising. Used to implement
     /// the "Continue" action when a reply hit <c>MaxTokens</c> (or the user
     /// cancelled mid-stream) and the user wants more output conditioned on
-    /// exactly what came before. Throws if <see cref="ClearKv"/> has run
-    /// since the last generation, because the required KV state is gone.
+    /// exactly what came before. Throws if the KV cache is empty — that's
+    /// the only state we truly can't extend from.
     /// </summary>
     /// <remarks>
-    /// Implementation: trim the last cached token (which is also the token
-    /// whose logits drove the current position) and re-decode it via
-    /// <see cref="LlamaGenerator.GenerateAsync(IReadOnlyList{int}, int, bool, int, Action{int}?, CancellationToken)"/>'s
-    /// back-off-by-one path. That refreshes the logits at the tail, primes
-    /// the sampler with the full cached token history, and enters the sample
-    /// loop. Identical emit/extractor/timing wiring as
+    /// Two paths:
+    /// <list type="bullet">
+    ///   <item>
+    ///     <c>_cachedTokens</c> is populated (normal text-only turn) — trim
+    ///     the last cached token, re-decode it via
+    ///     <see cref="LlamaGenerator.GenerateAsync(IReadOnlyList{int}, int, bool, int, Action{int}?, CancellationToken)"/>'s
+    ///     back-off-by-one path, and prime the sampler with the full cached
+    ///     history. This is the "correct" path: penalty/DRY state sees the
+    ///     whole prior transcript.
+    ///   </item>
+    ///   <item>
+    ///     <c>_cachedTokens</c> is null (post-multimodal turn — we can't
+    ///     record image-chunk positions as plain token IDs) — sample
+    ///     directly from the logits the last decode left at the tail, no
+    ///     sampler priming. Penalty/DRY state starts empty for this
+    ///     continuation; acceptable because continuations are usually short.
+    ///     The cache stays null afterward, matching the current post-multimodal
+    ///     invariant.
+    ///   </item>
+    /// </list>
+    /// Emit/extractor/timing wiring is identical to
     /// <see cref="StreamAssistantReplyAsync"/>.
     /// </remarks>
     public async IAsyncEnumerable<StreamEvent> StreamContinuationAsync(
         SamplerSettings sampler,
         GenerationSettings generation,
+        bool resumeInReasoning = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (_cachedTokens is null || _cachedTokens.Count == 0)
+        // KV empty means nothing to continue from — genuinely can't proceed.
+        var (_, maxPos) = _context.SequencePositionRange(0);
+        if (maxPos is null)
         {
             throw new InvalidOperationException(
-                "Cannot continue: the KV cache has no prior generation to extend. " +
-                "Run a normal turn first, or avoid calling ClearKv between the " +
-                "last generation and continuation.");
+                "Cannot continue: the KV cache is empty. Run a turn first.");
         }
 
         using var llamaSampler = SamplerFactory.Build(_model, _model.Vocab, sampler);
         var generator = new LlamaGenerator(_context, llamaSampler);
 
-        // Trim the last cached token from the KV so the back-off-by-one clause
-        // in LlamaGenerator decodes it again (fresh logits) without
-        // double-writing the position. If the backend refuses partial removal,
-        // fall back to a full rebuild against the cached token list.
-        int firstNew;
-        if (_context.RemoveSequenceRange(0, fromPosition: _cachedTokens.Count - 1, toPosition: -1))
+        IAsyncEnumerable<string> stream;
+        List<int>? cacheToGrow;
+
+        if (_cachedTokens is { Count: > 0 } cached)
         {
-            firstNew = _cachedTokens.Count - 1;
+            // Fast path: trim the last cached token so LlamaGenerator's
+            // back-off-by-one clause decodes it again (fresh logits) without
+            // double-writing the position.
+            int firstNew;
+            if (_context.RemoveSequenceRange(0, fromPosition: cached.Count - 1, toPosition: -1))
+            {
+                firstNew = cached.Count - 1;
+            }
+            else
+            {
+                // Backend refused partial trim — fall back to a full rebuild
+                // against the cached token list.
+                _context.ClearKvCache();
+                firstNew = 0;
+            }
+
+            cacheToGrow = new List<int>(cached.Count + generation.MaxTokens);
+            cacheToGrow.AddRange(cached);
+
+            stream = generator.GenerateAsync(
+                cached,
+                maxTokens: generation.MaxTokens,
+                firstNewIndex: firstNew,
+                onTokenDecoded: t => cacheToGrow.Add(t),
+                cancellationToken: cancellationToken);
         }
         else
         {
-            _context.ClearKvCache();
-            firstNew = 0;
+            // Fallback path (null cache, typically post-multimodal): sample
+            // directly from whatever the last decode left. No trim, no
+            // re-decode, no sampler priming.
+            cacheToGrow = null;
+            stream = generator.StreamFromCurrentStateAsync(
+                maxTokens: generation.MaxTokens,
+                cancellationToken: cancellationToken);
         }
 
-        var cacheToGrow = new List<int>(_cachedTokens.Count + generation.MaxTokens);
-        cacheToGrow.AddRange(_cachedTokens);
-
-        var stream = generator.GenerateAsync(
-            _cachedTokens,
-            maxTokens: generation.MaxTokens,
-            firstNewIndex: firstNew,
-            onTokenDecoded: t => cacheToGrow.Add(t),
-            cancellationToken: cancellationToken);
-
-        // Reasoning extractor: only relevant if the reply we're continuing
-        // was itself inside a <think> block. The caller already knows the
-        // current content; if the model emits </think> during continuation
-        // we'll handle the transition naturally. Start in Content mode — the
-        // common case is "continue a truncated regular answer."
+        // Reasoning extractor: if the turn we're continuing was interrupted
+        // mid-<think>, the first tokens the model emits will still be
+        // reasoning and will include a literal </think>. Starting the
+        // extractor in Content mode dumps </think> + a blank line into
+        // Content, which CommonMark interprets as an HTML block and breaks
+        // downstream markdown rendering (list bullets / bold show as raw
+        // syntax). Callers detect the mid-reasoning condition from the
+        // message's existing state (has reasoning text, no content yet).
         var extractor = generation.ExtractReasoning
-            ? new ReasoningExtractor(startInReasoning: false)
+            ? new ReasoningExtractor(startInReasoning: resumeInReasoning)
             : null;
 
         var sw = Stopwatch.StartNew();

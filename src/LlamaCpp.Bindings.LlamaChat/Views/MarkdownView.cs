@@ -89,7 +89,26 @@ public sealed class MarkdownView : UserControl
     private void Update()
     {
         var content = Markdown ?? string.Empty;
-        var boundary = AdvanceStableBoundary(content);
+
+        // When not streaming, render the whole content through the markdown
+        // pipeline — a trailing list (or any block that doesn't end with a
+        // blank line) otherwise stays in the raw-text `_live` pane forever,
+        // because AdvanceStableBoundary only advances past `\n\n` pairs.
+        // We also snap the incremental scan state to the end so a subsequent
+        // streaming session (e.g. Continue) treats the current content as
+        // the baseline and only newly-appended tokens become the live tail.
+        int boundary;
+        if (!IsStreaming)
+        {
+            boundary = content.Length;
+            _scanPos = content.Length;
+            _scanLineStart = content.Length;
+            _scanLastSafe = content.Length;
+        }
+        else
+        {
+            boundary = AdvanceStableBoundary(content);
+        }
         var newStable = content[..boundary];
         var newLive = content[boundary..];
 
