@@ -312,6 +312,17 @@
         <Setter Property="HorizontalAlignment" Value="Right" />
         <Setter Property="MaxWidth" Value="640" />
     </Style>
+    <!-- User bubbles are dark-on-light-theme by design. TextBlocks inside
+         would otherwise pick up the global Foreground (near-black in
+         light theme) and render invisible on the dark bubble. Descendant
+         selectors rebind to UserBubbleForeground — mirrors the
+         Button TextBlock escape from the base TextBlock style. -->
+    <Style Selector="Border.bubble.user TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource UserBubbleForeground}" />
+    </Style>
+    <Style Selector="Border.bubble.user SelectableTextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource UserBubbleForeground}" />
+    </Style>
     <Style Selector="Border.bubble.assistant">
         <Setter Property="Background" Value="{DynamicResource AssistantBubble}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
