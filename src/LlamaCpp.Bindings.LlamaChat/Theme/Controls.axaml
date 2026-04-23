@@ -8,7 +8,8 @@
     the element. Default (no class) == primary.
   -->
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:a="using:Avalonia.Automation">
 
     <!-- ================================================================
          Base TextBlock conventions
@@ -448,6 +449,14 @@
         <Setter Property="Opacity" Value="1" />
         <Setter Property="IsHitTestVisible" Value="True" />
     </Style>
+    <!-- Heightened accessibility mode: force the action bar always visible
+         regardless of hover/focus, so every action is reachable without a
+         pointer. Toggled by the AppSettings.HighAccessibilityMode setting
+         which Classes.a11y-binds on the root Window. -->
+    <Style Selector="Window.a11y StackPanel.actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
 
     <!-- Monospace boxed container for a tool result's text output. Reuses
          the same code-block tokens the markdown renderer uses for fenced
@@ -471,15 +480,21 @@
          ================================================================ -->
     <Style Selector="Border.toast">
         <Setter Property="BoxShadow" Value="0 4 16 0 #40000000" />
+        <!-- LiveSetting=Polite means a screen reader announces the toast at
+             its next natural pause. Errors escalate to Assertive below so
+             they interrupt. -->
+        <Setter Property="a:AutomationProperties.LiveSetting" Value="Polite" />
     </Style>
     <Style Selector="Border.toast.success">
         <Setter Property="BorderBrush" Value="#16A34A" />
     </Style>
     <Style Selector="Border.toast.warning">
         <Setter Property="BorderBrush" Value="#D97706" />
+        <Setter Property="a:AutomationProperties.LiveSetting" Value="Assertive" />
     </Style>
     <Style Selector="Border.toast.error">
         <Setter Property="BorderBrush" Value="{DynamicResource Destructive}" />
+        <Setter Property="a:AutomationProperties.LiveSetting" Value="Assertive" />
     </Style>
 
     <!-- ================================================================

@@ -5,6 +5,7 @@
         xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
         xmlns:v="using:LlamaCpp.Bindings.LlamaChat.Views"
         xmlns:m="using:LlamaCpp.Bindings.LlamaChat.Models"
+        xmlns:a="using:Avalonia.Automation"
         mc:Ignorable="d"
         d:DesignWidth="960" d:DesignHeight="720"
         x:Class="LlamaCpp.Bindings.LlamaChat.Views.SettingsWindow"
@@ -134,6 +135,13 @@
                                       IsChecked="{Binding ShowReasoningInProgress}" />
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
                                        Text="Auto-open the &lt;think&gt; panel while a reply is mid-stream so you can watch the trace as it appears." />
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <CheckBox Content="Heightened accessibility mode"
+                                      IsChecked="{Binding HighAccessibilityMode}" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Always-visible message action bar (no hover-to-reveal) so every action is reachable without a pointer." />
                         </StackPanel>
                     </StackPanel>
                 </Border>

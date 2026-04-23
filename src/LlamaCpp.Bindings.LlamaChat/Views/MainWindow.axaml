@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
         xmlns:views="using:LlamaCpp.Bindings.LlamaChat.Views"
+        xmlns:a="using:Avalonia.Automation"
         mc:Ignorable="d"
         d:DesignWidth="1200" d:DesignHeight="800"
         x:Class="LlamaCpp.Bindings.LlamaChat.Views.MainWindow"
@@ -12,7 +13,8 @@
         Icon="/Assets/icon-256.png"
         Width="1200" Height="800"
         MinWidth="800" MinHeight="500"
-        DragDrop.AllowDrop="True">
+        DragDrop.AllowDrop="True"
+        Classes.a11y="{Binding AppSettings.HighAccessibilityMode}">
 
     <Window.KeyBindings>
         <KeyBinding Gesture="Ctrl+N" Command="{Binding NewConversationCommand}" />
@@ -66,6 +68,7 @@
                 <Button Grid.Column="0" Classes="ghost icon"
                         Command="{Binding ToggleSidebarCommand}"
                         ToolTip.Tip="Toggle sidebar (Ctrl+B)"
+                        a:AutomationProperties.Name="Toggle sidebar"
                         Margin="0,0,8,0">
                     <Path Classes="icon" Data="{StaticResource IconPanelLeft}" />
                 </Button>
@@ -84,7 +87,8 @@
                 </ComboBox>
                 <Button Grid.Column="3" Margin="8,0,0,0"
                         Command="{Binding LoadCommand}"
-                        ToolTip.Tip="Load selected profile (Ctrl+L)">
+                        ToolTip.Tip="Load selected profile (Ctrl+L)"
+                        a:AutomationProperties.Name="Load selected profile">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <Path Classes="icon sm" Data="{StaticResource IconPlay}" />
                         <TextBlock Text="Load" VerticalAlignment="Center" />
@@ -92,7 +96,8 @@
                 </Button>
                 <Button Grid.Column="4" Classes="outline" Margin="6,0,0,0"
                         Command="{Binding UnloadCommand}"
-                        ToolTip.Tip="Unload model">
+                        ToolTip.Tip="Unload model"
+                        a:AutomationProperties.Name="Unload model">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <Path Classes="icon sm" Data="{StaticResource IconUnplug}" />
                         <TextBlock Text="Unload" VerticalAlignment="Center" />
@@ -100,7 +105,8 @@
                 </Button>
                 <Button Grid.Column="5" Classes="outline" Margin="6,0,0,0"
                         Command="{Binding OpenSettingsCommand}"
-                        ToolTip.Tip="Preferences (Ctrl+,)">
+                        ToolTip.Tip="Preferences (Ctrl+,)"
+                        a:AutomationProperties.Name="Open preferences">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <Path Classes="icon sm" Data="{StaticResource IconSettings}" />
                         <TextBlock Text="Settings" VerticalAlignment="Center" />
@@ -125,7 +131,8 @@
                             <Border Width="26" Height="26" CornerRadius="13"
                                     Background="{DynamicResource Accent}"
                                     BorderBrush="{DynamicResource Border}" BorderThickness="1"
-                                    ToolTip.Tip="{Binding Config.Name, StringFormat='MCP: {0}'}">
+                                    ToolTip.Tip="{Binding Config.Name, StringFormat='MCP: {0}'}"
+                                    a:AutomationProperties.Name="{Binding Config.Name, StringFormat='MCP server {0}'}">
                                 <TextBlock Text="{Binding Config.Name, Converter={StaticResource FirstLetter}}"
                                            FontSize="11" FontWeight="SemiBold"
                                            Foreground="{DynamicResource AccentForeground}"
@@ -255,7 +262,9 @@
                                 <Border Classes="bubble"
                                         Classes.user="{Binding IsUser}"
                                         Classes.assistant="{Binding IsAssistant}"
-                                        Classes.tool="{Binding IsTool}">
+                                        Classes.tool="{Binding IsTool}"
+                                        a:AutomationProperties.Name="{Binding Role, StringFormat='{}{0} message'}"
+                                        a:AutomationProperties.LiveSetting="Polite">
                                     <StackPanel Spacing="6">
                                         <!-- Role header row — user/assistant only. The tool
                                              bubble's Expander.Header carries 🔧 + the tool
@@ -274,6 +283,7 @@
                                                 <StackPanel Orientation="Horizontal" Spacing="2">
                                                     <Button Classes="ghost icon sm"
                                                             ToolTip.Tip="Previous branch"
+                                                            a:AutomationProperties.Name="Previous branch"
                                                             Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).SwitchPrevSiblingCommand}"
                                                             CommandParameter="{Binding}">
                                                         <TextBlock Text="‹" FontSize="14"
@@ -289,6 +299,7 @@
                                                                Text="{Binding SiblingCount}" />
                                                     <Button Classes="ghost icon sm"
                                                             ToolTip.Tip="Next branch"
+                                                            a:AutomationProperties.Name="Next branch"
                                                             Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).SwitchNextSiblingCommand}"
                                                             CommandParameter="{Binding}">
                                                         <TextBlock Text="›" FontSize="14"
@@ -466,12 +477,14 @@
                                                         IsVisible="{Binding !IsStreaming}">
                                                 <Button Classes="ghost icon sm"
                                                         ToolTip.Tip="Copy"
+                                                        a:AutomationProperties.Name="Copy message"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyMessageCommand}"
                                                         CommandParameter="{Binding}">
                                                     <Path Classes="icon xs" Data="{StaticResource IconCopy}" />
                                                 </Button>
                                                 <Button Classes="ghost icon sm"
                                                         ToolTip.Tip="Edit"
+                                                        a:AutomationProperties.Name="Edit message"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).BeginEditMessageCommand}"
                                                         CommandParameter="{Binding}">
                                                     <Path Classes="icon xs" Data="{StaticResource IconPencil}" />
@@ -479,6 +492,7 @@
                                                 <Button Classes="ghost icon sm"
                                                         IsVisible="{Binding IsAssistant}"
                                                         ToolTip.Tip="Regenerate"
+                                                        a:AutomationProperties.Name="Regenerate reply"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RegenerateMessageCommand}"
                                                         CommandParameter="{Binding}">
                                                     <Path Classes="icon xs" Data="{StaticResource IconRotateCw}" />
@@ -486,12 +500,15 @@
                                                 <Button Classes="ghost icon sm"
                                                         IsVisible="{Binding IsAssistant}"
                                                         ToolTip.Tip="Continue — extend this reply without re-prompting (last message only)"
+                                                        a:AutomationProperties.Name="Continue reply"
+                                                        a:AutomationProperties.HelpText="Extend this reply without re-prompting (last message only)"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ContinueMessageCommand}"
                                                         CommandParameter="{Binding}">
                                                     <Path Classes="icon xs" Data="{StaticResource IconPlay}" />
                                                 </Button>
                                                 <Button Classes="ghost icon sm"
                                                         ToolTip.Tip="Delete"
+                                                        a:AutomationProperties.Name="Delete message"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteMessageCommand}"
                                                         CommandParameter="{Binding}">
                                                     <Path Classes="icon xs" Data="{StaticResource IconTrash}" />
@@ -541,7 +558,8 @@
                         <Button Grid.Column="1" Classes="sm"
                                 Command="{Binding GenerateReplyCommand}"
                                 IsEnabled="{Binding IsModelLoaded}"
-                                ToolTip.Tip="Generate a reply to the dangling user turn">
+                                ToolTip.Tip="Generate a reply to the dangling user turn"
+                                a:AutomationProperties.Name="Generate reply">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <Path Classes="icon xs" Data="{StaticResource IconPlay}" />
                                 <TextBlock Text="Generate reply" VerticalAlignment="Center" />
@@ -584,7 +602,8 @@
                                                 CornerRadius="9" Margin="0,-4,-4,0"
                                                 Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemovePendingAttachmentCommand}"
                                                 CommandParameter="{Binding}"
-                                                ToolTip.Tip="Remove">
+                                                ToolTip.Tip="Remove"
+                                                a:AutomationProperties.Name="Remove attachment">
                                             <Path Classes="icon xs" Data="{StaticResource IconX}" />
                                         </Button>
                                     </Grid>
@@ -599,17 +618,21 @@
                                 Spacing="2" Margin="0,0,6,0" VerticalAlignment="Top">
                         <Button Classes="ghost icon"
                                 ToolTip.Tip="Attach image or audio (paste or drop works too)"
+                                a:AutomationProperties.Name="Attach file"
+                                a:AutomationProperties.HelpText="Attach image or audio. Paste or drop also works."
                                 Command="{Binding AttachMediaCommand}"
                                 IsEnabled="{Binding CanAttachMedia}">
                             <Path Classes="icon" Data="{StaticResource IconPaperclip}" />
                         </Button>
                         <Button Classes="ghost icon"
                                 ToolTip.Tip="Insert MCP prompt"
+                                a:AutomationProperties.Name="Insert MCP prompt"
                                 Command="{Binding InsertMcpPromptCommand}">
                             <Path Classes="icon" Data="{StaticResource IconZap}" />
                         </Button>
                         <Button Classes="ghost icon"
                                 ToolTip.Tip="Browse MCP resources"
+                                a:AutomationProperties.Name="Browse MCP resources"
                                 Command="{Binding AttachMcpResourceCommand}">
                             <Path Classes="icon" Data="{StaticResource IconFolder}" />
                         </Button>
@@ -629,7 +652,8 @@
                     <Button Grid.Column="2" Grid.Row="1" Margin="8,0,0,0"
                             Command="{Binding SendCommand}" IsDefault="True"
                             IsVisible="{Binding !IsGenerating}"
-                            ToolTip.Tip="Send (Enter)">
+                            ToolTip.Tip="Send (Enter)"
+                            a:AutomationProperties.Name="Send message">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Path Classes="icon sm" Data="{StaticResource IconSend}" />
                             <TextBlock Text="Send" VerticalAlignment="Center" />
@@ -638,7 +662,8 @@
                     <Button Grid.Column="2" Grid.Row="1" Classes="destructive" Margin="8,0,0,0"
                             Command="{Binding CancelCommand}"
                             IsVisible="{Binding IsGenerating}"
-                            ToolTip.Tip="Stop generation">
+                            ToolTip.Tip="Stop generation"
+                            a:AutomationProperties.Name="Stop generation">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Path Classes="icon sm" Data="{StaticResource IconSquare}" />
                             <TextBlock Text="Stop" VerticalAlignment="Center" />

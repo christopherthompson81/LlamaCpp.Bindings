@@ -31,4 +31,11 @@ public sealed record AppSettings
     /// you can watch the thinking-model trace unfold in real time.
     /// </summary>
     public bool ShowReasoningInProgress { get; init; } = false;
+
+    /// <summary>
+    /// Heightened accessibility: forces the message action bar visible
+    /// (bypasses hover-to-reveal) so every action is reachable without a
+    /// pointer, for screen-reader and keyboard-only users.
+    /// </summary>
+    public bool HighAccessibilityMode { get; init; } = false;
 }

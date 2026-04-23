@@ -10,6 +10,7 @@ public partial class AppSettingsViewModel : ObservableObject
     [ObservableProperty] private bool _autoScroll;
     [ObservableProperty] private bool _showMessageStats;
     [ObservableProperty] private bool _showReasoningInProgress;
+    [ObservableProperty] private bool _highAccessibilityMode;
 
     public AppSettingsViewModel() : this(new AppSettings()) { }
 
@@ -19,6 +20,7 @@ public partial class AppSettingsViewModel : ObservableObject
         _autoScroll = model.AutoScroll;
         _showMessageStats = model.ShowMessageStats;
         _showReasoningInProgress = model.ShowReasoningInProgress;
+        _highAccessibilityMode = model.HighAccessibilityMode;
     }
 
     public AppSettings ToModel() => new()
@@ -27,6 +29,7 @@ public partial class AppSettingsViewModel : ObservableObject
         AutoScroll = AutoScroll,
         ShowMessageStats = ShowMessageStats,
         ShowReasoningInProgress = ShowReasoningInProgress,
+        HighAccessibilityMode = HighAccessibilityMode,
     };
 
     // Apply theme live when the user flips the radio in Settings; no need
