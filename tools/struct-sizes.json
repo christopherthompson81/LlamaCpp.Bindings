@@ -102,5 +102,10 @@
     "offsetof_struct mtmd_input_text__text": 0,
     "offsetof_struct mtmd_input_text__add_special": 8,
     "offsetof_struct mtmd_input_text__parse_special": 9,
+    "sizeof_struct mtmd_decoder_pos": 16,
+    "offsetof_struct mtmd_decoder_pos__t": 0,
+    "offsetof_struct mtmd_decoder_pos__x": 4,
+    "offsetof_struct mtmd_decoder_pos__y": 8,
+    "offsetof_struct mtmd_decoder_pos__z": 12,
     "_end": 0
 }

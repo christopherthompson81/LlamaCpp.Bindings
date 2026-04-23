@@ -111,3 +111,66 @@ New York Times", "MEN WALK ON MOON"). Exit 0.
   recommends. Output was coherent anyway for this image, but grounding
   tasks (localizing objects in scenes) may need the min-tokens knob set.
 
+## Run 2 — 2026-04-23 21:19 — bump pin to b8893/b8894, GPU encode works
+
+**Question:** Upstream shipped 22 days of mtmd + CUDA fixes between our pin
+(b8620, 2026-04-01) and HEAD (b8893, 2026-04-23). No single PR was clearly
+"this fixes Qwen3-VL" — the obvious candidate #21103 was closed unmerged
+— but several CUDA graph/equality commits looked like they could
+incidentally fix it. Worth bumping to find out and exercise the version
+upgrade flow.
+
+**Process:**
+1. `git pull` + rebuild in `/home/chris/Programming/llama.cpp/build_cuda`.
+   New soversion `0.0.8894` (libllama.so / libmtmd.so).
+2. Swapped `runtimes/linux-x64/native/*` to the new libs. Pinned new
+   `llama.h`, `mtmd.h`, `mtmd-helper.h` into `third_party/llama.cpp/include`.
+3. Diffed upstream public headers against our old pin:
+   - `mtmd_decode_use_non_causal` gained a `const mtmd_input_chunk*` arg.
+   - `mtmd_decoder_pos` struct (16 B, 4× uint32) added + `mtmd_image_tokens_get_decoder_pos`
+     + `mtmd_helper_image_get_decoder_pos`.
+   - `LLAMA_SPLIT_MODE_TENSOR = 3` added to `llama_split_mode`.
+   - `LLAMA_FTYPE_MOSTLY_Q1_0 = 40` added (we don't mirror the ftype enum).
+   - `llama_params_fit()` and `llama_memory_breakdown_print()` **removed**.
+     We had a P/Invoke + public `LlamaContext.LogMemoryBreakdown()` wrapper
+     + one test for the latter; all removed.
+4. Extended `tools/dump-struct-sizes.c` for `mtmd_decoder_pos`, regenerated
+   `tools/struct-sizes.json` (all existing entries unchanged, new entry
+   matches the C# mirror).
+5. Updated `third_party/llama.cpp/VERSION` with the new commit + full
+   delta summary.
+6. Rebuild, full test suite: 211 pass (was 212 — dropped one for the removed
+   function).
+
+**Evidence the Qwen3-VL bug is fixed:** Re-ran the CLI harness:
+
+```
+samples/LlamaChat.Cli --model Qwen3.6-35B-A3B-UD-IQ4_XS.gguf
+                      --mmproj mmproj-BF16.gguf --image test-1.jpeg
+                      --ctx 4096 --max 128
+```
+
+Result: exit 0, model generated the expected description.
+
+Before (b8620):          After (b8893):
+- GPU encode: SIGSEGV    - GPU encode: `image slice encoded in 177 ms`
+- FA disabled w/ warns   - FA enabled, no unsupported-op warnings
+- CPU fallback works     - CPU fallback (`--cpu-encode`) still works (4252 ms)
+
+**GPU encode is ~24× faster than the workaround**, no-opt-in required.
+
+**Keeping the CPU-encode knob anyway** — CLIP backends on exotic arches or
+future regressions may still need the escape hatch. Low cost to keep the
+checkbox; revised tooltip wording already generic ("buggy CUDA CLIP graphs").
+
+**No root cause identified** — we didn't bisect. One or more of the CUDA
+fixes between b8620 and b8893 closed the hole (likely candidates:
+#21736 `CUDA: also store node->src ne/nb for graph equality`,
+#21566 `CUDA: check for buffer overlap before fusing`,
+#21271 `CUDA: fix FA kernel selection logic`). Not worth bisecting —
+symptom gone, future regressions will surface in the smoke test.
+
+**Bindings-update flow validated.** The mechanical parts (binary swap,
+header pin, struct-sizes regen) were straightforward; the API delta
+(~3 binding changes, 1 public-API removal, 1 test cascade) was the only
+real work. End-to-end took <30 min including the rebuild.

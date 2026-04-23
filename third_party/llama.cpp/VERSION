@@ -6,18 +6,26 @@
 # workflow in tools/fetch-binaries.py (--tag b####) still works for future
 # migrations to a prebuilt release.
 
-git_describe = b8610-10-g1d6d4cf7a
-git_commit   = 1d6d4cf7a
-git_date     = 2026-04-01
-soversion    = 0.0.8620   # from libllama.so.0.0.8620
-header_date  = 2026-04-01  # last modification to include/llama.h in the local checkout
+git_describe = b8893-1-g86db42e97
+git_commit   = 86db42e97
+git_date     = 2026-04-23
+soversion    = 0.0.8894   # from libllama.so.0.0.8894
+header_date  = 2026-04-23  # last modification to include/llama.h in the local checkout
 
 # Source of this build:
 #   /home/chris/Programming/llama.cpp  (local CUDA build, build_cuda/bin)
 #
 # Why not the upstream prebuilt? llama.cpp does not publish Linux CUDA binaries
-# (see tools/fetch-binaries.py: scanned releases b2000..b8875, none exist).
+# (see tools/fetch-binaries.py: scanned releases b2000..b8893, none exist).
 #
-# Why not the latest tag? b8875 removes llama_params_fit() and
-# llama_memory_breakdown_print(), which we intend to use for the hardware-based
-# auto-configuration heuristic. See docs/kickoff.md "Open questions".
+# API-surface deltas since previous pin (b8620 → b8893), reflected in the
+# bindings:
+#   - mtmd_decode_use_non_causal gained a `const mtmd_input_chunk*` argument
+#     (pass NULL for the old default-image-chunk behaviour).
+#   - mtmd_decoder_pos struct + mtmd_image_tokens_get_decoder_pos function
+#     added for M-RoPE vision models.
+#   - mtmd_helper_image_get_decoder_pos helper added.
+#   - llama_split_mode gained LLAMA_SPLIT_MODE_TENSOR = 3.
+#   - llama_params_fit() and llama_memory_breakdown_print() removed upstream;
+#     our LlamaContext.LogMemoryBreakdown wrapper and the matching P/Invoke
+#     + test were removed.

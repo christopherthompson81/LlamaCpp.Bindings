@@ -553,10 +553,6 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial void llama_memory_seq_div(IntPtr mem, int seq_id, int p0, int p1, int d);
 
-    // Prints a per-device memory breakdown via llama.cpp's log sink. Diagnostic.
-    [LibraryImport(LibName)]
-    internal static partial void llama_memory_breakdown_print(IntPtr ctx);
-
     // ----- Capability / misc (Tier 1 expansion) -----
 
     [LibraryImport(LibName)]
@@ -633,9 +629,12 @@ internal static partial class NativeMethods
     [LibraryImport(LibMtmd)]
     internal static partial void mtmd_free(IntPtr ctx);
 
+    // Signature updated b8620→b8893: added second parameter for a specific
+    // input chunk (pass IntPtr.Zero to keep the old "default image chunk"
+    // behavior).
     [LibraryImport(LibMtmd)]
     [return: MarshalAs(UnmanagedType.I1)]
-    internal static partial bool mtmd_decode_use_non_causal(IntPtr ctx);
+    internal static partial bool mtmd_decode_use_non_causal(IntPtr ctx, IntPtr chunk);
 
     [LibraryImport(LibMtmd)]
     [return: MarshalAs(UnmanagedType.I1)]
@@ -709,6 +708,28 @@ internal static partial class NativeMethods
     [LibraryImport(LibMtmd)]
     internal static partial IntPtr mtmd_input_chunk_get_id(IntPtr chunk);
 
+    // Image-token accessors on an image-type chunk. Returned pointer is owned
+    // by the chunk and freed when the chunk is freed.
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_input_chunk_get_tokens_image(IntPtr chunk);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial nuint mtmd_image_tokens_get_n_tokens(IntPtr image_tokens);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial IntPtr mtmd_image_tokens_get_id(IntPtr image_tokens);
+
+    [LibraryImport(LibMtmd)]
+    internal static partial int mtmd_image_tokens_get_n_pos(IntPtr image_tokens);
+
+    // Added b8893: returns a 16-byte struct by value. M-RoPE vision models
+    // use (t, x, y) coordinates per image token instead of a single linear
+    // position. `i` ranges over [0, n_tokens); `pos_0` is the absolute
+    // position of the first token and the returned tuple is relative to it.
+    [LibraryImport(LibMtmd)]
+    internal static partial mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(
+        IntPtr image_tokens, int pos_0, nuint i);
+
     // Tokenize: output chunks get filled from (text + image markers + bitmaps).
     // Status: 0 ok, 1 bitmap count != marker count, 2 image preprocessing failure.
     [LibraryImport(LibMtmd)]
@@ -739,6 +760,14 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibMtmd)]
     internal static partial int mtmd_helper_get_n_pos(IntPtr chunks);
+
+    // Added b8893: fills out_pos (sized mtmd_image_tokens_get_n_tokens) with
+    // per-token (t, x, y) decoder positions. M-RoPE models need this to
+    // reconstruct 2D attention positions on the text side after an image
+    // chunk has been decoded into embeddings.
+    [LibraryImport(LibMtmd)]
+    internal static unsafe partial void mtmd_helper_image_get_decoder_pos(
+        IntPtr image_tokens, int pos_0, mtmd_decoder_pos* out_pos);
 
     // Runs mtmd_encode + llama_decode across every chunk. Returns 0 on success,
     // forwards the first nonzero status otherwise. NOT thread-safe (documented

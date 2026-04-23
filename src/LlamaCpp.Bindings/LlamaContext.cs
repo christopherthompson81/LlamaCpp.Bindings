@@ -271,17 +271,6 @@ public sealed class LlamaContext : IDisposable
         }
     }
 
-    /// <summary>
-    /// Ask llama.cpp to log a per-device memory-usage breakdown via its log
-    /// sink. Diagnostic tool — useful when diagnosing VRAM-overallocation
-    /// failures.
-    /// </summary>
-    public void LogMemoryBreakdown()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        NativeMethods.llama_memory_breakdown_print(_handle.DangerousHandle);
-    }
-
     // ----- Runtime settings + mid-flight getters (Tier 1 expansion) -----
 
     /// <summary>

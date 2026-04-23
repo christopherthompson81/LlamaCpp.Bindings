@@ -144,6 +144,13 @@ int main(void) {
     OFF(struct mtmd_input_text, add_special);
     OFF(struct mtmd_input_text, parse_special);
 
+    // ----- mtmd_decoder_pos ----- (added upstream b8893)
+    SZ(struct mtmd_decoder_pos);
+    OFF(struct mtmd_decoder_pos, t);
+    OFF(struct mtmd_decoder_pos, x);
+    OFF(struct mtmd_decoder_pos, y);
+    OFF(struct mtmd_decoder_pos, z);
+
     // Terminator to keep JSON valid without worrying about trailing comma.
     printf("    \"_end\": 0\n");
     printf("}\n");

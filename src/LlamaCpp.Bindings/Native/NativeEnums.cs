@@ -79,9 +79,11 @@ internal enum llama_flash_attn_type : int
 
 internal enum llama_split_mode : int
 {
-    LLAMA_SPLIT_MODE_NONE  = 0,
-    LLAMA_SPLIT_MODE_LAYER = 1,
-    LLAMA_SPLIT_MODE_ROW   = 2,
+    LLAMA_SPLIT_MODE_NONE   = 0,
+    LLAMA_SPLIT_MODE_LAYER  = 1,
+    LLAMA_SPLIT_MODE_ROW    = 2,
+    // Added upstream in 22XX series: tensor-parallel split across devices.
+    LLAMA_SPLIT_MODE_TENSOR = 3,
 }
 
 // From ggml.h — referenced by llama_context_params.type_k / type_v.
@@ -122,7 +124,7 @@ internal enum ggml_type : int
     GGML_TYPE_NVFP4   = 40,
 }
 
-// From ggml.h — consumed by llama_log_set callback and llama_params_fit.
+// From ggml.h — consumed by the llama_log_set callback trampoline.
 internal enum ggml_log_level : int
 {
     GGML_LOG_LEVEL_NONE  = 0,

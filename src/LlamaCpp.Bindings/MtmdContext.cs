@@ -89,7 +89,10 @@ public sealed class MtmdContext : IDisposable
 
         SupportsVision    = NativeMethods.mtmd_support_vision(raw);
         SupportsAudio     = NativeMethods.mtmd_support_audio(raw);
-        UsesNonCausalMask = NativeMethods.mtmd_decode_use_non_causal(raw);
+        // Pass IntPtr.Zero for the chunk argument — the header documents
+        // that as "default: image chunk", which is what every consumer wants
+        // until someone needs per-chunk variance.
+        UsesNonCausalMask = NativeMethods.mtmd_decode_use_non_causal(raw, IntPtr.Zero);
         UsesMRope         = NativeMethods.mtmd_decode_use_mrope(raw);
 
         var rate = NativeMethods.mtmd_get_audio_sample_rate(raw);

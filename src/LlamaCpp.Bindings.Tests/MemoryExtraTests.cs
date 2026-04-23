@@ -44,13 +44,7 @@ public class MemoryExtraTests
             _fx.Context.DivideSequencePositions(0, 0, -1, -2));
     }
 
-    [Fact]
-    public void LogMemoryBreakdown_Runs_Without_Throwing()
-    {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
-        // Output goes to the native log sink (stderr / our Avalonia log
-        // routing). We only verify the call doesn't throw — the content
-        // isn't easily asserted from managed code.
-        _fx.Context.LogMemoryBreakdown();
-    }
+    // Note: llama_memory_breakdown_print was removed upstream in the 2026-04
+    // refactor. The public wrapper went away with it; this test was removed
+    // to follow. See docs/mtmd_investigation.md Run 2.
 }

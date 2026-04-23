@@ -295,6 +295,27 @@ internal struct mtmd_input_text
 }
 
 /// <summary>
+/// Position tuple for M-RoPE (multi-dimensional rotary position embedding)
+/// vision models. Each image token gets a (t, x, y) coordinate rather than a
+/// single sequential index; the text side's attention uses these to attend
+/// to image patches with proper 2D spatial awareness.
+/// </summary>
+/// <remarks>
+/// <c>z</c> is reserved by upstream for future use (volumetric media?).
+/// Returned by-value from <c>mtmd_image_tokens_get_decoder_pos</c>.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal struct mtmd_decoder_pos
+{
+    public uint t;   // 0
+    public uint x;   // 4
+    public uint y;   // 8
+    public uint z;   // 12 — reserved
+
+    public const int ExpectedSize = 16;
+}
+
+/// <summary>
 /// Struct layout assertions. Called once from <see cref="LlamaBackend"/>'s
 /// static constructor before any native call is made. If the native struct
 /// size has drifted from our C# mirror, we throw here rather than let the
@@ -316,6 +337,7 @@ internal static class NativeLayout
         Check<llama_token_data_array>(llama_token_data_array.ExpectedSize);
         Check<mtmd_context_params>(mtmd_context_params.ExpectedSize);
         Check<mtmd_input_text>(mtmd_input_text.ExpectedSize);
+        Check<mtmd_decoder_pos>(mtmd_decoder_pos.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct
