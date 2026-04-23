@@ -197,15 +197,28 @@ public partial class ConversationViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Delete <paramref name="nodeId"/> and every descendant. If the
-    /// current leaf was inside the deleted subtree it reverts to the
-    /// deleted node's parent (which is effectively "undoing" the subtree).
+    /// Delete <paramref name="nodeId"/> and every descendant. When the
+    /// active leaf was inside the deleted subtree we prefer to land on a
+    /// surviving sibling's deepest leaf rather than fall back to the
+    /// parent — "delete this version" implies the user wants to see the
+    /// remaining version, not be stranded at a dangling user turn. Falls
+    /// back to the parent only if no sibling survives the delete.
     /// No-op if the id isn't found.
     /// </summary>
     public void RemoveSubtree(Guid nodeId)
     {
         var node = FindById(nodeId);
         if (node is null) return;
+
+        // Snapshot siblings BEFORE removal so we know what will survive.
+        var survivingSiblings = new List<MessageViewModel>();
+        foreach (var m in AllMessages)
+        {
+            if (m.ParentId == node.ParentId && m.Id != nodeId)
+            {
+                survivingSiblings.Add(m);
+            }
+        }
 
         // Collect nodeId + every transitive descendant.
         var toRemove = new HashSet<Guid> { nodeId };
@@ -230,13 +243,46 @@ public partial class ConversationViewModel : ObservableObject
             AllMessages.Remove(m);
         }
 
-        // Fix up the active leaf if we just deleted it (or its line).
+        // Pick a new active leaf if the current one got evicted.
         if (ActiveLeafId is { } leaf && toRemove.Contains(leaf))
         {
-            ActiveLeafId = node.ParentId;
+            if (survivingSiblings.Count > 0)
+            {
+                // Switch to the last-added surviving sibling (most recent
+                // branch the user cared about) and descend to its leaf so
+                // the transcript shows a real assistant reply, not just a
+                // dangling parent turn with a remedy card.
+                ActiveLeafId = DeepestLeafUnder(survivingSiblings[^1].Id);
+            }
+            else
+            {
+                ActiveLeafId = node.ParentId;
+            }
         }
         RebuildActivePath();
         NotifySiblingsFor(node.ParentId);
+    }
+
+    /// <summary>
+    /// Walk down from <paramref name="rootId"/> picking the most-recently
+    /// added child at each branch until there are no more children. Used
+    /// by <see cref="SwitchToSibling"/> and <see cref="RemoveSubtree"/>
+    /// to restore or land on a full sub-path rather than a single turn.
+    /// </summary>
+    private Guid DeepestLeafUnder(Guid rootId)
+    {
+        var cursor = FindById(rootId);
+        if (cursor is null) return rootId;
+        while (true)
+        {
+            MessageViewModel? lastChild = null;
+            foreach (var m in AllMessages)
+            {
+                if (m.ParentId == cursor.Id) lastChild = m;
+            }
+            if (lastChild is null) return cursor.Id;
+            cursor = lastChild;
+        }
     }
 
     /// <summary>Wipe the conversation. Leaves the conversation object itself intact.</summary>
@@ -255,25 +301,8 @@ public partial class ConversationViewModel : ObservableObject
     /// </summary>
     public void SwitchToSibling(Guid siblingId)
     {
-        var target = FindById(siblingId);
-        if (target is null) return;
-
-        // Descend to the most-recent leaf below the target. "Most recent"
-        // = last-inserted among direct children, which correlates with the
-        // user's latest activity on that branch.
-        var cursor = target;
-        while (true)
-        {
-            MessageViewModel? lastChild = null;
-            foreach (var m in AllMessages)
-            {
-                if (m.ParentId == cursor.Id) lastChild = m;
-            }
-            if (lastChild is null) break;
-            cursor = lastChild;
-        }
-
-        ActiveLeafId = cursor.Id;
+        if (FindById(siblingId) is null) return;
+        ActiveLeafId = DeepestLeafUnder(siblingId);
         RebuildActivePath();
     }
 

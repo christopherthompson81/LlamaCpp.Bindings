@@ -25,26 +25,27 @@
 
             <!-- ===== Profiles ===== -->
             <TabItem Header="Profiles">
-                <Grid ColumnDefinitions="260,*" Margin="8">
+                <Grid RowDefinitions="Auto,*" Margin="8">
 
-                    <Border Grid.Column="0"
-                            Background="{DynamicResource Sidebar}"
-                            BorderBrush="{DynamicResource SidebarBorder}"
-                            BorderThickness="1"
-                            CornerRadius="{DynamicResource RadiusLg}">
-                        <Grid RowDefinitions="Auto,*,Auto">
-                            <TextBlock Grid.Row="0" Text="Profiles" Classes="section"
-                                       Margin="14,12,14,6" />
-                            <ListBox Grid.Row="1" Margin="6"
-                                     ItemsSource="{Binding Profiles}"
-                                     SelectedItem="{Binding SelectedProfile}">
-                                <ListBox.ItemTemplate>
+                    <!-- Top card: profile picker + CRUD actions. Horizontal
+                         ListBox reads as a row of tabs; scroller kicks in
+                         once there are more profiles than fit the width. -->
+                    <Border Grid.Row="0" Classes="card">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Column="0" Text="Profiles" Classes="section"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,12,0" />
+                            <ComboBox Grid.Column="1" Margin="0,0,12,0"
+                                      HorizontalAlignment="Stretch"
+                                      ItemsSource="{Binding Profiles}"
+                                      SelectedItem="{Binding SelectedProfile}">
+                                <ComboBox.ItemTemplate>
                                     <DataTemplate DataType="vm:ProfileEditorViewModel">
                                         <TextBlock Text="{Binding Name}" />
                                     </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="6">
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
                                 <Button Classes="sm outline" ToolTip.Tip="Add profile"
                                         Command="{Binding AddProfileCommand}">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
@@ -70,9 +71,10 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Column="1" Margin="16,0,0,0" Classes="card">
+                    <!-- Bottom card: editor for the currently selected profile. -->
+                    <Border Grid.Row="1" Margin="0,16,0,0" Classes="card">
                         <Grid RowDefinitions="*,Auto">
-                            <ScrollViewer Grid.Row="0">
+                            <ScrollViewer Grid.Row="0" Padding="0,0,8,0">
                                 <ContentControl Content="{Binding SelectedProfile}">
                                     <ContentControl.ContentTemplate>
                                         <DataTemplate DataType="vm:ProfileEditorViewModel">

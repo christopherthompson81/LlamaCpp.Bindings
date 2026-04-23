@@ -54,6 +54,8 @@
 
     <StreamGeometry x:Key="IconMenu">M4 5 h16 M4 12 h16 M4 19 h16</StreamGeometry>
 
+    <StreamGeometry x:Key="IconPanelLeft">M5 3 h14 a2 2 0 0 1 2 2 v14 a2 2 0 0 1 -2 2 h-14 a2 2 0 0 1 -2 -2 v-14 a2 2 0 0 1 2 -2 z M9 3 v18</StreamGeometry>
+
     <StreamGeometry x:Key="IconInfo">M2 12 a10 10 0 1 1 20 0 a10 10 0 1 1 -20 0 M12 16 v-4 M12 8 h.01</StreamGeometry>
 
     <StreamGeometry x:Key="IconAlert">M2 12 a10 10 0 1 1 20 0 a10 10 0 1 1 -20 0 M12 8 V12 M12 16 H12.01</StreamGeometry>
