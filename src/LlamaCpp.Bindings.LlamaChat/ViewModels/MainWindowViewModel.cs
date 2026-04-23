@@ -53,7 +53,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     // ============================================================
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend))]
-    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand), nameof(UnloadCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand),
+                                 nameof(UnloadCommand), nameof(ShowModelInfoCommand))]
     private ChatSession? _session;
 
     [ObservableProperty]
@@ -100,6 +101,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     public MainWindowViewModel()
     {
         AppSettings = new AppSettingsViewModel(AppSettingsStore.Load());
+        // Apply theme once on startup based on the persisted setting.
+        // Subsequent changes through the Settings panel are caught by
+        // AppSettingsViewModel.OnThemeModeChanged.
+        ThemeService.Apply(AppSettings.ThemeMode);
 
         Profiles = new ObservableCollection<ProfileEditorViewModel>(
             ProfileStore.Load().Select(p => new ProfileEditorViewModel(p)));
@@ -189,6 +194,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                            $"ctx={session.Context.ContextSize}  ·  layers={session.Model.LayerCount}  ·  " +
                            $"template={(string.IsNullOrEmpty(session.ChatTemplate) ? "(none)" : "embedded")}";
             StatusText = "Loaded.";
+            ToastService.Success("Model loaded", profile.Name);
         }
         catch (Exception ex)
         {
@@ -196,6 +202,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             StatusText = tail.Length > 0
                 ? $"Load failed: {ex.Message}\nNative log: {tail}"
                 : $"Load failed: {ex.Message}";
+            ToastService.Error("Load failed", ex.Message);
         }
         finally
         {
@@ -475,6 +482,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             {
                 assistant.IsStreaming = false;
                 StatusText = $"Error: {ex.GetType().Name} — {ex.Message} (see ~/.config/LlamaChat/last-error.log)";
+            ToastService.Error($"Generation failed: {ex.GetType().Name}",
+                $"{ex.Message} — see ~/.config/LlamaChat/last-error.log for the full stack.");
                 if (string.IsNullOrEmpty(assistant.Content))
                 {
                     assistant.Content = $"(error: {ex.GetType().Name}: {ex.Message})";
@@ -507,6 +516,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         if (msg is null) return;
         await DialogService.CopyToClipboardAsync(msg.Content);
         StatusText = "Copied to clipboard.";
+        ToastService.Success("Copied", $"{msg.Content.Length} char(s) on the clipboard.");
     }
 
     [RelayCommand]
@@ -626,6 +636,16 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             SelectedProfile = Profiles.FirstOrDefault();
         }
+    }
+
+    [RelayCommand]
+    private async Task ShowShortcutsAsync() => await DialogService.ShowShortcutsAsync();
+
+    [RelayCommand(CanExecute = nameof(IsModelLoaded))]
+    private async Task ShowModelInfoAsync()
+    {
+        if (Session is null) return;
+        await DialogService.ShowModelInfoAsync(Session.Model, _activeLoadedProfile?.Name);
     }
 
     [RelayCommand]

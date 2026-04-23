@@ -40,6 +40,22 @@ internal static class DialogService
     /// button. The header "Expand" action on each code block in a chat
     /// bubble routes here.
     /// </summary>
+    public static async Task ShowShortcutsAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return;
+        var win = new ShortcutsDialog();
+        await win.ShowDialog(owner);
+    }
+
+    public static async Task ShowModelInfoAsync(LlamaModel model, string? profileName)
+    {
+        var owner = Owner;
+        if (owner is null) return;
+        var win = new ModelInfoDialog(model, profileName);
+        await win.ShowDialog(owner);
+    }
+
     public static async Task ShowCodePreviewAsync(string code, string? language)
     {
         var owner = Owner;

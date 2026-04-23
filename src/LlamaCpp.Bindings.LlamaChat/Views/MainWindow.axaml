@@ -20,6 +20,7 @@
         <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
     </Window.KeyBindings>
 
+    <Panel>
     <DockPanel>
         <!-- Menu bar -->
         <Menu DockPanel.Dock="Top">
@@ -27,6 +28,7 @@
                 <MenuItem Header="_New chat"   Command="{Binding NewConversationCommand}" InputGesture="Ctrl+N" />
                 <MenuItem Header="_Load model" Command="{Binding LoadCommand}"            InputGesture="Ctrl+L" />
                 <MenuItem Header="_Unload"     Command="{Binding UnloadCommand}" />
+                <MenuItem Header="Model _info..." Command="{Binding ShowModelInfoCommand}" />
                 <Separator />
                 <MenuItem Header="E_xit"       Command="{Binding ExitCommand}" />
             </MenuItem>
@@ -40,6 +42,9 @@
             </MenuItem>
             <MenuItem Header="_Settings">
                 <MenuItem Header="_Preferences..." Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="Keyboard _shortcuts..." Command="{Binding ShowShortcutsCommand}" />
             </MenuItem>
         </Menu>
 
@@ -151,7 +156,21 @@
             <!-- ================= Main (messages + compose) ================= -->
             <Grid Grid.Column="1" RowDefinitions="*,Auto" Margin="16,12,16,12">
 
-                <ScrollViewer Grid.Row="0" Name="ChatScroll" VerticalScrollBarVisibility="Auto">
+                <!-- Empty-conversation placeholder: centred hint when the
+                     selected conversation has no messages. Sits behind the
+                     ScrollViewer so it appears through the empty list. -->
+                <Panel Grid.Row="0">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                Spacing="8"
+                                IsVisible="{Binding SelectedConversation.Messages.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}">
+                        <TextBlock Text="Start the conversation" Classes="h2"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Classes="muted sm" HorizontalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="420" TextAlignment="Center"
+                                   Text="Type a message below and press Enter to send. Shift+Enter for a new line." />
+                    </StackPanel>
+
+                    <ScrollViewer Name="ChatScroll" VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding SelectedConversation.Messages}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="vm:MessageViewModel">
@@ -215,20 +234,49 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </ScrollViewer>
+                    </ScrollViewer>
+                </Panel>
 
-                <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,12,0,0">
+                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,12,0,0">
                     <TextBox Grid.Column="0" Text="{Binding UserInput, Mode=TwoWay}"
                              PlaceholderText="Type a message, Shift+Enter for newline..."
                              AcceptsReturn="False" TextWrapping="Wrap"
                              MinHeight="56" MaxHeight="200"
                              KeyDown="OnComposeKeyDown" />
+                    <!-- Send and Stop share a column — only one is visible at a
+                         time depending on IsGenerating. Matches webui's toggle. -->
                     <Button Grid.Column="1" Content="Send" Margin="8,0,0,0"
-                            Command="{Binding SendCommand}" IsDefault="True" />
-                    <Button Grid.Column="2" Content="Cancel" Classes="outline" Margin="6,0,0,0"
-                            Command="{Binding CancelCommand}" />
+                            Command="{Binding SendCommand}" IsDefault="True"
+                            IsVisible="{Binding !IsGenerating}" />
+                    <Button Grid.Column="1" Content="Stop" Classes="destructive" Margin="8,0,0,0"
+                            Command="{Binding CancelCommand}"
+                            IsVisible="{Binding IsGenerating}" />
                 </Grid>
             </Grid>
         </Grid>
     </DockPanel>
+
+    <!-- Model-loading splash. Covers the main UI (including menus) while
+         ChatSession.Load runs, so the user knows work is happening and
+         can't kick off a second load. Blurs the background visually via
+         the semi-transparent overlay. -->
+    <Border IsVisible="{Binding IsBusy}"
+            Background="{DynamicResource Background}" Opacity="0.92">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Spacing="14" MinWidth="320">
+            <TextBlock Text="Loading model" Classes="h2" HorizontalAlignment="Center" />
+            <TextBlock Text="{Binding SelectedProfile.Name}" Classes="muted sm"
+                       HorizontalAlignment="Center" />
+            <ProgressBar IsIndeterminate="True" Height="4" Width="280" />
+            <TextBlock Text="{Binding StatusText}" Classes="xs muted"
+                       HorizontalAlignment="Center" MaxWidth="420"
+                       TextWrapping="Wrap" TextAlignment="Center" />
+        </StackPanel>
+    </Border>
+
+    <!-- Toast overlay — visual layer sits above DockPanel so cards appear
+         over the chat. IsHitTestVisible=false on the host ensures clicks
+         pass through to the main UI. -->
+    <views:ToastHost />
+    </Panel>
 </Window>

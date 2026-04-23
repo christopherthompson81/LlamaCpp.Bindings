@@ -1,0 +1,49 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:svc="using:LlamaCpp.Bindings.LlamaChat.Services"
+             mc:Ignorable="d"
+             x:Class="LlamaCpp.Bindings.LlamaChat.Views.ToastHost"
+             IsHitTestVisible="False">
+
+    <!--
+        Overlay sitting in the bottom-right of the main window. IsHitTestVisible
+        is false on the root so the host never steals clicks from the rest of
+        the UI; individual toast cards re-enable hit testing as they need it.
+    -->
+    <ItemsControl ItemsSource="{x:Static svc:ToastService.Current}"
+                  VerticalAlignment="Bottom"
+                  HorizontalAlignment="Right"
+                  Margin="0,0,16,16"
+                  IsHitTestVisible="True">
+        <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+                <StackPanel Orientation="Vertical" Spacing="8" />
+            </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="svc:Toast">
+                <Border Classes="toast"
+                        Classes.info="{Binding IsInfo}"
+                        Classes.success="{Binding IsSuccess}"
+                        Classes.warning="{Binding IsWarning}"
+                        Classes.error="{Binding IsError}"
+                        MinWidth="260" MaxWidth="420"
+                        Padding="12,10"
+                        CornerRadius="{DynamicResource RadiusMd}"
+                        Background="{DynamicResource Card}"
+                        BorderBrush="{DynamicResource Border}"
+                        BorderThickness="1">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                   FontSize="{DynamicResource FontSizeSm}" />
+                        <TextBlock Text="{Binding Message}" Classes="xs muted"
+                                   TextWrapping="Wrap"
+                                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+</UserControl>

@@ -308,6 +308,23 @@
     </Style>
 
     <!-- ================================================================
+         Toast notifications — each card is a Border.toast with a severity
+         modifier class that picks its accent colour.
+         ================================================================ -->
+    <Style Selector="Border.toast">
+        <Setter Property="BoxShadow" Value="0 4 16 0 #40000000" />
+    </Style>
+    <Style Selector="Border.toast.success">
+        <Setter Property="BorderBrush" Value="#16A34A" />
+    </Style>
+    <Style Selector="Border.toast.warning">
+        <Setter Property="BorderBrush" Value="#D97706" />
+    </Style>
+    <Style Selector="Border.toast.error">
+        <Setter Property="BorderBrush" Value="{DynamicResource Destructive}" />
+    </Style>
+
+    <!-- ================================================================
          Streaming cursor — a pulsing block character appended to the live
          tail of MarkdownView while the bubble has IsStreaming=true.
          ================================================================ -->

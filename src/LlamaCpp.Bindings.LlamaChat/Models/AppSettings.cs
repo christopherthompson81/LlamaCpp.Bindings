@@ -1,11 +1,22 @@
 namespace LlamaCpp.Bindings.LlamaChat.Models;
 
+public enum AppThemeMode
+{
+    /// <summary>Follow the system light/dark preference.</summary>
+    Auto,
+    Light,
+    Dark,
+}
+
 /// <summary>
 /// Application-wide preferences that aren't tied to a specific model profile.
 /// Persisted as a single JSON file by <see cref="Services.AppSettingsStore"/>.
 /// </summary>
 public sealed record AppSettings
 {
+    /// <summary>Light / Dark / Auto (follow system).</summary>
+    public AppThemeMode ThemeMode { get; init; } = AppThemeMode.Auto;
+
     /// <summary>
     /// Keep the message list pinned to the bottom as new content streams in.
     /// Disable this to scroll freely while the assistant is still speaking.

@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
         xmlns:v="using:LlamaCpp.Bindings.LlamaChat.Views"
+        xmlns:m="using:LlamaCpp.Bindings.LlamaChat.Models"
         mc:Ignorable="d"
         d:DesignWidth="960" d:DesignHeight="720"
         x:Class="LlamaCpp.Bindings.LlamaChat.Views.SettingsWindow"
@@ -80,6 +81,22 @@
                 <Border Classes="card" Margin="8">
                     <StackPanel DataContext="{Binding AppSettings}" Spacing="14">
                         <TextBlock Text="Display" Classes="h3" />
+
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Theme" FontWeight="SemiBold" />
+                            <Grid ColumnDefinitions="130,*">
+                                <TextBlock Grid.Column="0" Text="Mode" VerticalAlignment="Center" />
+                                <ComboBox Grid.Column="1" SelectedItem="{Binding ThemeMode}">
+                                    <ComboBox.Items>
+                                        <m:AppThemeMode>Auto</m:AppThemeMode>
+                                        <m:AppThemeMode>Light</m:AppThemeMode>
+                                        <m:AppThemeMode>Dark</m:AppThemeMode>
+                                    </ComboBox.Items>
+                                </ComboBox>
+                            </Grid>
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Auto follows your system's light/dark preference." />
+                        </StackPanel>
 
                         <StackPanel Spacing="6">
                             <CheckBox Content="Auto-scroll new messages"
