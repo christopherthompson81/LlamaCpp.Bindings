@@ -49,6 +49,14 @@ internal static class DialogService
         await win.ShowDialog(owner);
     }
 
+    public static async Task ShowAboutAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return;
+        var win = new AboutDialog();
+        await win.ShowDialog(owner);
+    }
+
     public static async Task<string?> ConfirmAsync(
         string title, string message,
         IReadOnlyList<(string Key, string Label, bool Destructive, bool Primary)> options)

@@ -907,6 +907,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private async Task ShowShortcutsAsync() => await DialogService.ShowShortcutsAsync();
 
     [RelayCommand]
+    private async Task ShowAboutAsync() => await DialogService.ShowAboutAsync();
+
+    [RelayCommand]
     private async Task ExportConversationsAsync()
     {
         var path = await DialogService.PickExportFileAsync();

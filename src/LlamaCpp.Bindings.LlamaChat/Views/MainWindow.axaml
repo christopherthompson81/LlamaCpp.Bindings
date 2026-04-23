@@ -50,6 +50,8 @@
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="Keyboard _shortcuts..." Command="{Binding ShowShortcutsCommand}" />
+                <Separator />
+                <MenuItem Header="_About..." Command="{Binding ShowAboutCommand}" />
             </MenuItem>
         </Menu>
 
