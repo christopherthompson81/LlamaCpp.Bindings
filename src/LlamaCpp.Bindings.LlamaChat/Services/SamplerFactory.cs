@@ -47,9 +47,15 @@ internal static class SamplerFactory
             b.WithXtc(xtcProb, s.XtcThreshold, minKeep: 1, seed: s.Seed);
         }
 
-        if (!string.IsNullOrWhiteSpace(s.GbnfGrammar))
+        // Response-format constraint. Dispatch on the mode to figure out
+        // what grammar to hand the sampler. Legacy GbnfGrammar (from
+        // profiles saved before ResponseFormat existed) wins if the new
+        // field is Off and the old one is populated — preserves behaviour
+        // on old config files without a migration step.
+        var grammar = BuildResponseFormatGrammar(s);
+        if (grammar is not null)
         {
-            b.WithGrammar(vocab, new LlamaGrammar(s.GbnfGrammar!, s.GrammarStartRule));
+            b.WithGrammar(vocab, new LlamaGrammar(grammar, s.GrammarStartRule));
         }
 
         if (s.DynaTempRange > 0f)
@@ -76,5 +82,42 @@ internal static class SamplerFactory
         }
 
         return b.Build();
+    }
+
+    /// <summary>
+    /// Pick the grammar source for the sampler based on the response-format
+    /// mode, compiling a JSON schema on the fly if needed. Returns null
+    /// to skip the grammar stage entirely.
+    /// </summary>
+    /// <remarks>
+    /// Compile errors on a JSON schema throw
+    /// <see cref="JsonSchemaConversionException"/>; we let them propagate
+    /// so the user sees the specific error, rather than silently dropping
+    /// the constraint and generating unconstrained output that looks right
+    /// to the eye but fails downstream.
+    /// </remarks>
+    private static string? BuildResponseFormatGrammar(SamplerSettings s)
+    {
+        switch (s.ResponseFormat)
+        {
+            case ResponseFormatMode.Off:
+                // Back-compat: old profiles stashed raw GBNF in GbnfGrammar.
+                // Honour it so existing files keep working without a migration.
+                return string.IsNullOrWhiteSpace(s.GbnfGrammar) ? null : s.GbnfGrammar;
+
+            case ResponseFormatMode.Json:
+                // The bindings ship an "any valid JSON" grammar as a static.
+                return LlamaGrammar.Json.GbnfSource;
+
+            case ResponseFormatMode.JsonSchema:
+                if (string.IsNullOrWhiteSpace(s.ResponseFormatText)) return null;
+                return JsonSchemaToGbnf.Convert(s.ResponseFormatText);
+
+            case ResponseFormatMode.Gbnf:
+                return string.IsNullOrWhiteSpace(s.ResponseFormatText) ? null : s.ResponseFormatText;
+
+            default:
+                return null;
+        }
     }
 }

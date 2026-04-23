@@ -49,8 +49,74 @@ public partial class SamplerPanelViewModel : ObservableObject
     [ObservableProperty] private decimal _mirostatTau = 5m;
     [ObservableProperty] private decimal _mirostatEta = 0.1m;
 
-    // --- Grammar ---
-    [ObservableProperty] private string _grammar = string.Empty;
+    // --- Response format ---
+    // ResponseFormat drives how ResponseFormatText is interpreted when
+    // building the sampler: Off → no constraint; Json → the built-in
+    // "any valid JSON" grammar (text is ignored); JsonSchema → compile
+    // the text as JSON Schema → GBNF; Gbnf → use the text as raw
+    // grammar. The compiled preview updates live from both fields.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CompiledGbnfPreview),
+                              nameof(IsResponseFormatTextVisible),
+                              nameof(ResponseFormatTextHint))]
+    private ResponseFormatMode _responseFormat = ResponseFormatMode.Off;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CompiledGbnfPreview))]
+    private string _responseFormatText = string.Empty;
+
+    /// <summary>
+    /// Hide the editor when there's nothing to type — Off and Json modes
+    /// don't take free-text input. Keeps the tab compact in the common
+    /// "just want JSON" case.
+    /// </summary>
+    public bool IsResponseFormatTextVisible =>
+        ResponseFormat is ResponseFormatMode.JsonSchema or ResponseFormatMode.Gbnf;
+
+    public string ResponseFormatTextHint => ResponseFormat switch
+    {
+        ResponseFormatMode.JsonSchema => "JSON Schema — paste or type a schema.",
+        ResponseFormatMode.Gbnf       => "GBNF grammar — hand-written rule definitions.",
+        _                             => string.Empty,
+    };
+
+    /// <summary>
+    /// Live-compiled preview of the grammar that would be fed to the
+    /// sampler. Compile errors on a JSON schema surface as a readable
+    /// message in the preview pane instead of throwing — the user is
+    /// still editing, and we don't want the UI to blow up mid-keystroke.
+    /// </summary>
+    public string CompiledGbnfPreview
+    {
+        get
+        {
+            try
+            {
+                return ResponseFormat switch
+                {
+                    ResponseFormatMode.Off        => "(no constraint)",
+                    ResponseFormatMode.Json       => LlamaGrammar.Json.GbnfSource,
+                    ResponseFormatMode.JsonSchema =>
+                        string.IsNullOrWhiteSpace(ResponseFormatText)
+                            ? "(paste a JSON Schema above)"
+                            : JsonSchemaToGbnf.Convert(ResponseFormatText),
+                    ResponseFormatMode.Gbnf       =>
+                        string.IsNullOrWhiteSpace(ResponseFormatText)
+                            ? "(type a GBNF grammar above)"
+                            : ResponseFormatText,
+                    _                             => string.Empty,
+                };
+            }
+            catch (JsonSchemaConversionException ex)
+            {
+                return $"⚠ Schema compile error:\n{ex.Message}";
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                return $"⚠ JSON parse error:\n{ex.Message}";
+            }
+        }
+    }
 
     // --- Generation ---
     [ObservableProperty] private decimal _maxTokens = 1024m;
@@ -81,7 +147,12 @@ public partial class SamplerPanelViewModel : ObservableObject
         Mirostat = Mirostat,
         MirostatTau = (float)MirostatTau,
         MirostatEta = (float)MirostatEta,
-        GbnfGrammar = string.IsNullOrWhiteSpace(Grammar) ? null : Grammar,
+        ResponseFormat = ResponseFormat,
+        ResponseFormatText = ResponseFormatText,
+        // GbnfGrammar stays null — the new path writes through
+        // ResponseFormatText; the legacy field on the model only matters
+        // for reading back old config files.
+        GbnfGrammar = null,
     };
 
     public GenerationSettings SnapshotGeneration() => new()
@@ -121,7 +192,15 @@ public partial class SamplerPanelViewModel : ObservableObject
         Mirostat = s.Mirostat;
         MirostatTau = (decimal)s.MirostatTau;
         MirostatEta = (decimal)s.MirostatEta;
-        Grammar = s.GbnfGrammar ?? string.Empty;
+        // Response format: prefer the new fields; migrate the legacy
+        // GbnfGrammar field into Gbnf mode if it's the only thing set.
+        ResponseFormat = s.ResponseFormat;
+        ResponseFormatText = s.ResponseFormatText;
+        if (ResponseFormat == ResponseFormatMode.Off && !string.IsNullOrWhiteSpace(s.GbnfGrammar))
+        {
+            ResponseFormat = ResponseFormatMode.Gbnf;
+            ResponseFormatText = s.GbnfGrammar!;
+        }
         MaxTokens = g.MaxTokens;
         ExtractReasoning = g.ExtractReasoning;
         ExtractAsrTranscript = g.ExtractAsrTranscript;

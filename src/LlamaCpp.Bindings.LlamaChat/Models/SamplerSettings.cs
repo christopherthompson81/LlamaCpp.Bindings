@@ -50,11 +50,49 @@ public sealed record SamplerSettings
     public float MirostatTau { get; init; } = 5f;
     public float MirostatEta { get; init; } = 0.1f;
 
-    // --- Constraints ---
-    public string? GbnfGrammar { get; init; } = null;
+    // --- Response format constraints ---
+    /// <summary>
+    /// How <see cref="ResponseFormatText"/> gets interpreted. Drives which
+    /// path <see cref="Services.SamplerFactory"/> takes to compile a grammar.
+    /// Off means no constraint at all.
+    /// </summary>
+    public ResponseFormatMode ResponseFormat { get; init; } = ResponseFormatMode.Off;
+
+    /// <summary>
+    /// Free-form text whose meaning depends on <see cref="ResponseFormat"/>:
+    /// empty when Off / Json; a JSON Schema document when JsonSchema; a raw
+    /// GBNF grammar when Gbnf. Lives here rather than on the profile so
+    /// it's snapshot/round-tripped with the rest of the sampler state.
+    /// </summary>
+    public string ResponseFormatText { get; init; } = string.Empty;
+
     public string GrammarStartRule { get; init; } = "root";
+
+    /// <summary>
+    /// Legacy slot — raw GBNF. Retained for back-compat with profiles
+    /// saved before <see cref="ResponseFormat"/> existed; loaders migrate
+    /// a non-empty value here into <see cref="ResponseFormatText"/> with
+    /// <see cref="ResponseFormatMode.Gbnf"/>. Don't write through this
+    /// in new code.
+    /// </summary>
+    public string? GbnfGrammar { get; init; } = null;
 
     public static SamplerSettings Default { get; } = new();
 }
 
 public enum MirostatMode { Off, V1, V2 }
+
+/// <summary>
+/// How the response-format free-text field should be interpreted.
+/// </summary>
+public enum ResponseFormatMode
+{
+    /// <summary>No grammar constraint. Sampler runs free.</summary>
+    Off,
+    /// <summary>Any valid JSON value. Uses <c>LlamaGrammar.Json</c> — no schema needed.</summary>
+    Json,
+    /// <summary>Free-text holds a JSON Schema; compile via <see cref="JsonSchemaToGbnf"/>.</summary>
+    JsonSchema,
+    /// <summary>Free-text holds a hand-written GBNF grammar. Passed through as-is.</summary>
+    Gbnf,
+}

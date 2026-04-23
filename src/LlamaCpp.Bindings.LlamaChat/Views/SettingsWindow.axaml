@@ -150,6 +150,92 @@
                 </ContentControl>
             </TabItem>
 
+            <!-- ===== Response format ===== -->
+            <TabItem Header="Response format">
+                <Grid RowDefinitions="Auto,*" Margin="8"
+                      DataContext="{Binding SelectedProfile}">
+
+                    <!-- Top card: profile reminder + mode dropdown -->
+                    <Border Grid.Row="0" Classes="card">
+                        <Grid ColumnDefinitions="Auto,*,Auto,180">
+                            <TextBlock Grid.Column="0" Text="Profile"
+                                       Classes="section" VerticalAlignment="Center"
+                                       Margin="0,0,12,0" />
+                            <ComboBox Grid.Column="1" Margin="0,0,16,0"
+                                      HorizontalAlignment="Stretch"
+                                      ItemsSource="{Binding $parent[Window].((vm:SettingsWindowViewModel)DataContext).Profiles}"
+                                      SelectedItem="{Binding $parent[Window].((vm:SettingsWindowViewModel)DataContext).SelectedProfile}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate DataType="vm:ProfileEditorViewModel">
+                                        <TextBlock Text="{Binding Name}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <TextBlock Grid.Column="2" Text="Mode"
+                                       Classes="section" VerticalAlignment="Center"
+                                       Margin="0,0,12,0" />
+                            <ComboBox Grid.Column="3" HorizontalAlignment="Stretch"
+                                      DataContext="{Binding SamplerPanel}"
+                                      SelectedItem="{Binding ResponseFormat}">
+                                <ComboBox.Items>
+                                    <m:ResponseFormatMode>Off</m:ResponseFormatMode>
+                                    <m:ResponseFormatMode>Json</m:ResponseFormatMode>
+                                    <m:ResponseFormatMode>JsonSchema</m:ResponseFormatMode>
+                                    <m:ResponseFormatMode>Gbnf</m:ResponseFormatMode>
+                                </ComboBox.Items>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <!-- Bottom: side-by-side editor (left) + compiled preview (right). -->
+                    <Grid Grid.Row="1" ColumnDefinitions="*,*" Margin="0,16,0,0"
+                          DataContext="{Binding SamplerPanel}">
+
+                        <Border Grid.Column="0" Classes="card" Margin="0,0,8,0">
+                            <Grid RowDefinitions="Auto,Auto,*">
+                                <TextBlock Grid.Row="0" Text="Schema / Grammar"
+                                           Classes="section" Margin="0" />
+                                <TextBlock Grid.Row="1" Classes="xs muted"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,8"
+                                           Text="{Binding ResponseFormatTextHint}"
+                                           IsVisible="{Binding IsResponseFormatTextVisible}" />
+                                <TextBox Grid.Row="2"
+                                         IsVisible="{Binding IsResponseFormatTextVisible}"
+                                         AcceptsReturn="True"
+                                         TextWrapping="NoWrap"
+                                         FontFamily="{DynamicResource CodeFontFamily}"
+                                         FontSize="12"
+                                         Text="{Binding ResponseFormatText, Mode=TwoWay}"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                                <!-- Empty-state hint for Off / Json, where no editor is needed. -->
+                                <TextBlock Grid.Row="2"
+                                           IsVisible="{Binding !IsResponseFormatTextVisible}"
+                                           Classes="muted sm"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Top"
+                                           Text="Off disables grammar-based sampling — the model writes freely. Json forces the output to be any valid JSON value without constraining shape." />
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Column="1" Classes="card" Margin="8,0,0,0">
+                            <Grid RowDefinitions="Auto,*">
+                                <TextBlock Grid.Row="0" Text="Compiled GBNF"
+                                           Classes="section" Margin="0,0,0,8" />
+                                <ScrollViewer Grid.Row="1" Padding="0,0,8,0">
+                                    <SelectableTextBlock
+                                        Text="{Binding CompiledGbnfPreview}"
+                                        FontFamily="{DynamicResource CodeFontFamily}"
+                                        FontSize="12"
+                                        TextWrapping="NoWrap" />
+                                </ScrollViewer>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
         </TabControl>
 
         <!-- Footer -->

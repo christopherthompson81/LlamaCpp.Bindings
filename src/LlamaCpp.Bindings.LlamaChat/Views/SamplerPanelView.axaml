@@ -142,10 +142,9 @@
             <NumericUpDown Grid.Column="1" Value="{Binding MirostatEta}" Minimum="0" Increment="0.05" FormatString="F2" />
         </Grid>
 
-        <TextBlock Classes="section" Text="Grammar (GBNF)" />
-        <TextBox Text="{Binding Grammar}" AcceptsReturn="True" TextWrapping="Wrap"
-                 MinHeight="80" MaxHeight="200" FontFamily="Consolas,Menlo,monospace"
-                 PlaceholderText="Paste a GBNF grammar to constrain output..." />
+        <!-- Grammar / response-format lives on its own Settings tab
+             ("Response format") with live compile preview. Keeping the
+             sampler panel scoped to temperature/truncation/penalties. -->
 
     </StackPanel>
 </UserControl>
