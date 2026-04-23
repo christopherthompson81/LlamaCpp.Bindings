@@ -45,12 +45,27 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                             <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="6">
-                                <Button Content="Add" Classes="sm outline"
-                                        Command="{Binding AddProfileCommand}" />
-                                <Button Content="Duplicate" Classes="sm outline"
-                                        Command="{Binding DuplicateProfileCommand}" />
-                                <Button Content="Delete" Classes="sm destructive"
-                                        Command="{Binding DeleteProfileCommand}" />
+                                <Button Classes="sm outline" ToolTip.Tip="Add profile"
+                                        Command="{Binding AddProfileCommand}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Path Classes="icon xs" Data="{StaticResource IconPlus}" />
+                                        <TextBlock Text="Add" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="sm outline" ToolTip.Tip="Duplicate profile"
+                                        Command="{Binding DuplicateProfileCommand}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Path Classes="icon xs" Data="{StaticResource IconCopy}" />
+                                        <TextBlock Text="Duplicate" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="sm destructive" ToolTip.Tip="Delete profile"
+                                        Command="{Binding DeleteProfileCommand}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Path Classes="icon xs" Data="{StaticResource IconTrash}" />
+                                        <TextBlock Text="Delete" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
                         </Grid>
                     </Border>

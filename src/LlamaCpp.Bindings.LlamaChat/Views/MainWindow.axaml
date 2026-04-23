@@ -73,12 +73,30 @@
                         </DataTemplate>
                     </ComboBox.ItemTemplate>
                 </ComboBox>
-                <Button Grid.Column="2" Content="Load" Margin="8,0,0,0"
-                        Command="{Binding LoadCommand}" />
-                <Button Grid.Column="3" Content="Unload" Classes="outline" Margin="6,0,0,0"
-                        Command="{Binding UnloadCommand}" />
-                <Button Grid.Column="4" Content="Settings" Classes="outline" Margin="6,0,0,0"
-                        Command="{Binding OpenSettingsCommand}" />
+                <Button Grid.Column="2" Margin="8,0,0,0"
+                        Command="{Binding LoadCommand}"
+                        ToolTip.Tip="Load selected profile (Ctrl+L)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Path Classes="icon sm" Data="{StaticResource IconPlay}" />
+                        <TextBlock Text="Load" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button Grid.Column="3" Classes="outline" Margin="6,0,0,0"
+                        Command="{Binding UnloadCommand}"
+                        ToolTip.Tip="Unload model">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Path Classes="icon sm" Data="{StaticResource IconUnplug}" />
+                        <TextBlock Text="Unload" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button Grid.Column="4" Classes="outline" Margin="6,0,0,0"
+                        Command="{Binding OpenSettingsCommand}"
+                        ToolTip.Tip="Preferences (Ctrl+,)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Path Classes="icon sm" Data="{StaticResource IconSettings}" />
+                        <TextBlock Text="Settings" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
                 <TextBlock Grid.Column="5" Text="{Binding ModelSummary}" Classes="muted xs"
                            VerticalAlignment="Center" Margin="16,0,0,0"
                            TextTrimming="CharacterEllipsis" />
@@ -129,12 +147,17 @@
                 <Grid RowDefinitions="Auto,Auto,*">
 
                     <!-- New chat button -->
-                    <Button Grid.Row="0" Content="+  New chat"
+                    <Button Grid.Row="0"
                             Classes="outline"
                             Margin="10,10,10,6"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left"
-                            Command="{Binding NewConversationCommand}" />
+                            Command="{Binding NewConversationCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Path Classes="icon sm" Data="{StaticResource IconPlus}" />
+                            <TextBlock Text="New chat" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
 
                     <!-- Search -->
                     <TextBox Grid.Row="1" Name="SearchBox"
@@ -162,9 +185,10 @@
                                                        Text="{Binding DisplayTitle}"
                                                        FontWeight="Medium"
                                                        TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Grid.Column="1" Text="📌" FontSize="11"
-                                                       Opacity="0.7" Margin="6,0,0,0"
-                                                       IsVisible="{Binding Pinned}" />
+                                            <Path Grid.Column="1" Classes="icon xs"
+                                                  Data="{StaticResource IconPin}"
+                                                  Opacity="0.7" Margin="6,0,0,0"
+                                                  IsVisible="{Binding Pinned}" />
                                         </Grid>
                                         <TextBlock Text="{Binding Preview}"
                                                    Classes="muted xs"
@@ -263,8 +287,9 @@
                                                                 <StackPanel IsVisible="{Binding IsAudio}"
                                                                             Orientation="Horizontal" Spacing="6"
                                                                             Margin="10,8">
-                                                                    <TextBlock Text="🎵" FontSize="16"
-                                                                               VerticalAlignment="Center" />
+                                                                    <Path Classes="icon"
+                                                                          Data="{StaticResource IconVolume}"
+                                                                          VerticalAlignment="Center" />
                                                                     <TextBlock Text="{Binding FileName, FallbackValue=audio}"
                                                                                Classes="sm" VerticalAlignment="Center"
                                                                                TextTrimming="CharacterEllipsis"
@@ -292,7 +317,8 @@
                                                     BorderBrush="{DynamicResource Border}" BorderThickness="1"
                                                     CornerRadius="10" Padding="8,2">
                                                 <StackPanel Orientation="Horizontal" Spacing="4">
-                                                    <TextBlock Text="🌐" Classes="xs" VerticalAlignment="Center" />
+                                                    <Path Classes="icon xs" Data="{StaticResource IconGlobe}"
+                                                          VerticalAlignment="Center" />
                                                     <TextBlock Text="{Binding AsrLanguage}"
                                                                Classes="xs muted" VerticalAlignment="Center" />
                                                 </StackPanel>
@@ -319,18 +345,24 @@
                                                              eating transcript space. -->
                                                         <Border Classes="toolchip" Margin="0,0,6,4"
                                                                 ToolTip.Tip="{Binding RawMatch}">
-                                                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                                                <TextBlock Text="🔧" Classes="xs" />
+                                                            <StackPanel Orientation="Horizontal" Spacing="4"
+                                                                        VerticalAlignment="Center">
+                                                                <Path Classes="icon xs" Data="{StaticResource IconWrench}"
+                                                                      VerticalAlignment="Center" />
                                                                 <TextBlock Text="{Binding Name}"
-                                                                           Classes="xs" FontWeight="SemiBold" />
+                                                                           Classes="xs" FontWeight="SemiBold"
+                                                                           VerticalAlignment="Center" />
                                                                 <TextBlock Text="("
-                                                                           Classes="xs muted" />
+                                                                           Classes="xs muted"
+                                                                           VerticalAlignment="Center" />
                                                                 <TextBlock Text="{Binding ArgsDisplay}"
                                                                            Classes="xs muted"
                                                                            TextTrimming="CharacterEllipsis"
-                                                                           MaxWidth="320" />
+                                                                           MaxWidth="320"
+                                                                           VerticalAlignment="Center" />
                                                                 <TextBlock Text=")"
-                                                                           Classes="xs muted" />
+                                                                           Classes="xs muted"
+                                                                           VerticalAlignment="Center" />
                                                             </StackPanel>
                                                         </Border>
                                                     </DataTemplate>
@@ -356,8 +388,9 @@
                                                       IsExpanded="{Binding IsToolExpanded, Mode=TwoWay}">
                                                 <Expander.Header>
                                                     <StackPanel Orientation="Horizontal" Spacing="6">
-                                                        <TextBlock Text="🔧" Classes="xs" Opacity="0.6"
-                                                                   VerticalAlignment="Center" />
+                                                        <Path Classes="icon sm" Data="{StaticResource IconWrench}"
+                                                              Opacity="0.7"
+                                                              VerticalAlignment="Center" />
                                                         <TextBlock Text="{Binding ToolName, FallbackValue=tool}"
                                                                    FontWeight="SemiBold"
                                                                    VerticalAlignment="Center" />
@@ -380,33 +413,46 @@
                                             <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
                                                        IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).AppSettings.ShowMessageStats}" />
 
-                                            <!-- Action bar -->
-                                            <StackPanel Orientation="Horizontal" Spacing="2" Margin="-6,4,-6,-4"
+                                            <!-- Action bar. Icon-only ghost buttons with tooltips —
+                                                 the icons read at a glance for the common actions and
+                                                 the tooltip covers the less obvious ones. Hidden by
+                                                 default; fades in on bubble hover (styles in
+                                                 Theme/Controls.axaml). -->
+                                            <StackPanel Classes="actions"
+                                                        Orientation="Horizontal" Spacing="2" Margin="-2,4,-2,-4"
                                                         IsVisible="{Binding !IsStreaming}">
-                                                <Button Content="Copy" Classes="ghost sm"
+                                                <Button Classes="ghost icon sm"
+                                                        ToolTip.Tip="Copy"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CopyMessageCommand}"
-                                                        CommandParameter="{Binding}" />
-                                                <Button Content="Edit" Classes="ghost sm"
+                                                        CommandParameter="{Binding}">
+                                                    <Path Classes="icon xs" Data="{StaticResource IconCopy}" />
+                                                </Button>
+                                                <Button Classes="ghost icon sm"
+                                                        ToolTip.Tip="Edit"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).BeginEditMessageCommand}"
-                                                        CommandParameter="{Binding}" />
-                                                <Button Content="Retry" Classes="ghost sm"
+                                                        CommandParameter="{Binding}">
+                                                    <Path Classes="icon xs" Data="{StaticResource IconPencil}" />
+                                                </Button>
+                                                <Button Classes="ghost icon sm"
                                                         IsVisible="{Binding IsAssistant}"
+                                                        ToolTip.Tip="Regenerate"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RegenerateMessageCommand}"
-                                                        CommandParameter="{Binding}" />
-                                                <!-- Continue: visible on assistant bubbles; the command
-                                                     short-circuits if msg isn't the last one (can only
-                                                     extend current KV state). Keeping it visible on every
-                                                     assistant bubble is simpler than binding a
-                                                     "is-last" flag through the VM, and the short-circuit
-                                                     surfaces a toast if the user clicks it on an old one. -->
-                                                <Button Content="Continue" Classes="ghost sm"
+                                                        CommandParameter="{Binding}">
+                                                    <Path Classes="icon xs" Data="{StaticResource IconRotateCw}" />
+                                                </Button>
+                                                <Button Classes="ghost icon sm"
                                                         IsVisible="{Binding IsAssistant}"
-                                                        ToolTip.Tip="Extend this reply without re-prompting (only works on the most recent message)."
+                                                        ToolTip.Tip="Continue — extend this reply without re-prompting (last message only)"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ContinueMessageCommand}"
-                                                        CommandParameter="{Binding}" />
-                                                <Button Content="Delete" Classes="ghost sm"
+                                                        CommandParameter="{Binding}">
+                                                    <Path Classes="icon xs" Data="{StaticResource IconPlay}" />
+                                                </Button>
+                                                <Button Classes="ghost icon sm"
+                                                        ToolTip.Tip="Delete"
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteMessageCommand}"
-                                                        CommandParameter="{Binding}" />
+                                                        CommandParameter="{Binding}">
+                                                    <Path Classes="icon xs" Data="{StaticResource IconTrash}" />
+                                                </Button>
                                             </StackPanel>
                                         </StackPanel>
 
@@ -456,45 +502,46 @@
                                         <Image IsVisible="{Binding IsImage}"
                                                Source="{Binding Converter={StaticResource AttachmentThumbnail}}"
                                                Stretch="UniformToFill" />
-                                        <TextBlock IsVisible="{Binding IsAudio}"
-                                                   Text="🎵" FontSize="28"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" />
-                                        <Button Classes="ghost sm"
-                                                Content="×"
+                                        <Path IsVisible="{Binding IsAudio}"
+                                              Classes="icon lg" Data="{StaticResource IconVolume}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                                        <Button Classes="ghost icon sm"
                                                 HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                Width="18" Height="18" Padding="0"
-                                                FontSize="13"
+                                                Width="18" Height="18"
                                                 Background="{DynamicResource Card}"
                                                 CornerRadius="9" Margin="0,-4,-4,0"
                                                 Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemovePendingAttachmentCommand}"
                                                 CommandParameter="{Binding}"
-                                                ToolTip.Tip="Remove" />
+                                                ToolTip.Tip="Remove">
+                                            <Path Classes="icon xs" Data="{StaticResource IconX}" />
+                                        </Button>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- Attach/prompt/resource buttons stacked vertically so we
-                         don't eat horizontal space in the compose row. Paperclip
-                         is image/audio, ⚡ inserts an MCP prompt, 📁 browses MCP
-                         resources. -->
+                    <!-- Attach / prompt / resource buttons stacked vertically so
+                         we don't eat horizontal space in the compose row. -->
                     <StackPanel Grid.Column="0" Grid.Row="1" Orientation="Vertical"
                                 Spacing="2" Margin="0,0,6,0" VerticalAlignment="Top">
-                        <Button Content="📎" Classes="ghost"
+                        <Button Classes="ghost icon"
                                 ToolTip.Tip="Attach image or audio (paste or drop works too)"
                                 Command="{Binding AttachMediaCommand}"
-                                IsEnabled="{Binding CanAttachMedia}"
-                                Padding="8,6" />
-                        <Button Content="⚡" Classes="ghost"
+                                IsEnabled="{Binding CanAttachMedia}">
+                            <Path Classes="icon" Data="{StaticResource IconPaperclip}" />
+                        </Button>
+                        <Button Classes="ghost icon"
                                 ToolTip.Tip="Insert MCP prompt"
-                                Command="{Binding InsertMcpPromptCommand}"
-                                Padding="8,6" />
-                        <Button Content="📁" Classes="ghost"
+                                Command="{Binding InsertMcpPromptCommand}">
+                            <Path Classes="icon" Data="{StaticResource IconZap}" />
+                        </Button>
+                        <Button Classes="ghost icon"
                                 ToolTip.Tip="Browse MCP resources"
-                                Command="{Binding AttachMcpResourceCommand}"
-                                Padding="8,6" />
+                                Command="{Binding AttachMcpResourceCommand}">
+                            <Path Classes="icon" Data="{StaticResource IconFolder}" />
+                        </Button>
                     </StackPanel>
 
                     <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding UserInput, Mode=TwoWay}"
@@ -508,12 +555,24 @@
                                Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
                     <!-- Send and Stop share a column — only one is visible at a
                          time depending on IsGenerating. Matches webui's toggle. -->
-                    <Button Grid.Column="2" Grid.Row="1" Content="Send" Margin="8,0,0,0"
+                    <Button Grid.Column="2" Grid.Row="1" Margin="8,0,0,0"
                             Command="{Binding SendCommand}" IsDefault="True"
-                            IsVisible="{Binding !IsGenerating}" />
-                    <Button Grid.Column="2" Grid.Row="1" Content="Stop" Classes="destructive" Margin="8,0,0,0"
+                            IsVisible="{Binding !IsGenerating}"
+                            ToolTip.Tip="Send (Enter)">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="icon sm" Data="{StaticResource IconSend}" />
+                            <TextBlock Text="Send" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Grid.Column="2" Grid.Row="1" Classes="destructive" Margin="8,0,0,0"
                             Command="{Binding CancelCommand}"
-                            IsVisible="{Binding IsGenerating}" />
+                            IsVisible="{Binding IsGenerating}"
+                            ToolTip.Tip="Stop generation">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="icon sm" Data="{StaticResource IconSquare}" />
+                            <TextBlock Text="Stop" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                 </Grid>
             </Grid>
         </Grid>

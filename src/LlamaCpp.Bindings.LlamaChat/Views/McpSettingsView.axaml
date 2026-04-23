@@ -42,10 +42,20 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="6">
-                    <Button Content="Add" Classes="sm outline"
-                            Command="{Binding AddServerCommand}" />
-                    <Button Content="Delete" Classes="sm destructive"
-                            Command="{Binding DeleteServerCommand}" />
+                    <Button Classes="sm outline" ToolTip.Tip="Add server"
+                            Command="{Binding AddServerCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <Path Classes="icon xs" Data="{StaticResource IconPlus}" />
+                            <TextBlock Text="Add" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="sm destructive" ToolTip.Tip="Delete server"
+                            Command="{Binding DeleteServerCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <Path Classes="icon xs" Data="{StaticResource IconTrash}" />
+                            <TextBlock Text="Delete" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -114,17 +124,32 @@
                                 <Border IsVisible="{Binding HasTools}"
                                         Background="{DynamicResource Muted}"
                                         CornerRadius="10" Padding="8,2">
-                                    <TextBlock Text="🔧 tools" Classes="xs muted" />
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Path Classes="icon xs" Data="{StaticResource IconWrench}"
+                                              VerticalAlignment="Center" />
+                                        <TextBlock Text="tools" Classes="xs muted"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
                                 </Border>
                                 <Border IsVisible="{Binding HasPrompts}"
                                         Background="{DynamicResource Muted}"
                                         CornerRadius="10" Padding="8,2">
-                                    <TextBlock Text="💬 prompts" Classes="xs muted" />
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Path Classes="icon xs" Data="{StaticResource IconZap}"
+                                              VerticalAlignment="Center" />
+                                        <TextBlock Text="prompts" Classes="xs muted"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
                                 </Border>
                                 <Border IsVisible="{Binding HasResources}"
                                         Background="{DynamicResource Muted}"
                                         CornerRadius="10" Padding="8,2">
-                                    <TextBlock Text="📄 resources" Classes="xs muted" />
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Path Classes="icon xs" Data="{StaticResource IconFolder}"
+                                              VerticalAlignment="Center" />
+                                        <TextBlock Text="resources" Classes="xs muted"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
                                 </Border>
                             </StackPanel>
                         </StackPanel>

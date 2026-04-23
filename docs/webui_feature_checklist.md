@@ -277,40 +277,18 @@ These items describe what the webui uses, not TODOs for us — we replaced Tailw
   - Cards: `RadiusLg` (10px)
   - Code blocks: will use `RadiusMd` when added
   - Message bubbles: `RadiusLg` (10px)
-- [~] **Radius for icon buttons** — deferred with icons.
+- [x] **Radius for icon buttons** — icon-only buttons inherit the base Button's 8px radius (`RadiusMd`); no bespoke pill-round variant needed for the sizes we use.
 - [x] **Sidebar spacing** — `RadiusLg` container, 6px inner list margin, 10px button row padding in `SettingsWindow.axaml`.
 - [x] **Message padding** — bubble `Padding="14,10"`, `Margin="0,4"` between bubbles via `Border.bubble` style.
 
 ### Iconography
 
-All deferred — the app currently uses text labels (Copy / Edit / Delete etc.). An icon pass is its own focused task; candidates are `Projektanker.Icons.Avalonia.MaterialDesign` or embedding lucide SVG path data as `Geometry` resources.
-
-- [~] **Icon library** — deferred.
-- [~] **Common icon usage**:
-  - Edit: `Edit`
-  - Copy: `Copy`
-  - Delete: `Trash2`
-  - Settings: `Settings`
-  - Menu: `Menu`, `ChevronDown`, `MoreVertical`
-  - Search: `Search`
-  - Refresh: `RefreshCw`
-  - Send: `Send` (inferred in form submit)
-  - Stop: `Square` or `Pause` (inferred)
-  - Plus: `Plus`
-  - X/close: `X`
-  - Chevron: `ChevronLeft`, `ChevronRight`, `ChevronUp`, `ChevronDown`
-  - Alert: `AlertTriangle`
-  - Info: `Info`
-  - Loading: `Loader2` (animated spinner)
-  - Vision: `Eye`
-  - Audio: `Volume2`
-  - Git: `GitBranch` (for fork)
-  - External: `ExternalLink`
-  - Code: `Code`
-- [~] **Icon sizing** — deferred.
-- [~] **Icon colors** — deferred.
-- [~] **Custom SVGs** — deferred. App icon is also TBD.
-- [~] **Icon-only buttons** — deferred.
+- [x] **Icon library** — embedded lucide SVG paths as `StreamGeometry` resources in `Theme/Icons.axaml` (Send, Square, X, Plus, Search, Copy, Pencil, RotateCw, Play, Trash, Paperclip, Zap, Folder, Settings, Wrench, Pin, Eye, Volume, Globe, ChevronDown, Menu, Info, Alert, Unplug, Network). Rendered via `Path` with stroke matching the 24-unit viewBox × 2px stroke convention. Chosen over `Projektanker.Icons.Avalonia.MaterialDesign` because lucide matches the shadcn/webui aesthetic the rest of the app emulates, and hand-embedding keeps the dependency footprint small.
+- [x] **Common icon usage** — swapped in across compose bar (Paperclip / Zap / Folder / Send / Square), message action bar (Copy / Pencil / RotateCw / Play / Trash), toolbar (Play / Unplug / Settings), sidebar (Plus for New chat), profile + MCP settings CRUD (Plus / Copy / Trash), conversation pin indicator (Pin), audio attachment chips (Volume), ASR language chip (Globe), tool-call chips + tool-bubble Expander headers (Wrench), and MCP capability badges (Wrench / Zap / Folder).
+- [x] **Icon sizing** — tokenised via `Path.icon` base style (16×16), plus `.xs` (12×12), `.sm` (14×14), `.lg` (18×18) class variants. `Button.icon` gives a square 28×28 slot (with `.sm` → 24×24, `.lg` → 36×36) so icon-only buttons line up with existing ghost/outline sizes.
+- [x] **Icon colors** — `Path.icon` strokes from `{DynamicResource Foreground}`; a nested selector (`Button Path.icon`) rebinds the stroke to the parent Button's `Foreground` so icons on primary/destructive/accent backgrounds pick up correct contrast automatically.
+- [~] **Custom SVGs** — app icon is the committed `Assets/icon-256.png`; a proper monochrome SVG set for in-app ornamentation (splash, empty states) is deferred.
+- [x] **Icon-only buttons** — `Button.icon` / `Button.icon.sm` / `Button.icon.lg` variants; used by the action bar (Copy/Edit/Retry/Continue/Delete), compose-bar attach/prompt/resource trio, and the attachment strip's × remove. Each has a `ToolTip.Tip` for label-free discoverability.
 
 ### Component patterns
 
@@ -392,7 +370,7 @@ All deferred — the app currently uses text labels (Copy / Edit / Delete etc.).
 - [x] **Radius scale** — `CornerRadius` resources in `Theme/Tokens.axaml`.
 - [x] **Fonts** — inherited system stack.
 - [x] **Spacing scale** — `SpacingXs/Sm/Md/Lg/Xl` + `PaddingXs/Sm/Md/Lg` resources.
-- [~] **Icons** — deferred. Candidates: `Projektanker.Icons.Avalonia.MaterialDesign` for a Material set, or embed lucide SVG path data as `Geometry` resources.
+- [x] **Icons** — embedded lucide SVG paths as `StreamGeometry` resources in `Theme/Icons.axaml`; see Iconography section above for the full inventory.
 - [~] **Animations** — deferred.
 
 ---

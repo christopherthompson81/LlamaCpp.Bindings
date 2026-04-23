@@ -330,6 +330,102 @@
         <Setter Property="Padding" Value="8,2" />
     </Style>
 
+    <!-- ================================================================
+         Lucide icon rendering. A Path element with class="icon" picks up
+         the standard stroke/cap/join settings that make a 24-unit
+         lucide path scale cleanly to 16×16 at 2px equivalent stroke.
+
+         Foreground binds to the current text colour, so icons adopt the
+         surrounding element's tint (muted buttons, accent hovers, etc.)
+         without per-icon overrides.
+         ================================================================ -->
+    <Style Selector="Path.icon">
+        <Setter Property="Stroke" Value="{DynamicResource Foreground}" />
+        <Setter Property="StrokeThickness" Value="2" />
+        <Setter Property="StrokeLineCap" Value="Round" />
+        <Setter Property="StrokeJoin" Value="Round" />
+        <Setter Property="Fill" Value="Transparent" />
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="Stretch" Value="Uniform" />
+    </Style>
+    <Style Selector="Path.icon.xs">
+        <Setter Property="Width" Value="12" />
+        <Setter Property="Height" Value="12" />
+        <Setter Property="StrokeThickness" Value="2.2" />
+    </Style>
+    <Style Selector="Path.icon.sm">
+        <Setter Property="Width" Value="14" />
+        <Setter Property="Height" Value="14" />
+    </Style>
+    <Style Selector="Path.icon.lg">
+        <Setter Property="Width" Value="18" />
+        <Setter Property="Height" Value="18" />
+    </Style>
+    <!-- Icon inside a Button adopts the button's Foreground rather than
+         the global Foreground — lets icon buttons keep correct contrast
+         against primary/destructive/accent backgrounds. -->
+    <Style Selector="Button Path.icon">
+        <Setter Property="Stroke" Value="{Binding $parent[Button].Foreground}" />
+    </Style>
+
+    <!-- Icon-only button variant. Square aspect, centered content, no
+         text padding. Base size matches .sm (28px) so it slots into
+         existing bubble action bars without a layout shift. -->
+    <Style Selector="Button.icon">
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.icon.sm">
+        <Setter Property="MinWidth" Value="24" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="24" />
+    </Style>
+    <Style Selector="Button.icon.lg">
+        <Setter Property="MinWidth" Value="36" />
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="Width" Value="36" />
+        <Setter Property="Height" Value="36" />
+    </Style>
+
+    <!-- ================================================================
+         Message-bubble action bar (Copy/Edit/Retry/Continue/Delete).
+         Hidden by default so the transcript reads as clean prose; fades
+         in when the user hovers the bubble. The StackPanel always
+         occupies its natural vertical space so the bubble doesn't
+         jump-resize on pointer enter/leave.
+
+         IsHitTestVisible gating prevents accidental clicks while the
+         bar is invisible — important because the buttons' bounds are
+         still laid out and would otherwise eat clicks meant for the
+         text underneath.
+         ================================================================ -->
+    <Style Selector="StackPanel.actions">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <!-- Reveal on bubble hover. Also on keyboard focus anywhere inside
+         the bubble so Tab-navigation users can still reach the actions. -->
+    <Style Selector="Border.bubble:pointerover StackPanel.actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <Style Selector="Border.bubble:focus-within StackPanel.actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+
     <!-- Monospace boxed container for a tool result's text output. Reuses
          the same code-block tokens the markdown renderer uses for fenced
          code, so tool output reads at a glance as "machine output" rather
