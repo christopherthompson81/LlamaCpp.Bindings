@@ -13,10 +13,7 @@ public class ChatTemplateTests : IClassFixture<ModelFixture>
         // (Pure base / completion / embedding models can lack one — that's why
         // we only assert this once the fixture says one exists.)
         if (!_fx.Capabilities.HasChatTemplate)
-        {
-            Console.WriteLine($"SKIP: {_fx.Capabilities.DisplayLabel} ships no chat template.");
-            return;
-        }
+            Assert.Skip($"{_fx.Capabilities.DisplayLabel} ships no chat template.");
         var tmpl = _fx.Model.GetChatTemplate();
         Assert.False(string.IsNullOrWhiteSpace(tmpl));
     }

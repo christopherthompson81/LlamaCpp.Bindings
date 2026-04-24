@@ -71,13 +71,15 @@ public sealed class ModelCapabilities
     }
 
     // ---------------- skip helpers ----------------
-    // Return true if the test should bail (caller does `return;`).
-    // All write a SKIP line to stdout in the established codebase pattern.
+    // Call Assert.Skip() which throws SkipException — xUnit v3 records it as
+    // "Skipped" in results rather than "Passed". The bool return type is kept
+    // so existing callers compile without change; the return after Assert.Skip
+    // is unreachable but satisfies the compiler.
 
     public bool SkipUnlessLoaded()
     {
         if (ModelLoaded) return false;
-        Console.WriteLine("SKIP: no test model loaded (set LLAMACPP_TEST_MODEL).");
+        Assert.Skip("no test model loaded (set LLAMACPP_TEST_MODEL).");
         return true;
     }
 
@@ -88,8 +90,8 @@ public sealed class ModelCapabilities
         {
             if (string.Equals(Family, f, StringComparison.OrdinalIgnoreCase)) return false;
         }
-        Console.WriteLine(
-            $"SKIP: needs model family in [{string.Join(", ", families)}]; got '{Family}' ({DisplayLabel}).");
+        Assert.Skip(
+            $"needs model family in [{string.Join(", ", families)}]; got '{Family}' ({DisplayLabel}).");
         return true;
     }
 
@@ -97,8 +99,8 @@ public sealed class ModelCapabilities
     {
         if (SkipUnlessLoaded()) return true;
         if (ParameterCount >= minParams) return false;
-        Console.WriteLine(
-            $"SKIP: needs >= {minParams / 1e9:0.#}B params; got {ParameterCount / 1e9:0.#}B ({DisplayLabel}).");
+        Assert.Skip(
+            $"needs >= {minParams / 1e9:0.#}B params; got {ParameterCount / 1e9:0.#}B ({DisplayLabel}).");
         return true;
     }
 
@@ -106,8 +108,8 @@ public sealed class ModelCapabilities
     {
         if (SkipUnlessLoaded()) return true;
         if (VocabSize >= minVocab) return false;
-        Console.WriteLine(
-            $"SKIP: needs vocab size >= {minVocab}; got {VocabSize} ({DisplayLabel}).");
+        Assert.Skip(
+            $"needs vocab size >= {minVocab}; got {VocabSize} ({DisplayLabel}).");
         return true;
     }
 }

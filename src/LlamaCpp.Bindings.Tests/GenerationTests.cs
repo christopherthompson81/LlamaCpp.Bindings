@@ -135,8 +135,7 @@ public class GenerationTests
         if (_fx.Capabilities.SkipUnlessLoaded()) return;
         if (_fx.Capabilities.ParameterCount > 2_000_000_000)
         {
-            Console.WriteLine($"SKIP: reference captured for ~1.1B model; got {_fx.Capabilities.DisplayLabel}.");
-            return;
+            Assert.Skip($"reference captured for ~1.1B model; got {_fx.Capabilities.DisplayLabel}.");
         }
 
         // Regression for: prompt tokens were not Accept()ed into the sampler
@@ -180,8 +179,7 @@ public class GenerationTests
         if (_fx.Capabilities.SkipUnlessFamily("llama")) return;
         if (_fx.Capabilities.ParameterCount > 2_000_000_000)
         {
-            Console.WriteLine($"SKIP: reference captured for ~1.1B model; got {_fx.Capabilities.DisplayLabel}.");
-            return;
+            Assert.Skip($"reference captured for ~1.1B model; got {_fx.Capabilities.DisplayLabel}.");
         }
 
         // Regression for: WithDry's default sequenceBreakers was empty, but

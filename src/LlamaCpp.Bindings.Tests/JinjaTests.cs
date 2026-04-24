@@ -311,10 +311,7 @@ public class JinjaTests
             System.IO.Path.GetDirectoryName(typeof(JinjaTests).Assembly.Location)!,
             "TestData", "qwen36-template.jinja");
         if (!System.IO.File.Exists(path))
-        {
-            Console.WriteLine($"SKIP: no Qwen3.6 template at {path}.");
-            return;
-        }
+            Assert.Skip($"no Qwen3.6 template at {path}.");
 
         var source = System.IO.File.ReadAllText(path);
         var tmpl = JinjaTemplate.Parse(source);
