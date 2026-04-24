@@ -401,7 +401,14 @@ public partial class ConversationViewModel : ObservableObject
         foreach (var m in path) Messages.Add(m);
         // Notify sibling-info for every visible turn — SiblingCount may have
         // changed because of a tree mutation on a non-visible branch.
-        foreach (var m in Messages) m.NotifySiblingInfoChanged();
+        // Flag the tail message so the Continue button knows it's the only
+        // eligible candidate (older messages don't correspond to the current
+        // KV state and can't be extended in place).
+        for (var i = 0; i < Messages.Count; i++)
+        {
+            Messages[i].NotifySiblingInfoChanged();
+            Messages[i].IsLastInActivePath = (i == Messages.Count - 1);
+        }
     }
 
     private void NotifySiblingsFor(Guid? parentId)

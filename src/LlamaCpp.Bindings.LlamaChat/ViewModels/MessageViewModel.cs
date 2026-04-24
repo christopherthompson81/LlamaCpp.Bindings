@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using LlamaCpp.Bindings;
 using LlamaCpp.Bindings.LlamaChat.Models;
 using LlamaCpp.Bindings.LlamaChat.Services.ToolCall;
 
@@ -69,8 +71,108 @@ public partial class MessageViewModel : ObservableObject
     /// </summary>
     [ObservableProperty] private string? _asrLanguage;
     [ObservableProperty] private bool _isReasoningExpanded = false;
-    [ObservableProperty] private bool _isStreaming = false;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanContinue))]
+    private bool _isStreaming = false;
     [ObservableProperty] private string? _statsSummary;
+
+    // Per-message performance stamps. Populated from StreamEvent.Done on
+    // the UI thread once the reply finishes. Two pairs — prefill and decode
+    // — plus a toggle the bubble exposes so the user can flip between
+    // viewing either set (matches the book-icon toggle in llama-server webui).
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayStatTokens), nameof(DisplayStatSeconds),
+                              nameof(DisplayStatTokensPerSecond), nameof(HasStats))]
+    private int _promptTokens;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayStatTokens), nameof(DisplayStatSeconds),
+                              nameof(DisplayStatTokensPerSecond), nameof(HasStats))]
+    private double _promptSeconds;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayStatTokens), nameof(DisplayStatSeconds),
+                              nameof(DisplayStatTokensPerSecond), nameof(HasStats))]
+    private int _completionTokens;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayStatTokens), nameof(DisplayStatSeconds),
+                              nameof(DisplayStatTokensPerSecond), nameof(HasStats))]
+    private double _generationSeconds;
+
+    /// <summary>True = show prefill stats; false = show decode stats (default).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayStatTokens), nameof(DisplayStatSeconds),
+                              nameof(DisplayStatTokensPerSecond), nameof(StatsModeLabel),
+                              nameof(StatsModeIconKey))]
+    private bool _showPrefillStats;
+
+    /// <summary>Profile + GGUF filename snapshot taken when this reply was generated.
+    /// Rendered as a chip in the stats row so the user can tell which model wrote it
+    /// even after loading a different profile.</summary>
+    [ObservableProperty] private string? _modelLabel;
+
+    /// <summary>
+    /// Why the streaming generation for this message ended. Drives
+    /// <see cref="CanContinue"/> — if the model stopped itself with an EOG
+    /// token, extending would just push past its intended stop point, so
+    /// the Continue button is hidden. Other reasons (MaxTokens, cancelled,
+    /// grammar-satisfied, unknown) leave Continue available.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanContinue))]
+    private LlamaStopReason _stopReason = LlamaStopReason.None;
+
+    /// <summary>
+    /// Set by <see cref="ConversationViewModel"/> when the active-path tail
+    /// changes; only the message at the end of the active path is eligible
+    /// for Continue (older messages don't correspond to the current KV state).
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanContinue))]
+    private bool _isLastInActivePath;
+
+    /// <summary>
+    /// True when this message is the anchor for the session's current KV
+    /// cache — i.e. extending it via <c>StreamContinuationAsync</c> is
+    /// semantically valid. Set on the just-finished assistant at Done;
+    /// cleared on session load / unload / ClearKv. Survives through
+    /// conversation save/reload as false, which is what we want: reloading
+    /// the app leaves the KV empty, so Continue must be unavailable until
+    /// the user runs a fresh turn.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanContinue))]
+    private bool _isKvContinuable;
+
+    /// <summary>
+    /// Continue is offered only when:
+    ///   1. this is an assistant message,
+    ///   2. it's not currently streaming,
+    ///   3. it sits at the active-path tail,
+    ///   4. the stop reason wasn't a model-defined EOG token, and
+    ///   5. the session's KV cache still matches this message (no app
+    ///      restart, session reload, or intervening ClearKv since it was
+    ///      generated).
+    /// </summary>
+    public bool CanContinue =>
+        IsAssistant
+        && !IsStreaming
+        && IsLastInActivePath
+        && IsKvContinuable
+        && StopReason != LlamaStopReason.EndOfGeneration;
+
+    public bool HasStats =>
+        CompletionTokens > 0 || (ShowPrefillStats && PromptTokens > 0);
+
+    public int DisplayStatTokens => ShowPrefillStats ? PromptTokens : CompletionTokens;
+    public double DisplayStatSeconds => ShowPrefillStats ? PromptSeconds : GenerationSeconds;
+    public double DisplayStatTokensPerSecond =>
+        DisplayStatSeconds > 0 ? DisplayStatTokens / DisplayStatSeconds : 0;
+
+    public string StatsModeLabel => ShowPrefillStats ? "Prefill" : "Generation";
+    /// <summary>Lucide icon key for the mode-toggle button.</summary>
+    public string StatsModeIconKey => ShowPrefillStats ? "IconEye" : "IconPlay";
+
+    [RelayCommand]
+    private void ToggleStatsMode() => ShowPrefillStats = !ShowPrefillStats;
 
     /// <summary>True while the inline-edit textarea is shown for this bubble.</summary>
     [ObservableProperty] private bool _isEditing;

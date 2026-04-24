@@ -14,6 +14,8 @@
 
     <StreamGeometry x:Key="IconSend">M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z M21.854 2.147 L10.914 13.086</StreamGeometry>
 
+    <StreamGeometry x:Key="IconArrowUp">M5 12 L12 5 L19 12 M12 19 V5</StreamGeometry>
+
     <StreamGeometry x:Key="IconSquare">M5 3 h14 a2 2 0 0 1 2 2 v14 a2 2 0 0 1 -2 2 h-14 a2 2 0 0 1 -2 -2 v-14 a2 2 0 0 1 2 -2 z</StreamGeometry>
 
     <StreamGeometry x:Key="IconX">M18 6 L6 18 M6 6 L18 18</StreamGeometry>
@@ -49,6 +51,14 @@
     <StreamGeometry x:Key="IconVolume">M11 4.702 a.705 .705 0 0 0 -1.203 -.498 L6.413 7.587 A1.4 1.4 0 0 1 5.416 8 H3 a1 1 0 0 0 -1 1 v6 a1 1 0 0 0 1 1 h2.416 a1.4 1.4 0 0 1 .997 .413 l3.383 3.384 A.705 .705 0 0 0 11 19.298 z M16 9 a5 5 0 0 1 0 6 M19.364 18.364 a9 9 0 0 0 0 -12.728</StreamGeometry>
 
     <StreamGeometry x:Key="IconMic">M12 2 a3 3 0 0 0 -3 3 v7 a3 3 0 0 0 6 0 V5 a3 3 0 0 0 -3 -3 z M19 10 v2 a7 7 0 0 1 -14 0 v-2 M12 19 v3</StreamGeometry>
+
+    <StreamGeometry x:Key="IconBrain">M12 5 a3 3 0 1 0 -5.997 .125 a4 4 0 0 0 -2.526 5.77 a4 4 0 0 0 .556 6.588 A4 4 0 1 0 12 18 Z M12 5 a3 3 0 1 1 5.997 .125 a4 4 0 0 1 2.526 5.77 a4 4 0 0 1 -.556 6.588 A4 4 0 1 1 12 18 Z M15 13 a4.5 4.5 0 0 1 -3 -4 M17.599 6.5 a3 3 0 0 0 .399 -1.375 M6.003 5.125 A3 3 0 0 0 6.401 6.5 M3.477 10.896 a4 4 0 0 1 .585 -.396 M19.938 10.5 a4 4 0 0 1 .585 .396 M6 18 a4 4 0 0 1 -1.967 -.516 M19.967 17.484 A4 4 0 0 1 18 18</StreamGeometry>
+
+    <StreamGeometry x:Key="IconSparkles">M9.937 15.5 A2 2 0 0 0 8.5 14.063 l-6.135 -1.582 a.5 .5 0 0 1 0 -.962 L8.5 9.936 A2 2 0 0 0 9.937 8.5 l1.582 -6.135 a.5 .5 0 0 1 .963 0 L14.063 8.5 A2 2 0 0 0 15.5 9.937 l6.135 1.581 a.5 .5 0 0 1 0 .964 L15.5 14.063 a2 2 0 0 0 -1.437 1.437 l-1.582 6.135 a.5 .5 0 0 1 -.963 0 Z M20 3 v4 M22 5 h-4 M4 17 v2 M5 18 H3</StreamGeometry>
+
+    <StreamGeometry x:Key="IconBookOpen">M12 7 v14 M3 18 a1 1 0 0 1 -1 -1 V4 a1 1 0 0 1 1 -1 h5 a4 4 0 0 1 4 4 a4 4 0 0 1 4 -4 h5 a1 1 0 0 1 1 1 v13 a1 1 0 0 1 -1 1 h-6 a3 3 0 0 0 -3 3 a3 3 0 0 0 -3 -3 Z</StreamGeometry>
+
+    <StreamGeometry x:Key="IconSquarePen">M12 3 H5 a2 2 0 0 0 -2 2 v14 a2 2 0 0 0 2 2 h14 a2 2 0 0 0 2 -2 v-7 M18.375 2.625 a1 1 0 0 1 3 3 l-9.013 9.014 a2 2 0 0 1 -.853 .505 l-2.873 .84 a.5 .5 0 0 1 -.62 -.62 l.84 -2.873 a2 2 0 0 1 .506 -.852 Z</StreamGeometry>
 
     <StreamGeometry x:Key="IconGlobe">M2 12 a10 10 0 1 1 20 0 a10 10 0 1 1 -20 0 M12 2 a14.5 14.5 0 0 0 0 20 a14.5 14.5 0 0 0 0 -20 M2 12 h20</StreamGeometry>
 

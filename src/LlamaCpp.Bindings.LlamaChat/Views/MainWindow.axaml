@@ -178,13 +178,27 @@
         <!-- Body = sidebar + main -->
         <Grid ColumnDefinitions="Auto,*">
 
-            <!-- ================= Sidebar ================= -->
+            <!-- ================= Sidebar =================
+                 Animated slide via Width transition; ClipToBounds hides the
+                 inner Grid (which stays at its natural width) while the
+                 Border shrinks to 0. Width is set by styles (Border.sidebar
+                 vs .sidebar.collapsed) so the collapsed setter can override —
+                 inline Width="..." would outrank a style setter and freeze
+                 the animation. The Border is always rendered (just
+                 zero-width when collapsed) so the transition runs both
+                 directions without a load / measure hitch. -->
             <Border Grid.Column="0"
-                    IsVisible="{Binding IsSidebarVisible}"
-                    Width="280"
+                    Classes="sidebar"
+                    Classes.collapsed="{Binding !IsSidebarVisible}"
+                    ClipToBounds="True"
                     Background="{DynamicResource Sidebar}"
                     BorderBrush="{DynamicResource SidebarBorder}"
                     BorderThickness="0,0,1,0">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Width" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                    </Transitions>
+                </Border.Transitions>
                 <Grid RowDefinitions="Auto,Auto,*">
 
                     <!-- New chat button -->
@@ -195,7 +209,7 @@
                             HorizontalContentAlignment="Left"
                             Command="{Binding NewConversationCommand}">
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Path Classes="icon sm" Data="{StaticResource IconPlus}" />
+                            <Path Classes="icon sm" Data="{StaticResource IconSquarePen}" />
                             <TextBlock Text="New chat" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
@@ -390,9 +404,25 @@
                                                     </DataTemplate>
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
-                                            <Expander Header="Reasoning"
+                                            <!-- Reasoning card: full-width inside the bubble, brain icon
+                                                 + label on the left, chevron (baked into Expander template)
+                                                 on the right. The .reasoning variant in Controls.axaml
+                                                 handles the card styling + chevron rotation animation. -->
+                                            <Expander Classes="reasoning"
                                                       IsVisible="{Binding HasReasoning}"
-                                                      IsExpanded="{Binding IsReasoningExpanded}">
+                                                      IsExpanded="{Binding IsReasoningExpanded}"
+                                                      HorizontalAlignment="Stretch"
+                                                      HorizontalContentAlignment="Stretch">
+                                                <Expander.Header>
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <Path Classes="icon sm"
+                                                              Classes.brain-pulsing="{Binding IsStreaming}"
+                                                              Data="{StaticResource IconBrain}"
+                                                              VerticalAlignment="Center" />
+                                                        <TextBlock Text="Reasoning" VerticalAlignment="Center"
+                                                                   FontWeight="Medium" />
+                                                    </StackPanel>
+                                                </Expander.Header>
                                                 <SelectableTextBlock Text="{Binding Reasoning}"
                                                                      Classes="sm muted"
                                                                      TextWrapping="Wrap" />
@@ -500,8 +530,46 @@
                                                     <SelectableTextBlock Text="{Binding Content}" />
                                                 </Border>
                                             </Expander>
-                                            <TextBlock Text="{Binding StatsSummary}" Classes="xs muted"
-                                                       IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).AppSettings.ShowMessageStats}" />
+                                            <!-- Stats row for assistant / tool bubbles:
+                                                   [ModelLabel] · [Mode toggle] [N tok] [N.Ns] [N.N tok/s]
+                                                 The mode toggle flips ShowPrefillStats per-message so the
+                                                 user can compare prefill and decode stats on the same
+                                                 reply. Visible only when the Display tab's
+                                                 ShowMessageStats toggle is on, and only once we have
+                                                 something meaningful to show (HasStats). -->
+                                            <StackPanel Orientation="Horizontal" Spacing="8"
+                                                        IsVisible="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).AppSettings.ShowMessageStats}">
+                                                <!-- Model chip: renders the snapshot taken at generation time. -->
+                                                <Border BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                                        Background="{DynamicResource Muted}"
+                                                        CornerRadius="3" Padding="5,1"
+                                                        IsVisible="{Binding ModelLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                        ToolTip.Tip="Model that generated this reply">
+                                                    <TextBlock Text="{Binding ModelLabel}" Classes="xs muted" />
+                                                </Border>
+                                                <!-- Mode toggle: swaps the three stats between prefill and decode. -->
+                                                <Button Classes="ghost icon sm"
+                                                        IsVisible="{Binding HasStats}"
+                                                        Command="{Binding ToggleStatsModeCommand}"
+                                                        ToolTip.Tip="{Binding StatsModeLabel, StringFormat='{}Showing {0} stats — click to switch'}"
+                                                        a:AutomationProperties.Name="Toggle stats mode">
+                                                    <Grid>
+                                                        <Path Classes="icon xs" Data="{StaticResource IconBookOpen}"
+                                                              IsVisible="{Binding ShowPrefillStats}" />
+                                                        <Path Classes="icon xs" Data="{StaticResource IconSparkles}"
+                                                              IsVisible="{Binding !ShowPrefillStats}" />
+                                                    </Grid>
+                                                </Button>
+                                                <TextBlock Classes="xs muted" VerticalAlignment="Center"
+                                                           IsVisible="{Binding HasStats}"
+                                                           Text="{Binding DisplayStatTokens, StringFormat='{}{0} tok'}" />
+                                                <TextBlock Classes="xs muted" VerticalAlignment="Center"
+                                                           IsVisible="{Binding HasStats}"
+                                                           Text="{Binding DisplayStatSeconds, StringFormat='{}{0:F1}s'}" />
+                                                <TextBlock Classes="xs muted" VerticalAlignment="Center"
+                                                           IsVisible="{Binding HasStats}"
+                                                           Text="{Binding DisplayStatTokensPerSecond, StringFormat='{}{0:F1} tok/s'}" />
+                                            </StackPanel>
 
                                             <!-- Action bar. Icon-only ghost buttons with tooltips —
                                                  the icons read at a glance for the common actions and
@@ -534,10 +602,10 @@
                                                     <Path Classes="icon xs" Data="{StaticResource IconRotateCw}" />
                                                 </Button>
                                                 <Button Classes="ghost icon sm"
-                                                        IsVisible="{Binding IsAssistant}"
-                                                        ToolTip.Tip="Continue — extend this reply without re-prompting (last message only)"
+                                                        IsVisible="{Binding CanContinue}"
+                                                        ToolTip.Tip="Continue — extend this reply without re-prompting"
                                                         a:AutomationProperties.Name="Continue reply"
-                                                        a:AutomationProperties.HelpText="Extend this reply without re-prompting (last message only)"
+                                                        a:AutomationProperties.HelpText="Extend this reply without re-prompting. Only visible on the last message, and only when the model didn't stop on a natural end-of-turn token."
                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ContinueMessageCommand}"
                                                         CommandParameter="{Binding}">
                                                     <Path Classes="icon xs" Data="{StaticResource IconPlay}" />
@@ -604,15 +672,15 @@
                     </Grid>
                 </Border>
 
-                <Grid Grid.Row="2" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,*,Auto"
+                <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto"
                       Margin="0,12,0,0">
                     <!-- Pending-attachment thumbnail strip. Sits above the
-                         TextBox and only renders when there's something to
-                         show — keeps the compose area compact otherwise.
+                         composer pod and only renders when there's something
+                         to show — keeps the compose area compact otherwise.
                          The strip self-caps at a handful of tiles; an overflow
                          tile next to it opens the gallery modal when more
                          attachments are queued than fit comfortably inline. -->
-                    <StackPanel Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="3"
+                    <StackPanel Grid.Row="0"
                                 Orientation="Horizontal" Spacing="6"
                                 IsVisible="{Binding HasPendingAttachments}"
                                 Margin="0,0,0,6">
@@ -670,75 +738,120 @@
                         </Button>
                     </StackPanel>
 
-                    <!-- Attach / prompt / resource buttons stacked vertically so
-                         we don't eat horizontal space in the compose row. -->
-                    <StackPanel Grid.Column="0" Grid.Row="1" Orientation="Vertical"
-                                Spacing="2" Margin="0,0,6,0" VerticalAlignment="Top">
-                        <Button Classes="ghost icon"
-                                ToolTip.Tip="Attach image or audio (paste or drop works too)"
-                                a:AutomationProperties.Name="Attach file"
-                                a:AutomationProperties.HelpText="Attach image or audio. Paste or drop also works."
-                                Command="{Binding AttachMediaCommand}"
-                                IsEnabled="{Binding CanAttachMedia}">
-                            <Path Classes="icon" Data="{StaticResource IconPaperclip}" />
-                        </Button>
-                        <Button Classes="ghost icon"
-                                ToolTip.Tip="Insert MCP prompt"
-                                a:AutomationProperties.Name="Insert MCP prompt"
-                                Command="{Binding InsertMcpPromptCommand}">
-                            <Path Classes="icon" Data="{StaticResource IconZap}" />
-                        </Button>
-                        <Button Classes="ghost icon"
-                                ToolTip.Tip="Browse MCP resources"
-                                a:AutomationProperties.Name="Browse MCP resources"
-                                Command="{Binding AttachMcpResourceCommand}">
-                            <Path Classes="icon" Data="{StaticResource IconFolder}" />
-                        </Button>
-                        <!-- Mic: toggle-style record button. Icon swaps to a stop
-                             square while recording; live mm:ss sits under the box. -->
-                        <Button Classes="ghost icon"
-                                ToolTip.Tip="Record from microphone"
-                                a:AutomationProperties.Name="Record audio from microphone"
-                                Command="{Binding ToggleRecordCommand}"
-                                IsVisible="{Binding CanAttachAudio}">
-                            <Grid>
-                                <Path Classes="icon" Data="{StaticResource IconMic}"
-                                      IsVisible="{Binding !IsRecording}" />
-                                <Path Classes="icon" Data="{StaticResource IconSquare}"
-                                      Stroke="{DynamicResource Destructive}"
-                                      IsVisible="{Binding IsRecording}" />
-                            </Grid>
-                        </Button>
-                    </StackPanel>
+                    <!-- Composer pod: TextBox fills the card; + menu button and
+                         Send / Stop button are overlaid inside at the bottom
+                         corners. The pod owns the border + background so the
+                         inner TextBox can stay Background=Transparent + no
+                         border. Padding on the TextBox reserves space for the
+                         overlays so typed text doesn't collide with them. -->
+                    <Border Grid.Row="1" Classes="composer-pod">
+                        <Grid>
+                            <TextBox Name="ComposeBox"
+                                     Text="{Binding UserInput, Mode=TwoWay}"
+                                     PlaceholderText="Type a message, Shift+Enter for newline..."
+                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                     Background="Transparent" BorderThickness="0"
+                                     Padding="14,12,52,44"
+                                     MinHeight="84" MaxHeight="220" />
 
-                    <TextBox Grid.Column="1" Grid.Row="1" Name="ComposeBox"
-                             Text="{Binding UserInput, Mode=TwoWay}"
-                             PlaceholderText="Type a message, Shift+Enter for newline..."
-                             AcceptsReturn="True" TextWrapping="Wrap"
-                             MinHeight="56" MaxHeight="200" />
+                            <!-- + menu: attach / record / MCP entries. Consolidates what
+                                 used to be a vertical stack of four icon buttons. -->
+                            <Button Classes="ghost icon sm"
+                                    HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                    Margin="8,0,0,8" Width="30" Height="30"
+                                    ToolTip.Tip="Add attachment, record audio, or insert MCP content"
+                                    a:AutomationProperties.Name="Add content">
+                                <Button.Flyout>
+                                    <MenuFlyout Placement="TopEdgeAlignedLeft">
+                                        <MenuItem Header="Attach image or audio…"
+                                                  Command="{Binding AttachMediaCommand}"
+                                                  IsEnabled="{Binding CanAttachMedia}">
+                                            <MenuItem.Icon>
+                                                <Path Classes="icon xs" Data="{StaticResource IconPaperclip}" />
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Record audio from microphone"
+                                                  Command="{Binding ToggleRecordCommand}"
+                                                  IsVisible="{Binding CanAttachAudio}">
+                                            <MenuItem.Icon>
+                                                <Path Classes="icon xs" Data="{StaticResource IconMic}" />
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <Separator />
+                                        <MenuItem Header="Insert MCP prompt…"
+                                                  Command="{Binding InsertMcpPromptCommand}">
+                                            <MenuItem.Icon>
+                                                <Path Classes="icon xs" Data="{StaticResource IconZap}" />
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Browse MCP resources…"
+                                                  Command="{Binding AttachMcpResourceCommand}">
+                                            <MenuItem.Icon>
+                                                <Path Classes="icon xs" Data="{StaticResource IconFolder}" />
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                                <Path Classes="icon" Data="{StaticResource IconPlus}" />
+                            </Button>
+
+                            <!-- Send (circular up-arrow) — bottom-right overlay. Swaps
+                                 to a destructive Stop when generation is running. -->
+                            <Button HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                    Margin="0,0,8,8" Width="34" Height="34" Padding="0"
+                                    CornerRadius="17"
+                                    Command="{Binding SendCommand}" IsDefault="True"
+                                    IsVisible="{Binding !IsGenerating}"
+                                    ToolTip.Tip="Send (Enter)"
+                                    a:AutomationProperties.Name="Send message">
+                                <Path Classes="icon sm" Data="{StaticResource IconArrowUp}" />
+                            </Button>
+                            <Button HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                    Classes="destructive"
+                                    Margin="0,0,8,8" Width="34" Height="34" Padding="0"
+                                    CornerRadius="17"
+                                    Command="{Binding CancelCommand}"
+                                    IsVisible="{Binding IsGenerating}"
+                                    ToolTip.Tip="Stop generation"
+                                    a:AutomationProperties.Name="Stop generation">
+                                <Path Classes="icon sm" Data="{StaticResource IconSquare}" />
+                            </Button>
+                        </Grid>
+                    </Border>
+
                     <!-- Compose footer row: token count + recording indicator on the
                          left; compact "which model is loaded" pill on the right.
                          The pill mirrors the badges shown in the toolbar but sits
                          eye-adjacent to the compose box so the user doesn't have
                          to scan across the window to remember which profile they
                          pasted a prompt at. -->
-                    <Grid Grid.Column="1" Grid.Row="2" ColumnDefinitions="*,Auto"
+                    <Grid Grid.Row="2" ColumnDefinitions="*,Auto"
                           Margin="4,2,0,0">
                         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
                             <TextBlock Classes="xs muted"
                                        IsVisible="{Binding IsModelLoaded}"
                                        Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
-                            <!-- Recording indicator: a pulsing red dot + live mm:ss duration. -->
-                            <StackPanel Orientation="Horizontal" Spacing="4"
-                                        IsVisible="{Binding IsRecording}"
-                                        a:AutomationProperties.LiveSetting="Polite">
-                                <Ellipse Width="8" Height="8" Fill="{DynamicResource Destructive}"
-                                         VerticalAlignment="Center" />
-                                <TextBlock Classes="xs"
-                                           Foreground="{DynamicResource Destructive}"
-                                           VerticalAlignment="Center"
-                                           Text="{Binding RecordingDuration, StringFormat='Recording {0}'}" />
-                            </StackPanel>
+                            <!-- Recording indicator: a pulsing red dot + live mm:ss
+                                 duration. Click to stop — the only way to stop
+                                 recording now that the mic button moved into the
+                                 + menu (starting and stopping were the same
+                                 command, so this doubles as the stop affordance). -->
+                            <Button Classes="link"
+                                    IsVisible="{Binding IsRecording}"
+                                    Command="{Binding ToggleRecordCommand}"
+                                    a:AutomationProperties.LiveSetting="Polite"
+                                    a:AutomationProperties.Name="Click to stop recording"
+                                    ToolTip.Tip="Click to stop recording"
+                                    Padding="0" Margin="0" MinHeight="0">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <Ellipse Width="8" Height="8" Fill="{DynamicResource Destructive}"
+                                             VerticalAlignment="Center" />
+                                    <TextBlock Classes="xs"
+                                               Foreground="{DynamicResource Destructive}"
+                                               VerticalAlignment="Center"
+                                               Text="{Binding RecordingDuration, StringFormat='Recording {0} — click to stop'}" />
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
                                     IsVisible="{Binding IsModelLoaded}"
@@ -762,28 +875,6 @@
                             </Border>
                         </StackPanel>
                     </Grid>
-                    <!-- Send and Stop share a column — only one is visible at a
-                         time depending on IsGenerating. Matches webui's toggle. -->
-                    <Button Grid.Column="2" Grid.Row="1" Margin="8,0,0,0"
-                            Command="{Binding SendCommand}" IsDefault="True"
-                            IsVisible="{Binding !IsGenerating}"
-                            ToolTip.Tip="Send (Enter)"
-                            a:AutomationProperties.Name="Send message">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Path Classes="icon sm" Data="{StaticResource IconSend}" />
-                            <TextBlock Text="Send" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button Grid.Column="2" Grid.Row="1" Classes="destructive" Margin="8,0,0,0"
-                            Command="{Binding CancelCommand}"
-                            IsVisible="{Binding IsGenerating}"
-                            ToolTip.Tip="Stop generation"
-                            a:AutomationProperties.Name="Stop generation">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Path Classes="icon sm" Data="{StaticResource IconSquare}" />
-                            <TextBlock Text="Stop" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
                 </Grid>
             </Grid>
         </Grid>

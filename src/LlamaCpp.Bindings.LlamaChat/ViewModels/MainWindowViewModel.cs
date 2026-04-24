@@ -330,6 +330,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             ModelSummary = $"·  {Path.GetFileName(session.Model.ModelPath)}  ·  " +
                            $"ctx={session.Context.ContextSize}  ·  layers={session.Model.LayerCount}  ·  " +
                            $"template={(string.IsNullOrEmpty(session.ChatTemplate) ? "(none)" : "embedded")}";
+            // Fresh session → no message anchors the new KV cache yet.
+            ClearContinueAnchors();
             StatusText = "Loaded.";
             ToastService.Success("Model loaded", profile.Name);
         }
@@ -358,7 +360,29 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _activeLoadedProfile = null;
         ModelSummary = string.Empty;
         ProfileDisplayName = string.Empty;
+        ClearContinueAnchors();
         StatusText = "Unloaded.";
+    }
+
+    /// <summary>
+    /// Mark <paramref name="anchor"/> as the one message whose content ends
+    /// at the tail of the current session's KV cache — the only candidate
+    /// for Continue. All other messages across every conversation lose the
+    /// flag (the cache only ever matches one turn at a time).
+    /// </summary>
+    private void SetContinueAnchor(MessageViewModel anchor)
+    {
+        foreach (var conv in Conversations)
+        foreach (var m in conv.AllMessages)
+            m.IsKvContinuable = ReferenceEquals(m, anchor);
+    }
+
+    /// <summary>Drop every Continue anchor — session gone or KV cleared.</summary>
+    private void ClearContinueAnchors()
+    {
+        foreach (var conv in Conversations)
+        foreach (var m in conv.AllMessages)
+            m.IsKvContinuable = false;
     }
 
     private bool CanUnload() => Session is not null && !IsGenerating;
@@ -500,6 +524,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             // opted into watching reasoning trace live. Not re-evaluated after
             // Done, so the user's manual toggle during/after streaming wins.
             IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
+            ModelLabel = BuildModelLabel(),
         };
         conv.AppendToActivePath(assistant);
         conv.UpdatedAt = DateTimeOffset.UtcNow;
@@ -551,6 +576,21 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     private const int ToolCallMaxRounds = 6;
+
+    /// <summary>
+    /// Stamp a new assistant message with "{ProfileName} · {FileName}" so the
+    /// bubble's stats row can show which model generated it even after the
+    /// user switches profiles. Null when no model is loaded (can't happen in
+    /// practice — CanSend gates on IsModelLoaded — but we guard anyway).
+    /// </summary>
+    private string? BuildModelLabel()
+    {
+        if (_activeLoadedProfile is null || Session is null) return null;
+        var file = System.IO.Path.GetFileNameWithoutExtension(Session.Model.ModelPath);
+        return string.IsNullOrWhiteSpace(file)
+            ? _activeLoadedProfile.Name
+            : $"{_activeLoadedProfile.Name} · {file}";
+    }
 
     private async Task MaybeExecuteToolCallsAsync(ConversationViewModel conv, MessageViewModel assistant)
     {
@@ -628,6 +668,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 Role = "assistant",
                 IsStreaming = true,
                 IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
+                ModelLabel = BuildModelLabel(),
             };
             conv.AppendToActivePath(next);
 
@@ -770,8 +811,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             var startTicks = System.Threading.Interlocked.Read(ref liveStartTicks);
             if (count == 0 || startTicks == 0) return;
             var elapsed = (DateTime.UtcNow.Ticks - startTicks) / (double)TimeSpan.TicksPerSecond;
-            var tps = elapsed > 0 ? count / elapsed : 0;
-            assistant.StatsSummary = $"{count} tok · {tps:F1} tok/s";
+            // Live-tick only updates decode stats (prefill is already done by
+            // the time the first token arrives). The bubble renders the same
+            // three fields whether live or final; Done overwrites with the
+            // authoritative native-counter values.
+            assistant.CompletionTokens = count;
+            assistant.GenerationSeconds = elapsed;
         };
         liveTimer.Start();
 
@@ -819,6 +864,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                         await Dispatcher.UIThread.InvokeAsync(() =>
                         {
                             assistant.IsStreaming = false;
+                            assistant.StopReason = doneData.StopReason;
+                            assistant.PromptTokens = doneData.PromptTokens;
+                            assistant.PromptSeconds = doneData.PromptTime.TotalSeconds;
+                            assistant.CompletionTokens = doneData.CompletionTokens;
+                            assistant.GenerationSeconds = doneData.GenerationTime.TotalSeconds;
+                            SetContinueAnchor(assistant);
                             var tps = doneData.GenerationTime.TotalSeconds > 0
                                 ? doneData.CompletionTokens / doneData.GenerationTime.TotalSeconds : 0;
                             assistant.StatsSummary = $"{doneData.CompletionTokens} tok · {tps:F1} tok/s";
@@ -834,6 +885,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 assistant.IsStreaming = false;
+                assistant.StopReason = LlamaCpp.Bindings.LlamaStopReason.Cancelled;
+                // KV still holds the tokens we did decode; Continue from here
+                // is valid even though the user interrupted mid-stream.
+                SetContinueAnchor(assistant);
                 StatusText = "Cancelled.";
                 if (string.IsNullOrEmpty(assistant.Content)) assistant.Content = "(cancelled)";
             }, DispatcherPriority.Background);
@@ -1088,6 +1143,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             Role = "assistant",
             IsStreaming = true,
             IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
+            ModelLabel = BuildModelLabel(),
         };
         conv.AddChildOf(userAnchorId, newAssistant);
 

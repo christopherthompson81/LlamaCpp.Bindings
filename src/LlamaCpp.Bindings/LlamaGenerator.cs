@@ -30,6 +30,17 @@ public sealed class LlamaGenerator
     }
 
     /// <summary>
+    /// Why the last call to a <c>*GenerateAsync</c> / <c>*StreamFromCurrentStateAsync</c>
+    /// stopped. Set to <see cref="LlamaStopReason.None"/> when a new call
+    /// starts, then updated just before the final <c>yield break</c> /
+    /// normal loop exit. Cancellation throws through the iterator before
+    /// we get a chance to annotate it, so callers that observe a
+    /// cancellation should treat this as <see cref="LlamaStopReason.Cancelled"/>
+    /// regardless of what's recorded.
+    /// </summary>
+    public LlamaStopReason LastStopReason { get; private set; } = LlamaStopReason.None;
+
+    /// <summary>
     /// Tokenize <paramref name="prompt"/>, process it, then stream generated
     /// text pieces until the model emits an end-of-generation token or the
     /// cancellation token fires.
@@ -98,6 +109,7 @@ public sealed class LlamaGenerator
         var decoder = Encoding.UTF8.GetDecoder();
         var charBuf = new char[64];
         int emitted = 0;
+        LastStopReason = LlamaStopReason.None;
 
         while (emitted < maxTokens)
         {
@@ -109,6 +121,7 @@ public sealed class LlamaGenerator
             {
                 int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
                 if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
+                LastStopReason = LlamaStopReason.EndOfGeneration;
                 yield break;
             }
 
@@ -128,6 +141,7 @@ public sealed class LlamaGenerator
             {
                 int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
                 if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
+                LastStopReason = LlamaStopReason.GrammarSatisfied;
                 yield break;
             }
 
@@ -137,6 +151,7 @@ public sealed class LlamaGenerator
 
         int trailing = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
         if (trailing > 0) yield return new string(charBuf, 0, trailing);
+        LastStopReason = LlamaStopReason.MaxTokens;
     }
 
     /// <summary>
@@ -212,6 +227,7 @@ public sealed class LlamaGenerator
         var charBuf = new char[64];
         var byteBuf = new byte[1];
         int emitted = 0;
+        LastStopReason = LlamaStopReason.None;
 
         while (emitted < maxTokens)
         {
@@ -229,6 +245,7 @@ public sealed class LlamaGenerator
                 // Flush any bytes buffered in the decoder (rare at EOG but possible).
                 int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
                 if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
+                LastStopReason = LlamaStopReason.EndOfGeneration;
                 yield break;
             }
 
@@ -259,6 +276,7 @@ public sealed class LlamaGenerator
             {
                 int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
                 if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
+                LastStopReason = LlamaStopReason.GrammarSatisfied;
                 yield break;
             }
 
@@ -277,6 +295,7 @@ public sealed class LlamaGenerator
         int trailing = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
         if (trailing > 0) yield return new string(charBuf, 0, trailing);
         _ = byteBuf; // silence unused warning if the compiler notices
+        LastStopReason = LlamaStopReason.MaxTokens;
     }
 
     private unsafe void DecodePromptBatch(int[] tokens)
@@ -360,4 +379,26 @@ public sealed class LlamaGenerator
                 _context.Model.Vocab.Handle, token, bufPtr, buf.Length, lstrip: 0, special: renderSpecial);
         }
     }
+}
+
+/// <summary>
+/// Why generation stopped. Distinct from "how the caller observed the stop"
+/// (cancellation, exception): this reflects the sampler / generator's own
+/// termination path. Callers use it to decide whether extending the reply
+/// via a continue-loop is meaningful — e.g. <see cref="EndOfGeneration"/>
+/// means the model emitted a natural EOG token, so extending would just
+/// push past its intended stop point.
+/// </summary>
+public enum LlamaStopReason
+{
+    /// <summary>Generation hasn't been run, or was interrupted before recording a reason.</summary>
+    None = 0,
+    /// <summary>Model emitted a tokenizer-defined end-of-generation token (<c>&lt;|eot_id|&gt;</c>, <c>&lt;|im_end|&gt;</c>, etc.).</summary>
+    EndOfGeneration = 1,
+    /// <summary>Hit the <c>maxTokens</c> budget without ever sampling an EOG.</summary>
+    MaxTokens = 2,
+    /// <summary>A grammar stage reached a state that only permits EOG; we stopped cleanly rather than sample illegal tokens.</summary>
+    GrammarSatisfied = 3,
+    /// <summary>Cancellation observed by the caller. The generator itself doesn't set this; it's a hint for downstream consumers.</summary>
+    Cancelled = 4,
 }

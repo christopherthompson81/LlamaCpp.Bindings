@@ -207,6 +207,11 @@ public sealed class ChatSession : IDisposable
         var promptStartTicks = sw.ElapsedTicks;
         TimeSpan? promptTime = null;
         int completionTokens = 0;
+        // Snapshot perf before this request so we can report the prefill
+        // token count for THIS turn (PromptTokenCount is cumulative across
+        // the context's lifetime; we need the delta).
+        var perfBefore = _context.GetPerformance();
+        int promptEvalTokens = 0;
 
         IAsyncEnumerable<string> stream;
         // Grows with each emitted token so the next turn can diff against it.
@@ -288,6 +293,13 @@ public sealed class ChatSession : IDisposable
 
             newCachedTokens = new List<int>(promptTokens.Length + generation.MaxTokens);
             newCachedTokens.AddRange(promptTokens);
+
+            // Text path knows the exact prefill batch size (prompt length
+            // minus the common-prefix cache overlap). Use it directly — the
+            // perf-counter diff read at first-token time can show 0 because
+            // n_p_eval updates lag the prefill-complete moment on some
+            // backends / small batches.
+            promptEvalTokens = promptTokens.Length - firstNew;
 
             // Capture the local for the closure — newCachedTokens is non-null
             // in this branch and won't be reassigned.
@@ -374,7 +386,7 @@ public sealed class ChatSession : IDisposable
         var total = sw.Elapsed;
         var genTime = promptTime.HasValue ? total - promptTime.Value : total;
 
-        yield return new StreamEvent.Done(completionTokens, promptTime ?? TimeSpan.Zero, genTime);
+        yield return new StreamEvent.Done(promptEvalTokens, promptTime ?? TimeSpan.Zero, completionTokens, genTime, generator.LastStopReason);
         }
         finally
         {
@@ -501,6 +513,11 @@ public sealed class ChatSession : IDisposable
         var promptStartTicks = sw.ElapsedTicks;
         TimeSpan? promptTime = null;
         int completionTokens = 0;
+        // Snapshot perf before this request so we can report the prefill
+        // token count for THIS turn (PromptTokenCount is cumulative across
+        // the context's lifetime; we need the delta).
+        var perfBefore = _context.GetPerformance();
+        int promptEvalTokens = 0;
 
         try
         {
@@ -510,6 +527,14 @@ public sealed class ChatSession : IDisposable
                 {
                     promptTime = TimeSpan.FromSeconds(
                         (sw.ElapsedTicks - promptStartTicks) / (double)Stopwatch.Frequency);
+                    // Fall back to the perf-counter diff when the text path
+                    // didn't pre-populate (multimodal prefill + continuation
+                    // paths). Best-effort for those; the text path has the
+                    // authoritative count.
+                    if (promptEvalTokens == 0)
+                    {
+                        promptEvalTokens = _context.GetPerformance().PromptTokenCount - perfBefore.PromptTokenCount;
+                    }
                 }
 
                 completionTokens++;
@@ -551,7 +576,7 @@ public sealed class ChatSession : IDisposable
             sw.Stop();
             var total = sw.Elapsed;
             var genTime = promptTime.HasValue ? total - promptTime.Value : total;
-            yield return new StreamEvent.Done(completionTokens, promptTime ?? TimeSpan.Zero, genTime);
+            yield return new StreamEvent.Done(promptEvalTokens, promptTime ?? TimeSpan.Zero, completionTokens, genTime, generator.LastStopReason);
         }
         finally
         {
@@ -644,5 +669,24 @@ public abstract record StreamEvent
     /// metadata chip next to the content.
     /// </summary>
     public sealed record Language(string Tag) : StreamEvent;
-    public sealed record Done(int CompletionTokens, TimeSpan PromptTime, TimeSpan GenerationTime) : StreamEvent;
+    /// <summary>
+    /// End-of-stream marker carrying authoritative performance counters from
+    /// <c>llama_context_perf</c>. <see cref="PromptTokens"/> + <see cref="PromptTime"/>
+    /// describe the prefill phase; <see cref="CompletionTokens"/> +
+    /// <see cref="GenerationTime"/> describe decode. Both pairs are what a
+    /// bubble footer shows when the user toggles between prefill and decode
+    /// stats views.
+    /// </summary>
+    /// <summary>
+    /// End-of-stream marker carrying authoritative performance counters from
+    /// <c>llama_context_perf</c>. <see cref="PromptTokens"/> + <see cref="PromptTime"/>
+    /// describe the prefill phase ("Reading" in the UI); <see cref="CompletionTokens"/>
+    /// + <see cref="GenerationTime"/> describe decode ("Generation" in the UI).
+    /// </summary>
+    public sealed record Done(
+        int PromptTokens,
+        TimeSpan PromptTime,
+        int CompletionTokens,
+        TimeSpan GenerationTime,
+        LlamaStopReason StopReason) : StreamEvent;
 }

@@ -94,9 +94,17 @@
         <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
         <Setter Property="Opacity" Value="0.8" />
     </Style>
+    <!-- Disabled: swap to Muted background + MutedForeground so the label text
+         stays readable (opacity-dimming made dark-on-dark unreadable on
+         Button base / destructive). The inner ContentPresenter targets the
+         Fluent template so the setter reaches the actual rendered surface. -->
     <Style Selector="Button:disabled">
-        <Setter Property="Opacity" Value="0.5" />
         <Setter Property="Cursor" Value="Arrow" />
+        <Setter Property="Foreground" Value="{DynamicResource MutedForeground}" />
+    </Style>
+    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Muted}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
     </Style>
 
     <!-- Button.destructive -->
@@ -383,6 +391,50 @@
         <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
     </Style>
 
+    <!-- Reasoning card variant: full-width pill inside a bubble, muted
+         background, rounded border, a bit of padding. The header's brain
+         icon + label is supplied by the bubble template; Avalonia's built-in
+         Expander chevron sits on the right, rotating on expand.
+         The content has an Opacity transition for the expand animation —
+         content size transitions would need a custom template; the opacity
+         fade + the default layout transition is visually acceptable. -->
+    <Style Selector="Expander.reasoning">
+        <Setter Property="Background" Value="{DynamicResource Muted}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusMd}" />
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="Margin" Value="0,4" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Expander.reasoning /template/ ToggleButton">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Expander.reasoning ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- ================================================================
+         Composer pod — the rounded container around the compose TextBox.
+         Holds the TextBox + overlaid + menu button + Send button so the
+         three read as a single chip rather than three separate widgets.
+         ================================================================ -->
+    <Style Selector="Border.composer-pod">
+        <Setter Property="Background" Value="{DynamicResource Input}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="MinHeight" Value="92" />
+    </Style>
+    <Style Selector="Border.composer-pod:focus-within">
+        <Setter Property="BorderBrush" Value="{DynamicResource Ring}" />
+    </Style>
+
     <!-- ================================================================
          Reusable Border classes
          ================================================================ -->
@@ -619,6 +671,32 @@
             <Animation Duration="0:0:1" IterationCount="Infinite">
                 <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1" /></KeyFrame>
                 <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- Sidebar slide: MainWindow's sidebar Border toggles Classes.collapsed;
+         Width animates via DoubleTransition defined inline on the Border. -->
+    <Style Selector="Border.sidebar">
+        <Setter Property="Width" Value="280" />
+    </Style>
+    <Style Selector="Border.sidebar.collapsed">
+        <Setter Property="Width" Value="0" />
+    </Style>
+
+    <!-- Brain "thinking" pulse: applied to the reasoning-card header icon
+         while the assistant is mid-generation. The Ring-coloured DropShadow
+         gives a blue halo; the opacity cycle breathes it in and out so the
+         user has a peripheral "model is still working" signal. -->
+    <Style Selector="Path.brain-pulsing">
+        <Setter Property="Effect">
+            <DropShadowEffect Color="#60A5FA" BlurRadius="10" OffsetX="0" OffsetY="0" />
+        </Setter>
+        <Style.Animations>
+            <Animation Duration="0:0:1.6" IterationCount="Infinite" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.55" /></KeyFrame>
                 <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1" /></KeyFrame>
             </Animation>
         </Style.Animations>
