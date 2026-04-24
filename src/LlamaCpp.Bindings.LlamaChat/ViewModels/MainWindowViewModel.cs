@@ -756,14 +756,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         // atomic on every platform .NET runs on, so the UI thread can read
         // liveTokens directly while the pool thread increments it — worst
         // case we render a stale count one tick late.
+        //
+        // liveStartTicks is 0 until the first token arrives, so prefill /
+        // prompt-processing time isn't counted in the tok/s denominator —
+        // the meter tracks pure generation throughput, matching how
+        // llama-server's timings split prefill from decode.
         var liveTokens = 0;
-        var liveStart = DateTime.UtcNow;
+        long liveStartTicks = 0;
         var liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         liveTimer.Tick += (_, _) =>
         {
             var count = liveTokens;
-            if (count == 0) return;
-            var elapsed = (DateTime.UtcNow - liveStart).TotalSeconds;
+            var startTicks = System.Threading.Interlocked.Read(ref liveStartTicks);
+            if (count == 0 || startTicks == 0) return;
+            var elapsed = (DateTime.UtcNow.Ticks - startTicks) / (double)TimeSpan.TicksPerSecond;
             var tps = elapsed > 0 ? count / elapsed : 0;
             assistant.StatsSummary = $"{count} tok · {tps:F1} tok/s";
         };
@@ -782,11 +788,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 switch (evt)
                 {
                     case StreamEvent.Content c:
+                        if (System.Threading.Interlocked.Read(ref liveStartTicks) == 0)
+                            System.Threading.Interlocked.Exchange(ref liveStartTicks, DateTime.UtcNow.Ticks);
                         System.Threading.Interlocked.Increment(ref liveTokens);
                         pendingContent.Append(c.Text);
                         TryFlush();
                         break;
                     case StreamEvent.Reasoning r:
+                        if (System.Threading.Interlocked.Read(ref liveStartTicks) == 0)
+                            System.Threading.Interlocked.Exchange(ref liveStartTicks, DateTime.UtcNow.Ticks);
                         System.Threading.Interlocked.Increment(ref liveTokens);
                         pendingReasoning.Append(r.Text);
                         TryFlush();

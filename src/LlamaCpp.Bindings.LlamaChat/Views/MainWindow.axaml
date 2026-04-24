@@ -277,8 +277,16 @@
                                 IsVisible="{Binding SelectedConversation.Messages.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}">
                         <TextBlock Text="Start the conversation" Classes="h2"
                                    HorizontalAlignment="Center" />
+                        <!-- Two variants of the sub-hint: the file-upload one
+                             shows only when the loaded model accepts any
+                             attachments, otherwise the text-only hint shows. -->
+                        <TextBlock Classes="muted sm" HorizontalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="460" TextAlignment="Center"
+                                   IsVisible="{Binding CanAttachMedia}"
+                                   Text="Type a message, drop files, or use the attach / mic buttons to get started. Enter sends, Shift+Enter for a new line." />
                         <TextBlock Classes="muted sm" HorizontalAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="420" TextAlignment="Center"
+                                   IsVisible="{Binding !CanAttachMedia}"
                                    Text="Type a message below and press Enter to send. Shift+Enter for a new line." />
                     </StackPanel>
 
@@ -708,23 +716,52 @@
                              PlaceholderText="Type a message, Shift+Enter for newline..."
                              AcceptsReturn="True" TextWrapping="Wrap"
                              MinHeight="56" MaxHeight="200" />
-                    <StackPanel Grid.Column="1" Grid.Row="2" Orientation="Horizontal"
-                                Spacing="10" Margin="4,2,0,0">
-                        <TextBlock Classes="xs muted"
-                                   IsVisible="{Binding IsModelLoaded}"
-                                   Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
-                        <!-- Recording indicator: a pulsing red dot + live mm:ss duration. -->
-                        <StackPanel Orientation="Horizontal" Spacing="4"
-                                    IsVisible="{Binding IsRecording}"
-                                    a:AutomationProperties.LiveSetting="Polite">
-                            <Ellipse Width="8" Height="8" Fill="{DynamicResource Destructive}"
-                                     VerticalAlignment="Center" />
-                            <TextBlock Classes="xs"
-                                       Foreground="{DynamicResource Destructive}"
-                                       VerticalAlignment="Center"
-                                       Text="{Binding RecordingDuration, StringFormat='Recording {0}'}" />
+                    <!-- Compose footer row: token count + recording indicator on the
+                         left; compact "which model is loaded" pill on the right.
+                         The pill mirrors the badges shown in the toolbar but sits
+                         eye-adjacent to the compose box so the user doesn't have
+                         to scan across the window to remember which profile they
+                         pasted a prompt at. -->
+                    <Grid Grid.Column="1" Grid.Row="2" ColumnDefinitions="*,Auto"
+                          Margin="4,2,0,0">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+                            <TextBlock Classes="xs muted"
+                                       IsVisible="{Binding IsModelLoaded}"
+                                       Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
+                            <!-- Recording indicator: a pulsing red dot + live mm:ss duration. -->
+                            <StackPanel Orientation="Horizontal" Spacing="4"
+                                        IsVisible="{Binding IsRecording}"
+                                        a:AutomationProperties.LiveSetting="Polite">
+                                <Ellipse Width="8" Height="8" Fill="{DynamicResource Destructive}"
+                                         VerticalAlignment="Center" />
+                                <TextBlock Classes="xs"
+                                           Foreground="{DynamicResource Destructive}"
+                                           VerticalAlignment="Center"
+                                           Text="{Binding RecordingDuration, StringFormat='Recording {0}'}" />
+                            </StackPanel>
                         </StackPanel>
-                    </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                    IsVisible="{Binding IsModelLoaded}"
+                                    ToolTip.Tip="{Binding ModelSummary}">
+                            <TextBlock Text="{Binding ProfileDisplayName}"
+                                       Classes="xs muted" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="220" />
+                            <Border IsVisible="{Binding CanAttachImages}"
+                                    BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                    Background="{DynamicResource Muted}"
+                                    CornerRadius="3" Padding="3,1"
+                                    a:AutomationProperties.Name="Vision capable">
+                                <Path Classes="icon xs" Data="{StaticResource IconEye}" />
+                            </Border>
+                            <Border IsVisible="{Binding CanAttachAudio}"
+                                    BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                    Background="{DynamicResource Muted}"
+                                    CornerRadius="3" Padding="3,1"
+                                    a:AutomationProperties.Name="Audio capable">
+                                <Path Classes="icon xs" Data="{StaticResource IconVolume}" />
+                            </Border>
+                        </StackPanel>
+                    </Grid>
                     <!-- Send and Stop share a column — only one is visible at a
                          time depending on IsGenerating. Matches webui's toggle. -->
                     <Button Grid.Column="2" Grid.Row="1" Margin="8,0,0,0"
