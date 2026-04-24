@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using LlamaCpp.Bindings.LlamaChat.Models;
 using LlamaCpp.Bindings.LlamaChat.Services.ToolCall;
 
@@ -56,6 +57,18 @@ public sealed class ChatSession : IDisposable
 
     /// <summary>True if this session can accept any mtmd media (image or audio).</summary>
     public bool SupportsMedia => SupportsImages || SupportsAudio;
+
+    /// <summary>
+    /// Coarse "is this model useful for general text generation?" check used
+    /// by the auto-title and regenerate-title flows to gate out ASR-only
+    /// models (Qwen3-ASR etc.), which accept audio in but aren't trained for
+    /// free-form text prompting and produce garbage on a "summarise this
+    /// message in 3-6 words" query. Heuristic: accept everything except
+    /// audio-in-only models (audio capability but no vision — indicative of
+    /// ASR / speech-to-text task specialisation). Omni models (audio + image)
+    /// and plain text / vision models are all considered capable.
+    /// </summary>
+    public bool CanGenerateTitles => !(SupportsAudio && !SupportsImages);
 
     private ChatSession(LlamaModel model, LlamaContext context, MtmdContext? mtmd, string? template)
     {
@@ -150,6 +163,136 @@ public sealed class ChatSession : IDisposable
     {
         _context.ClearKvCache();
         _cachedTokens = null;
+    }
+
+    /// <summary>
+    /// Generate a concise (3–6 word) title summarising <paramref name="userMessage"/>,
+    /// for the sidebar "auto-title new conversations" + right-click "Regenerate
+    /// title" flows. Returns the cleaned title on success, or <c>null</c> if the
+    /// model can't do text generation (<see cref="CanGenerateTitles"/>) or the
+    /// output was empty after trimming.
+    /// </summary>
+    /// <remarks>
+    /// Uses the main session's context and KV cache — tolerates the collateral
+    /// cache wipe this entails (call <see cref="ClearKv"/> before + after) since
+    /// title gen happens at most once per conversation and always either right
+    /// after an assistant reply that's already committed its tokens to the tree
+    /// or from the user's explicit Regenerate Title action. The next real turn
+    /// prefills from scratch; acceptable one-off cost.
+    /// </remarks>
+    public async Task<string?> GenerateTitleAsync(string userMessage, CancellationToken cancellationToken = default)
+    {
+        if (!CanGenerateTitles) return null;
+        if (string.IsNullOrWhiteSpace(userMessage)) return null;
+
+        var transcript = new List<ChatTurn>
+        {
+            new(Guid.NewGuid(), TurnRole.System,
+                "You generate concise conversation titles. Reply with a 3-6 word title that captures the user's topic. Reply with ONLY the title text — no quotes, no trailing punctuation, no \"Title:\" prefix.",
+                TurnState.Complete, DateTimeOffset.UtcNow),
+            new(Guid.NewGuid(), TurnRole.User, userMessage,
+                TurnState.Complete, DateTimeOffset.UtcNow),
+        };
+
+        var prompt = RenderPromptForCompletion(transcript, mediaMarker: null, tools: null);
+
+        // Qwen3 / DeepSeek-R1 chat templates inject an opening <think> tag
+        // into the assistant-turn prefix so the model starts generating
+        // inside a reasoning block. For a one-off title we don't want a
+        // reasoning pass — just close the tag ourselves so the model
+        // begins in content mode immediately. Fast, deterministic, and
+        // works regardless of whether the template recognises /no_think.
+        var promptEndsInThink = System.Text.RegularExpressions.Regex.IsMatch(
+            prompt, @"<think>\s*$");
+        if (promptEndsInThink)
+        {
+            prompt = System.Text.RegularExpressions.Regex.Replace(
+                prompt, @"<think>\s*$", "<think></think>\n");
+        }
+
+        var promptTokens = _model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
+
+        // Clear cache before and after so neither the title prompt nor any
+        // leftover state from previous turns pollute what comes next.
+        _context.ClearKvCache();
+        _cachedTokens = null;
+
+        var sampler = SamplerFactory.Build(_model, _model.Vocab, new SamplerSettings
+        {
+            Temperature = 0.3f,
+            TopK = 40,
+            TopP = 0.9f,
+        });
+        var generator = new LlamaGenerator(_context, sampler);
+
+        // With the <think> tag pre-closed above, the model starts in
+        // content mode; the extractor is still a belt-and-braces guard
+        // in case a non-Qwen template opens its own thinking block mid-
+        // response, but default-Content-mode is the common case now.
+        var extractor = new ReasoningExtractor();
+        var rawSb = new StringBuilder();
+        var contentSb = new StringBuilder();
+        var reasoningSb = new StringBuilder();
+        Exception? captured = null;
+        string? cleaned = null;
+        try
+        {
+            await foreach (var piece in generator.GenerateAsync(
+                promptTokens, maxTokens: 32, firstNewIndex: 0,
+                cancellationToken: cancellationToken).ConfigureAwait(false))
+            {
+                rawSb.Append(piece);
+                var em = extractor.Push(piece);
+                if (em.Reasoning.Length > 0) reasoningSb.Append(em.Reasoning);
+                if (em.Content.Length > 0)
+                {
+                    contentSb.Append(em.Content);
+                    // Content-side newline means the title is complete.
+                    if (contentSb.ToString().Contains('\n')) break;
+                }
+            }
+            var tail = extractor.Flush();
+            if (tail.Reasoning.Length > 0) reasoningSb.Append(tail.Reasoning);
+            if (tail.Content.Length > 0) contentSb.Append(tail.Content);
+            cleaned = CleanTitle(contentSb.ToString());
+        }
+        catch (Exception ex)
+        {
+            captured = ex;
+        }
+        finally
+        {
+            sampler.Dispose();
+            _context.ClearKvCache();
+            _cachedTokens = null;
+        }
+
+        // Always write the log — even if generation threw — so the file
+        // trace reflects what actually happened. The "promptEndsInThink"
+        // + "/no_think appended" markers make it obvious which code path
+        // is live.
+        TitleGenLog.Write(
+            prompt, rawSb.ToString(), reasoningSb.ToString(), contentSb.ToString(),
+            cleaned, promptEndsInThink, captured);
+
+        if (captured is not null) throw captured;
+        return cleaned;
+    }
+
+    private static string? CleanTitle(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        // First line only.
+        var line = raw.Split('\n')[0].Trim();
+        // Strip surrounding quotes, "Title:" prefixes the model sometimes
+        // emits despite the instruction, and trailing punctuation.
+        line = line.Trim().Trim('"').Trim('\'').Trim();
+        if (line.StartsWith("Title:", StringComparison.OrdinalIgnoreCase))
+            line = line[6..].Trim();
+        line = line.TrimEnd('.', '!', '?', ',', ';', ' ');
+        if (line.Length == 0) return null;
+        if (line.Length > 60) line = line[..60].TrimEnd() + "…";
+        return line;
     }
 
     /// <summary>

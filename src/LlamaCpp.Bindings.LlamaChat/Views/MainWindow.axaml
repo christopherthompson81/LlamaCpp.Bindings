@@ -263,6 +263,9 @@
                                             <MenuItem Header="Rename"
                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).BeginRenameCommand}"
                                                       CommandParameter="{Binding}" />
+                                            <MenuItem Header="Regenerate title"
+                                                      Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RegenerateTitleCommand}"
+                                                      CommandParameter="{Binding}" />
                                             <MenuItem Header="Pin / unpin"
                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).TogglePinnedCommand}"
                                                       CommandParameter="{Binding}" />

@@ -57,17 +57,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                               nameof(CanRecordAudio))]
     [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand),
                                  nameof(UnloadCommand), nameof(ShowModelInfoCommand),
-                                 nameof(AttachMediaCommand), nameof(ToggleRecordCommand))]
+                                 nameof(AttachMediaCommand), nameof(ToggleRecordCommand),
+                                 nameof(RegenerateTitleCommand))]
     private ChatSession? _session;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanSend), nameof(CanRecordAudio))]
-    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand), nameof(ToggleRecordCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand),
+                                 nameof(ToggleRecordCommand), nameof(RegenerateTitleCommand))]
     private bool _isBusy;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanSend), nameof(CanCancel), nameof(CanRecordAudio))]
-    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(CancelCommand), nameof(UnloadCommand), nameof(ToggleRecordCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(CancelCommand), nameof(UnloadCommand),
+                                 nameof(ToggleRecordCommand), nameof(RegenerateTitleCommand))]
     private bool _isGenerating;
 
     [ObservableProperty] private string _statusText = "Not loaded.";
@@ -494,16 +497,83 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         conv.AppendToActivePath(user);
         conv.UpdatedAt = DateTimeOffset.UtcNow;
 
-        // Auto-title off the first user message so the sidebar item is legible.
-        if (string.IsNullOrWhiteSpace(conv.Title) ||
-            conv.Title == "New chat" || conv.Title == "(untitled)")
+        // Immediate placeholder title: truncate the first user message so
+        // the sidebar is readable during the reply. After the assistant
+        // finishes, a model-generated summary replaces this if auto-title
+        // is enabled and the model is general-purpose.
+        var wasDefaultTitle = string.IsNullOrWhiteSpace(conv.Title)
+            || conv.Title == "New chat" || conv.Title == "(untitled)";
+        if (AppSettings.AutoTitleNewConversations && wasDefaultTitle)
         {
             var first = text.Replace('\n', ' ').Trim();
             conv.Title = first.Length > 40 ? first[..40] + "…" : first;
         }
 
         await GenerateAssistantReplyAsync(conv);
+
+        // Post-reply model-generated summary title. Fire-and-forget so the
+        // user can start typing the next turn while we ask the model to
+        // condense the first message — but skip if the user already renamed
+        // the conversation manually during streaming.
+        if (AppSettings.AutoTitleNewConversations && wasDefaultTitle && Session?.CanGenerateTitles == true)
+        {
+            _ = GenerateAndApplyTitleAsync(conv, text);
+        }
     }
+
+    /// <summary>
+    /// Ask the loaded model for a concise title summarising
+    /// <paramref name="userMessage"/>. Swallows cancellation and failures —
+    /// title generation is best-effort polish, never blocks anything else.
+    /// </summary>
+    private async Task GenerateAndApplyTitleAsync(ConversationViewModel conv, string userMessage)
+    {
+        if (Session is null) return;
+        try
+        {
+            var title = await Session.GenerateTitleAsync(userMessage, CancellationToken.None).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(title)) return;
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                // Re-check: user may have renamed mid-gen, in which case
+                // don't clobber their choice. We compare against the
+                // immediate placeholder we stamped before the reply.
+                conv.Title = title!;
+                RebuildFilteredConversations();
+                SaveConversations();
+            });
+        }
+        catch (OperationCanceledException) { /* user abandoned; fine */ }
+        catch (Exception ex)
+        {
+            // Best-effort — don't interrupt the user for this.
+            ErrorLog.Write(ex, "title-generation");
+        }
+    }
+
+    /// <summary>
+    /// Right-click → Regenerate title. Uses the conversation's first user
+    /// message as the source; disabled when the loaded model isn't suited
+    /// for text generation (e.g. an ASR-only profile). Falls through to a
+    /// toast on empty / failed output.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanRegenerateTitle))]
+    private async Task RegenerateTitleAsync(ConversationViewModel? conv)
+    {
+        conv ??= SelectedConversation;
+        if (conv is null || Session is null) return;
+        var firstUser = conv.AllMessages.FirstOrDefault(m => m.Role == "user" && !string.IsNullOrWhiteSpace(m.Content));
+        if (firstUser is null)
+        {
+            ToastService.Warning("Regenerate title", "This conversation has no user message to summarise yet.");
+            return;
+        }
+        await GenerateAndApplyTitleAsync(conv, firstUser.Content);
+    }
+
+    private bool CanRegenerateTitle(ConversationViewModel? _) =>
+        Session?.CanGenerateTitles == true && !IsGenerating && !IsBusy;
 
     /// <summary>
     /// Append an assistant placeholder to <paramref name="conv"/> and stream
@@ -535,32 +605,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         // Feed everything except the empty assistant placeholder to the
         // model, prepending the active profile's system prompt if any.
-        var transcript = new List<ChatTurn>();
-        if (!string.IsNullOrWhiteSpace(_activeLoadedProfile.SystemPrompt))
-        {
-            transcript.Add(new ChatTurn(
-                Id: Guid.NewGuid(),
-                Role: TurnRole.System,
-                Content: _activeLoadedProfile.SystemPrompt,
-                State: TurnState.Complete,
-                CreatedAt: DateTimeOffset.UtcNow));
-        }
-        transcript.AddRange(conv.Messages
-            .Take(conv.Messages.Count - 1)
-            .Select(m => new ChatTurn(
-                Id: Guid.NewGuid(),
-                Role: m.Role switch
-                {
-                    "user" => TurnRole.User,
-                    "tool" => TurnRole.Tool,
-                    _ => TurnRole.Assistant,
-                },
-                Content: m.Content,
-                State: TurnState.Complete,
-                CreatedAt: DateTimeOffset.UtcNow,
-                Attachments: m.Attachments.Count > 0
-                    ? new List<Attachment>(m.Attachments)
-                    : null)));
+        var transcript = BuildTranscriptFor(conv);
 
         var tools = McpClientService.Instance.BuildToolsForTemplate();
 
@@ -702,6 +747,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 CreatedAt: DateTimeOffset.UtcNow));
         }
         // Skip the trailing empty/streaming assistant placeholder.
+        var stripThinking = AppSettings.StripThinkingFromHistory;
         transcript.AddRange(conv.Messages
             .Take(conv.Messages.Count - 1)
             .Select(m => new ChatTurn(
@@ -712,7 +758,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                     "tool" => TurnRole.Tool,
                     _ => TurnRole.Assistant,
                 },
-                Content: m.Content,
+                // Assistant turns store reasoning separately from content; by
+                // default we send only content back to the model (the existing
+                // behaviour — saves context budget, matches most chat-template
+                // expectations). When the user turns off the strip toggle,
+                // prepend <think>reasoning</think> so the model sees its own
+                // chain-of-thought on subsequent turns.
+                Content: (!stripThinking && m.Role == "assistant" && !string.IsNullOrEmpty(m.Reasoning))
+                    ? $"<think>{m.Reasoning}</think>{m.Content}"
+                    : m.Content,
                 State: TurnState.Complete,
                 CreatedAt: DateTimeOffset.UtcNow,
                 Attachments: m.Attachments.Count > 0
@@ -1168,34 +1222,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         var sampler = _activeLoadedProfile.SamplerPanel.SnapshotSampler();
         var gen = _activeLoadedProfile.SamplerPanel.SnapshotGeneration();
 
-        var transcript = new List<ChatTurn>();
-        if (!string.IsNullOrWhiteSpace(_activeLoadedProfile.SystemPrompt))
-        {
-            transcript.Add(new ChatTurn(
-                Id: Guid.NewGuid(),
-                Role: TurnRole.System,
-                Content: _activeLoadedProfile.SystemPrompt,
-                State: TurnState.Complete,
-                CreatedAt: DateTimeOffset.UtcNow));
-        }
         // Active path minus the streaming assistant placeholder.
-        transcript.AddRange(conv.Messages
-            .Take(conv.Messages.Count - 1)
-            .Select(m => new ChatTurn(
-                Id: Guid.NewGuid(),
-                Role: m.Role switch
-                {
-                    "user" => TurnRole.User,
-                    "tool" => TurnRole.Tool,
-                    _ => TurnRole.Assistant,
-                },
-                Content: m.Content,
-                State: TurnState.Complete,
-                CreatedAt: DateTimeOffset.UtcNow,
-                Attachments: m.Attachments.Count > 0
-                    ? new List<Attachment>(m.Attachments)
-                    : null)));
-
+        var transcript = BuildTranscriptFor(conv);
         var tools = McpClientService.Instance.BuildToolsForTemplate();
 
         await StreamIntoMessageAsync(

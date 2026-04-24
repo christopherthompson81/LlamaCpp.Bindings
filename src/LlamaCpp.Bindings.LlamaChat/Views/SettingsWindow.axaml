@@ -143,6 +143,20 @@
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
                                        Text="Always-visible message action bar (no hover-to-reveal) so every action is reachable without a pointer." />
                         </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <ToggleButton Classes="switch" Content="Auto-title new conversations"
+                                          IsChecked="{Binding AutoTitleNewConversations}" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Derive a title from your first message when a new chat is still called &quot;New chat&quot;. You can still rename by hand." />
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <ToggleButton Classes="switch" Content="Strip thinking from message history"
+                                          IsChecked="{Binding StripThinkingFromHistory}" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Omit prior &lt;think&gt; blocks when sending conversation history back to the model. Off preserves chain-of-thought across turns at the cost of context budget." />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
             </TabItem>

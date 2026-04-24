@@ -11,6 +11,8 @@ public partial class AppSettingsViewModel : ObservableObject
     [ObservableProperty] private bool _showMessageStats;
     [ObservableProperty] private bool _showReasoningInProgress;
     [ObservableProperty] private bool _highAccessibilityMode;
+    [ObservableProperty] private bool _autoTitleNewConversations;
+    [ObservableProperty] private bool _stripThinkingFromHistory;
 
     public AppSettingsViewModel() : this(new AppSettings()) { }
 
@@ -21,6 +23,8 @@ public partial class AppSettingsViewModel : ObservableObject
         _showMessageStats = model.ShowMessageStats;
         _showReasoningInProgress = model.ShowReasoningInProgress;
         _highAccessibilityMode = model.HighAccessibilityMode;
+        _autoTitleNewConversations = model.AutoTitleNewConversations;
+        _stripThinkingFromHistory = model.StripThinkingFromHistory;
     }
 
     public AppSettings ToModel() => new()
@@ -30,6 +34,8 @@ public partial class AppSettingsViewModel : ObservableObject
         ShowMessageStats = ShowMessageStats,
         ShowReasoningInProgress = ShowReasoningInProgress,
         HighAccessibilityMode = HighAccessibilityMode,
+        AutoTitleNewConversations = AutoTitleNewConversations,
+        StripThinkingFromHistory = StripThinkingFromHistory,
     };
 
     // Apply theme live when the user flips the radio in Settings; no need

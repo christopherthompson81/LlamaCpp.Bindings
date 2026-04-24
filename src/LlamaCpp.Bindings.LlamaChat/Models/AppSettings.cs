@@ -38,4 +38,21 @@ public sealed record AppSettings
     /// pointer, for screen-reader and keyboard-only users.
     /// </summary>
     public bool HighAccessibilityMode { get; init; } = false;
+
+    /// <summary>
+    /// When the user sends the first message in a new conversation whose
+    /// title is still the default placeholder, set the title from the first
+    /// non-empty line of that message (truncated). Matches webui's
+    /// "Use first non-empty line for conversation title".
+    /// </summary>
+    public bool AutoTitleNewConversations { get; init; } = true;
+
+    /// <summary>
+    /// When true, assistant messages sent back to the model as prior context
+    /// omit their <c>&lt;think&gt;...&lt;/think&gt;</c> blocks. Off preserves
+    /// the chain-of-thought across turns — useful for workflows that want
+    /// the model to see its prior reasoning, at the cost of context budget.
+    /// Matches webui's "Strip thinking from message history".
+    /// </summary>
+    public bool StripThinkingFromHistory { get; init; } = true;
 }
