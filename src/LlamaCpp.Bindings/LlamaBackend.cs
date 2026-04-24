@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using LlamaCpp.Bindings.Native;
 
@@ -58,10 +59,12 @@ public static class LlamaBackend
                 InstallLogSink(logSink);
             }
 
-            // Load all GGML backend plugins (CPU variants, Vulkan, CUDA, etc.)
-            // before calling llama_backend_init(). In b8893+ the backends are
-            // separate .so/.dll files and are not auto-loaded by llama_backend_init.
-            NativeMethods.ggml_backend_load_all();
+            // Load all GGML backend plugins before llama_backend_init().
+            // In b8893+ backends are separate .so/.dll files that must be
+            // loaded explicitly — llama_backend_init no longer does it.
+            var nativeDir = NativeLibraryResolver.NativeLibraryDirectory();
+            NativeMethods.ggml_backend_load_all_from_path(nativeDir);
+            LoadArchSpecificCpuPlugins(nativeDir);
             NativeMethods.llama_backend_init();
             _initialized = true;
         }
@@ -99,6 +102,24 @@ public static class LlamaBackend
         {
             throw new InvalidOperationException(
                 "LlamaBackend.Initialize() must be called before any Llama* type is constructed.");
+        }
+    }
+
+    private static void LoadArchSpecificCpuPlugins(string? nativeDir)
+    {
+        // The Ubuntu prebuilt ships arch-specific CPU backends
+        // (libggml-cpu-haswell.so, libggml-cpu-x64.so, etc.) instead of a
+        // monolithic libggml-cpu.so. ggml_backend_load_all_from_path only looks
+        // for the monolithic name, so we load each variant explicitly. GGML
+        // registers all of them and selects the best one for the running CPU
+        // when llama_backend_init_best() is called later.
+        if (nativeDir is null || !RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            return;
+
+        var pattern = "libggml-cpu-*.so";
+        foreach (var path in Directory.EnumerateFiles(nativeDir, pattern))
+        {
+            NativeMethods.ggml_backend_load(path);
         }
     }
 

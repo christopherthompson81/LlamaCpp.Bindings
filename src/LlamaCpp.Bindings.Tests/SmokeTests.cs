@@ -32,6 +32,25 @@ public class SmokeTests
     }
 
     [Fact]
+    public void NativeLibraryDirectory_Is_Found_And_Contains_Cpu_Plugins()
+    {
+        var dir = LlamaCpp.Bindings.Native.NativeLibraryResolver.NativeLibraryDirectory();
+        Assert.NotNull(dir);
+        Assert.True(Directory.Exists(dir), $"Expected native dir to exist: {dir}");
+        var cpuPlugins = Directory.GetFiles(dir, "libggml-cpu-*.so");
+        Assert.True(cpuPlugins.Length > 0,
+            $"Expected libggml-cpu-*.so files in {dir}, found: {string.Join(", ", Directory.GetFiles(dir, "*.so*").Select(Path.GetFileName))}");
+    }
+
+    [Fact]
+    public void Backend_Dev_Count_Is_Nonzero_After_Initialize()
+    {
+        LlamaBackend.Initialize();
+        var count = (int)LlamaCpp.Bindings.Native.NativeMethods.ggml_backend_dev_count();
+        Assert.True(count > 0, $"ggml_backend_dev_count() returned {count} — backends were not loaded");
+    }
+
+    [Fact]
     public void Default_Model_Params_Round_Trip_Looks_Sane()
     {
         LlamaBackend.Initialize();

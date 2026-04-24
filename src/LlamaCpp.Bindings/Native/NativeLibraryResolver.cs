@@ -23,6 +23,36 @@ internal static class NativeLibraryResolver
 {
     private static int _registered;
 
+    /// <summary>
+    /// Returns the directory where our shipped native libraries live, or null
+    /// if it cannot be determined. Used to pass an explicit path to
+    /// <c>ggml_backend_load_all_from_path</c> so it finds arch-specific CPU
+    /// plugin variants that live alongside libggml.so.
+    /// </summary>
+    public static string? NativeLibraryDirectory()
+    {
+        var rid = CurrentRid();
+        var assembly = typeof(NativeLibraryResolver).Assembly;
+
+        var baseDir = Path.GetDirectoryName(assembly.Location);
+        if (!string.IsNullOrEmpty(baseDir))
+        {
+            var candidate = Path.Combine(baseDir, "runtimes", rid, "native");
+            if (Directory.Exists(candidate)) return candidate;
+            if (Directory.Exists(baseDir)) return baseDir; // flattened dev layout
+        }
+
+        var appBase = AppContext.BaseDirectory;
+        if (!string.IsNullOrEmpty(appBase))
+        {
+            var candidate = Path.Combine(appBase, "runtimes", rid, "native");
+            if (Directory.Exists(candidate)) return candidate;
+            if (Directory.Exists(appBase)) return appBase;
+        }
+
+        return null;
+    }
+
     /// <summary>Call once at startup (from <c>LlamaBackend.Initialize</c>).</summary>
     public static void Register()
     {
@@ -58,7 +88,19 @@ internal static class NativeLibraryResolver
         var baseDir = Path.GetDirectoryName(assembly.Location);
         if (!string.IsNullOrEmpty(baseDir))
         {
-            yield return Path.Combine(baseDir, "runtimes", rid, "native", filename);
+            var nativeDir = Path.Combine(baseDir, "runtimes", rid, "native");
+            // On Linux, MSBuild dereferences symlinks when copying to the output
+            // directory, so libggml.so and libggml.so.0 land as separate regular
+            // files with different inodes. libllama.so's NEEDED entry is
+            // "libggml.so.0" (the SONAME), so the ELF loader will pick that file.
+            // We must load the same file so both paths share one dlopen entry and
+            // one backend registry. Probe the SONAME form (.so.N) first.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                var soname = FindSonameFile(nativeDir, libraryName);
+                if (soname is not null) yield return soname;
+            }
+            yield return Path.Combine(nativeDir, filename);
             yield return Path.Combine(baseDir, filename); // flattened dev layout
         }
 
@@ -67,9 +109,35 @@ internal static class NativeLibraryResolver
         var appBase = AppContext.BaseDirectory;
         if (!string.IsNullOrEmpty(appBase))
         {
-            yield return Path.Combine(appBase, "runtimes", rid, "native", filename);
+            var nativeDir = Path.Combine(appBase, "runtimes", rid, "native");
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                var soname = FindSonameFile(nativeDir, libraryName);
+                if (soname is not null) yield return soname;
+            }
+            yield return Path.Combine(nativeDir, filename);
             yield return Path.Combine(appBase, filename);
         }
+    }
+
+    // Returns the first libX.so.<major> file found in dir (SONAME form — just
+    // a single numeric major-version suffix, not the full A.B.C form).
+    // Note: Directory.EnumerateFiles("libX.so.*") can match "libX.so" on some
+    // .NET versions (treats .* as zero-or-more extension), so we guard with
+    // StartsWith and a length check.
+    private static string? FindSonameFile(string dir, string libraryName)
+    {
+        if (!Directory.Exists(dir)) return null;
+        var prefix = $"lib{libraryName}.so.";
+        return Directory.EnumerateFiles(dir, $"lib{libraryName}.so.*")
+            .OrderBy(f => f)
+            .FirstOrDefault(f =>
+            {
+                var name = Path.GetFileName(f);
+                if (!name.StartsWith(prefix, StringComparison.Ordinal)) return false;
+                var suffix = name[prefix.Length..];
+                return suffix.Length > 0 && suffix.All(char.IsAsciiDigit);
+            });
     }
 
     private static string CurrentRid()

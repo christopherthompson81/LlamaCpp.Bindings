@@ -24,14 +24,23 @@ internal static partial class NativeMethods
     // Must be called before llama_backend_init() so the GGML CPU (and other)
     // backend plugins are loaded. In b8893+ the plugins are separate .so files
     // and llama_backend_init() no longer loads them automatically.
-    [LibraryImport(LibGgml)]
-    internal static partial void ggml_backend_load_all();
+    [LibraryImport(LibGgml, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial void ggml_backend_load_all_from_path(string? path);
+
+    // Load a single backend plugin by absolute path. Used to explicitly load
+    // arch-specific CPU variants (libggml-cpu-haswell.so etc.) that the Ubuntu
+    // prebuilt ships in place of a monolithic libggml-cpu.so.
+    [LibraryImport(LibGgml, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr ggml_backend_load(string path);
 
     [LibraryImport(LibName)]
     internal static partial void llama_backend_init();
 
     [LibraryImport(LibName)]
     internal static partial void llama_backend_free();
+
+    [LibraryImport(LibGgml)]
+    internal static partial nuint ggml_backend_dev_count();
 
     // Callback: void (*)(ggml_log_level level, const char * text, void * user_data)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
