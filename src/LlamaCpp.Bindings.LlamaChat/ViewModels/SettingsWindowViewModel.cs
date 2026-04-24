@@ -49,11 +49,23 @@ public partial class SettingsWindowViewModel : ObservableObject
     }
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
-    private void DeleteProfile()
+    private async Task DeleteProfileAsync()
     {
         if (SelectedProfile is null) return;
-        var idx = Profiles.IndexOf(SelectedProfile);
-        Profiles.Remove(SelectedProfile);
+        var target = SelectedProfile;
+        var name = string.IsNullOrWhiteSpace(target.Name) ? "Untitled profile" : target.Name;
+        var choice = await DialogService.ConfirmAsync(
+            "Delete profile",
+            $"Delete profile \"{name}\"? This removes it from profiles.json.",
+            new[]
+            {
+                ("cancel", "Cancel", false, false),
+                ("delete", "Delete", true, true),
+            });
+        if (choice != "delete") return;
+
+        var idx = Profiles.IndexOf(target);
+        Profiles.Remove(target);
         SelectedProfile = Profiles.Count == 0
             ? null
             : Profiles[System.Math.Min(idx, Profiles.Count - 1)];

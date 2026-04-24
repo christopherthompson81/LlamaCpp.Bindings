@@ -193,7 +193,9 @@
                         </ListBox.Styles>
                         <ListBox.ItemTemplate>
                             <DataTemplate DataType="vm:ConversationViewModel">
-                                <Grid>
+                                <!-- Background=Transparent so the whole card is hit-testable
+                                     for right-click, not just the text glyphs. -->
+                                <Grid Background="Transparent">
                                     <!-- Default display -->
                                     <StackPanel Spacing="2" IsVisible="{Binding !IsEditing}">
                                         <Grid ColumnDefinitions="*,Auto">

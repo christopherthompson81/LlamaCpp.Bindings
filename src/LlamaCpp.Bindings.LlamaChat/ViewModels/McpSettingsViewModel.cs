@@ -77,6 +77,17 @@ public partial class McpSettingsViewModel : ObservableObject
     {
         if (SelectedServer is null) return;
         var target = SelectedServer;
+        var name = string.IsNullOrWhiteSpace(target.Config.Name) ? "Untitled server" : target.Config.Name;
+        var choice = await DialogService.ConfirmAsync(
+            "Delete MCP server",
+            $"Delete MCP server \"{name}\"? This closes the session and removes it from mcp-servers.json.",
+            new[]
+            {
+                ("cancel", "Cancel", false, false),
+                ("delete", "Delete", true, true),
+            });
+        if (choice != "delete") return;
+
         await McpClientService.Instance.DeleteServerAsync(target);
         SelectedServer = Servers.FirstOrDefault();
         Status = $"Deleted '{target.Config.Name}'.";

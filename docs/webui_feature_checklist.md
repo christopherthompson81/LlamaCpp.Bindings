@@ -70,7 +70,7 @@ src/
 - [x] **List all conversations** — `MainWindowViewModel.Conversations`, persisted to `conversations.json` by `ConversationStore`. Sorted by `UpdatedAt` descending in `FilteredConversations`.
 - [x] **Create new conversation** — `NewConversationCommand` (Ctrl+N / Ctrl+Shift+O, File menu item). Auto-selects the new one.
 - [x] **Rename conversation** — inline edit in sidebar (right-click → Rename or F2-style — currently via context menu). Commit on Enter/LostFocus via `EndRenameCommand`; Escape cancels.
-- [x] **Delete conversation** — right-click → Delete, or Chat menu. No confirmation yet — deferred.
+- [x] **Delete conversation** — right-click → Delete, or Chat menu. Confirmation dialog via `DialogService.ConfirmAsync` ("Delete \"title\"? (N turns)" + Cancel / destructive Delete).
 - [x] **Conversation tree/forking** — `ChatTurn` gained `ParentId` and `Conversation` gained `ActiveLeafId`. `ConversationViewModel` keeps `AllMessages` as the full tree and recomputes `Messages` as the root → active-leaf path. Tree mutations go through `AppendToActivePath` / `AddSibling` / `AddChildOf` / `RemoveSubtree` / `SwitchToSibling`. Legacy files with flat `Turns` load as a linear chain (each turn parented to the previous one's Id). Forking happens implicitly on Retry and user-message edits.
 - [x] **Search conversations** — case-insensitive substring on Title + Preview, live-filtered as user types. Ctrl+K focuses the search box.
 - [x] **Active conversation highlight** — `ListBox.SelectedItem` bound to `SelectedConversation`; styled via existing `ListBoxItem:selected` accent from Theme/Controls.
@@ -150,7 +150,7 @@ Streamable HTTP transport only (most common for HTTP-facing MCP servers; stdio s
 - [x] **MCP server add** — `Add` button in the settings tab inserts a disabled-by-default stub; user fills in URL + headers and clicks Save.
 - [x] **MCP server list** — `Views/McpSettingsView.axaml` left pane is a ListBox of `McpServerEntry` rows (name + URL + state pill). Backed by `McpClientService.Instance.Servers`.
 - [x] **MCP server enable/disable** — `Connect on startup` CheckBox in the editor toggles `Config.Enabled`, which disconnects/reconnects through `McpClientService.ToggleEnabledAsync`.
-- [x] **MCP server delete** — destructive `Delete` button; no confirmation dialog in v1 (deferred — same as conversation delete).
+- [x] **MCP server delete** — destructive `Delete` button, gated on a `ConfirmAsync` dialog (same pattern as conversation delete). Profile delete + Clear conversation use the same helper.
 - [x] **MCP server edit** — URL + headers + name edit in place on the selected server; `Save` reconnects with the new config. Headers entered as `Key: value` one per line.
 - [x] **MCP connection status indicator** — `StateLabel` pill on each list item + the editor status panel shows `Idle / Connecting… / Ready / Error / Disabled` plus the last error text.
 - [x] **MCP tool list** — per-server Expander list of tools; each shows the tool's `description` + a pretty-printed `inputSchema` JSON in a code block. Pretty-printing via `Services/JsonPrettyPrinter`.

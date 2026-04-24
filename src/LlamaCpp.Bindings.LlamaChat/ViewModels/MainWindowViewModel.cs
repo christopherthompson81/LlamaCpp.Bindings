@@ -359,10 +359,26 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void DeleteConversation(ConversationViewModel? conv)
+    private async Task DeleteConversationAsync(ConversationViewModel? conv)
     {
         conv ??= SelectedConversation;
         if (conv is null) return;
+
+        var title = string.IsNullOrWhiteSpace(conv.Title) ? "Untitled conversation" : conv.Title;
+        var turnCount = conv.AllMessages.Count;
+        var body = turnCount switch
+        {
+            0 => $"Delete \"{title}\"?",
+            1 => $"Delete \"{title}\"? (1 turn)",
+            _ => $"Delete \"{title}\"? ({turnCount} turns)",
+        };
+        var choice = await DialogService.ConfirmAsync("Delete conversation", body, new[]
+        {
+            ("cancel", "Cancel", false, false),
+            ("delete", "Delete", true, true),
+        });
+        if (choice != "delete") return;
+
         Conversations.Remove(conv);
         if (Conversations.Count == 0) Conversations.Add(ConversationViewModel.NewEmpty());
         RebuildFilteredConversations();
@@ -1215,9 +1231,22 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void ClearConversation()
+    private async Task ClearConversationAsync()
     {
         if (SelectedConversation is null) return;
+        var count = SelectedConversation.AllMessages.Count;
+        if (count == 0) return;
+
+        var body = count == 1
+            ? "Clear this conversation? (1 turn)"
+            : $"Clear this conversation? ({count} turns)";
+        var choice = await DialogService.ConfirmAsync("Clear conversation", body, new[]
+        {
+            ("cancel", "Cancel", false, false),
+            ("clear", "Clear", true, true),
+        });
+        if (choice != "clear") return;
+
         SelectedConversation.ClearAll();
         Session?.ClearKv();
         StatusText = IsModelLoaded ? "Conversation cleared." : "Not loaded.";
