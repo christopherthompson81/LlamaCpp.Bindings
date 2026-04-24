@@ -9,6 +9,7 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <RootNamespace>LlamaCpp.Bindings.LlamaChat</RootNamespace>
     <AssemblyName>LlamaCpp.Bindings.LlamaChat</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,6 +30,9 @@
     <PackageReference Include="Markdig" Version="0.38.0" />
     <PackageReference Include="ColorCode.Core" Version="2.0.15" />
     <PackageReference Include="CSharpMath.SkiaSharp" Version="1.0.0-pre.1" />
+    <PackageReference Include="Silk.NET.OpenAL" Version="2.22.0" />
+    <PackageReference Include="Silk.NET.OpenAL.Extensions.Creative" Version="2.22.0" />
+    <PackageReference Include="Silk.NET.OpenAL.Extensions.EXT" Version="2.22.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -636,6 +636,21 @@
                                 Command="{Binding AttachMcpResourceCommand}">
                             <Path Classes="icon" Data="{StaticResource IconFolder}" />
                         </Button>
+                        <!-- Mic: toggle-style record button. Icon swaps to a stop
+                             square while recording; live mm:ss sits under the box. -->
+                        <Button Classes="ghost icon"
+                                ToolTip.Tip="Record from microphone"
+                                a:AutomationProperties.Name="Record audio from microphone"
+                                Command="{Binding ToggleRecordCommand}"
+                                IsVisible="{Binding CanAttachAudio}">
+                            <Grid>
+                                <Path Classes="icon" Data="{StaticResource IconMic}"
+                                      IsVisible="{Binding !IsRecording}" />
+                                <Path Classes="icon" Data="{StaticResource IconSquare}"
+                                      Stroke="{DynamicResource Destructive}"
+                                      IsVisible="{Binding IsRecording}" />
+                            </Grid>
+                        </Button>
                     </StackPanel>
 
                     <TextBox Grid.Column="1" Grid.Row="1" Name="ComposeBox"
@@ -643,10 +658,23 @@
                              PlaceholderText="Type a message, Shift+Enter for newline..."
                              AcceptsReturn="True" TextWrapping="Wrap"
                              MinHeight="56" MaxHeight="200" />
-                    <TextBlock Grid.Column="1" Grid.Row="2" Classes="xs muted"
-                               Margin="4,2,0,0"
-                               IsVisible="{Binding IsModelLoaded}"
-                               Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
+                    <StackPanel Grid.Column="1" Grid.Row="2" Orientation="Horizontal"
+                                Spacing="10" Margin="4,2,0,0">
+                        <TextBlock Classes="xs muted"
+                                   IsVisible="{Binding IsModelLoaded}"
+                                   Text="{Binding UserInputTokenCount, StringFormat='{}{0} tok'}" />
+                        <!-- Recording indicator: a pulsing red dot + live mm:ss duration. -->
+                        <StackPanel Orientation="Horizontal" Spacing="4"
+                                    IsVisible="{Binding IsRecording}"
+                                    a:AutomationProperties.LiveSetting="Polite">
+                            <Ellipse Width="8" Height="8" Fill="{DynamicResource Destructive}"
+                                     VerticalAlignment="Center" />
+                            <TextBlock Classes="xs"
+                                       Foreground="{DynamicResource Destructive}"
+                                       VerticalAlignment="Center"
+                                       Text="{Binding RecordingDuration, StringFormat='Recording {0}'}" />
+                        </StackPanel>
+                    </StackPanel>
                     <!-- Send and Stop share a column — only one is visible at a
                          time depending on IsGenerating. Matches webui's toggle. -->
                     <Button Grid.Column="2" Grid.Row="1" Margin="8,0,0,0"

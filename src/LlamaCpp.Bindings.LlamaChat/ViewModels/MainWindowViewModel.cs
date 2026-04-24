@@ -52,20 +52,22 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     // Session
     // ============================================================
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend), nameof(CanAttachMedia))]
+    [NotifyPropertyChangedFor(nameof(IsModelLoaded), nameof(CanSend),
+                              nameof(CanAttachMedia), nameof(CanAttachImages), nameof(CanAttachAudio),
+                              nameof(CanRecordAudio))]
     [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand),
                                  nameof(UnloadCommand), nameof(ShowModelInfoCommand),
-                                 nameof(AttachMediaCommand))]
+                                 nameof(AttachMediaCommand), nameof(ToggleRecordCommand))]
     private ChatSession? _session;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanSend))]
-    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand))]
+    [NotifyPropertyChangedFor(nameof(CanSend), nameof(CanRecordAudio))]
+    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(LoadCommand), nameof(ToggleRecordCommand))]
     private bool _isBusy;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanSend), nameof(CanCancel))]
-    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(CancelCommand), nameof(UnloadCommand))]
+    [NotifyPropertyChangedFor(nameof(CanSend), nameof(CanCancel), nameof(CanRecordAudio))]
+    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(CancelCommand), nameof(UnloadCommand), nameof(ToggleRecordCommand))]
     private bool _isGenerating;
 
     [ObservableProperty] private string _statusText = "Not loaded.";
@@ -98,6 +100,29 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     public bool CanAttachImages => Session?.SupportsImages == true;
     public bool CanAttachAudio => Session?.SupportsAudio == true;
 
+    // ============================================================
+    // Microphone capture (compose-bar record button)
+    // ============================================================
+
+    private AudioRecorder? _audioRecorder;
+
+    /// <summary>True while the record button is active and the mic is capturing.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SendCommand), nameof(ToggleRecordCommand))]
+    [NotifyPropertyChangedFor(nameof(CanSend))]
+    private bool _isRecording;
+
+    /// <summary>Live "mm:ss" display updated by <see cref="_recordingTimer"/>.</summary>
+    [ObservableProperty] private string _recordingDuration = "0:00";
+
+    /// <summary>Gates the record button — mic only makes sense for audio-capable models.</summary>
+    public bool CanRecordAudio => CanAttachAudio && !IsGenerating && !IsBusy;
+
+    private readonly Avalonia.Threading.DispatcherTimer _recordingTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(250),
+    };
+
     private readonly Avalonia.Threading.DispatcherTimer _tokenCountTimer = new()
     {
         Interval = TimeSpan.FromMilliseconds(150),
@@ -117,6 +142,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         IsModelLoaded
         && !IsGenerating
         && !IsBusy
+        && !IsRecording
         && !string.IsNullOrWhiteSpace(UserInput)
         && SelectedConversation is not null;
 
@@ -181,6 +207,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             _tokenCountTimer.Stop();
             RecomputeUserInputTokens();
+        };
+
+        _recordingTimer.Tick += (_, _) =>
+        {
+            if (_audioRecorder is null) return;
+            var t = _audioRecorder.Elapsed;
+            RecordingDuration = $"{(int)t.TotalMinutes}:{t.Seconds:D2}";
         };
     }
 
@@ -1378,6 +1411,71 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     // ============================================================
+    // Mic recording
+    // ============================================================
+
+    /// <summary>
+    /// Start or stop microphone capture. On stop, the captured PCM is wrapped
+    /// in a WAV header and dropped into <see cref="PendingAttachments"/> — from
+    /// there it travels the same path as an uploaded audio file, so ASR / omni
+    /// models receive it through the existing mtmd pipeline.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanToggleRecord))]
+    private async Task ToggleRecordAsync()
+    {
+        if (!IsRecording)
+        {
+            try
+            {
+                _audioRecorder?.Dispose();
+                _audioRecorder = new AudioRecorder();
+                _audioRecorder.Start();
+                IsRecording = true;
+                RecordingDuration = "0:00";
+                _recordingTimer.Start();
+            }
+            catch (Exception ex)
+            {
+                _audioRecorder?.Dispose();
+                _audioRecorder = null;
+                IsRecording = false;
+                ToastService.Warning("Recording failed", ex.Message);
+            }
+            return;
+        }
+
+        // Stop path — snapshot state first so the timer can stop cleanly.
+        _recordingTimer.Stop();
+        IsRecording = false;
+        var recorder = _audioRecorder;
+        _audioRecorder = null;
+        if (recorder is null) return;
+
+        try
+        {
+            var samples = await recorder.StopAsync();
+            if (samples.Length == 0)
+            {
+                ToastService.Warning("Recording empty", "No audio was captured.");
+                return;
+            }
+            var wav = WavWriter.BuildPcm16(samples, AudioRecorder.SampleRate);
+            var fileName = $"mic-{DateTime.Now:yyyyMMdd-HHmmss}.wav";
+            AddPendingMediaBytes(wav, "audio/wav", fileName);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Warning("Recording failed", ex.Message);
+        }
+        finally
+        {
+            recorder.Dispose();
+        }
+    }
+
+    private bool CanToggleRecord() => IsRecording || CanRecordAudio;
+
+    // ============================================================
     // Helpers
     // ============================================================
     private void SaveConversations()
@@ -1402,6 +1500,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     {
         _generationCts?.Cancel();
         _generationCts?.Dispose();
+        _recordingTimer.Stop();
+        _audioRecorder?.Dispose();
+        _audioRecorder = null;
         Session?.Dispose();
         SaveConversations();
     }

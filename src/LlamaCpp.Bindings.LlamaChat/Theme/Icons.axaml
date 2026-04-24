@@ -48,6 +48,8 @@
 
     <StreamGeometry x:Key="IconVolume">M11 4.702 a.705 .705 0 0 0 -1.203 -.498 L6.413 7.587 A1.4 1.4 0 0 1 5.416 8 H3 a1 1 0 0 0 -1 1 v6 a1 1 0 0 0 1 1 h2.416 a1.4 1.4 0 0 1 .997 .413 l3.383 3.384 A.705 .705 0 0 0 11 19.298 z M16 9 a5 5 0 0 1 0 6 M19.364 18.364 a9 9 0 0 0 0 -12.728</StreamGeometry>
 
+    <StreamGeometry x:Key="IconMic">M12 2 a3 3 0 0 0 -3 3 v7 a3 3 0 0 0 6 0 V5 a3 3 0 0 0 -3 -3 z M19 10 v2 a7 7 0 0 1 -14 0 v-2 M12 19 v3</StreamGeometry>
+
     <StreamGeometry x:Key="IconGlobe">M2 12 a10 10 0 1 1 20 0 a10 10 0 1 1 -20 0 M12 2 a14.5 14.5 0 0 0 0 20 a14.5 14.5 0 0 0 0 -20 M2 12 h20</StreamGeometry>
 
     <StreamGeometry x:Key="IconChevronDown">M6 9 L12 15 L18 9</StreamGeometry>

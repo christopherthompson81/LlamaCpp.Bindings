@@ -74,13 +74,36 @@ public static class ErrorBoundary
 
     private static void OnUnobservedTask(object? sender, UnobservedTaskExceptionEventArgs e)
     {
-        ErrorLog.Write(e.Exception, "unobserved-task");
         e.SetObserved();
+
+        // Avalonia on recent Ubuntu fire-and-forgets an appmenu-registrar
+        // DBus call that frequently fails because the Unity menubar service
+        // doesn't exist on GNOME/KDE. Harmless. Drop it silently rather than
+        // spooking the user with a red toast every time they open a menu.
+        if (IsKnownBenign(e.Exception)) return;
+
+        ErrorLog.Write(e.Exception, "unobserved-task");
         // Surface on the UI thread so the toast actually appears.
         _ = Dispatcher.UIThread.InvokeAsync(() =>
         {
             ToastService.Error("Background task failed", $"{e.Exception.GetType().Name}: {e.Exception.Message}");
         });
+    }
+
+    private static bool IsKnownBenign(Exception ex)
+    {
+        for (Exception? cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            var msg = cur.Message ?? string.Empty;
+            if (msg.Contains("com.canonical.AppMenu.Registrar", StringComparison.Ordinal))
+                return true;
+        }
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.Flatten().InnerExceptions)
+                if (IsKnownBenign(inner)) return true;
+        }
+        return false;
     }
 
     private static void OnAppDomainUnhandled(object? sender, UnhandledExceptionEventArgs e)
