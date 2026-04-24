@@ -92,3 +92,24 @@ And a top-level `Services/MermaidRenderer.cs` as the entrypoint used by `Markdow
 - Chart types — should lean on `LiveChartsCore` or `OxyPlot` when wired.
 
 **Webui feature checklist:** Mermaid item flips from `[~]` deferred to `[x]` with a scope note about the v1 subset + follow-ups.
+
+## Run 5 — 2026-04-23 19:00
+
+**Question:** close out [#11](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/11) — edges crossing unrelated node bounding boxes when siblings converge.
+
+**Approach:** the two fixes in the issue body that don't require a full dagre port:
+1. **Anchor-point distribution** (layout). When multiple forward edges share a node's exit or entry side, place them at fractions `1/(n+1), 2/(n+1), …, n/(n+1)` along that side rather than all landing on the midpoint. Sort by the far endpoint's cross-axis position so edges don't visually cross within the gap lane.
+2. **Obstacle-aware control-point bulge** (renderer). Sample the baseline cubic Bezier at 16 points; count how many samples fall inside a non-endpoint node's bbox (inflated by 4 px to avoid grazing). If any, apply a *perpendicular* shift to both control points in the cross-axis direction, growing through `{0.6, 1.0, 1.6, 2.4} × LayerGap` until the curve clears or we're out of tries. The side of the shift is picked once (the cross-axis direction away from the obstacles' centroid).
+
+Back-edge routing (the third item in the issue) is **deliberately not implemented** in this pass. The current centre-clip + Bezier handling is visually acceptable for the back-edges we've seen; "route along the far side of the graph" would require a topology-aware decision whether to go left or right around the whole graph's bbox, which is more work than the observed wins justify today.
+
+**What went wrong on the first iteration (same run):** first attempt scaled *both* tangent magnitude and perpendicular shift with the same `mag` multiplier. On the third retry the tangent stretched to 2× the layer-axis distance, producing a baroque right-sweep from `Show Error` through the right margin and back into `End` — the same sort of artistic failure the issue was filed to prevent.
+
+**Fix:** decouple. Tangent magnitude is *fixed* at the 0.4 baseline; only the perpendicular shift grows on retry. Perpendicular step is tied to `LayerGap` so bulges scale with graph density rather than edge length. Second iteration renders the canonical "Start → Input Valid? → Process Data / Show Error → Save Result → End" flowchart with the `Show Error → End` curve clipping none of the intermediate nodes and a gentle sideways sweep rather than a loop.
+
+**Tests:** three new cases in `FlowchartLayoutTests` — distinct exit anchors on `A→B/C/D`, distinct entry anchors on `A/B/C→D`, and `LaidOutEdge.Source`/`Target` refs wired so the renderer can skip its own endpoints. 39 Mermaid tests pass.
+
+**Not done in this pass (follow-ups):**
+- Back-edge rerouting around the graph bbox.
+- Orthogonal (right-angle) edge variant.
+- The `A & B --> C` shorthand and subgraphs from run 4's carry-over list.

@@ -55,7 +55,7 @@ public static class FlowchartRenderer
         };
 
         // Edges first so nodes paint over endpoints.
-        foreach (var e in laid.Edges) AddEdge(canvas, e, laid.Direction);
+        foreach (var e in laid.Edges) AddEdge(canvas, e, laid);
         foreach (var n in laid.Nodes) AddNode(canvas, n);
 
         var container = new Border
@@ -125,7 +125,7 @@ public static class FlowchartRenderer
         return new Path { Data = geom };
     }
 
-    private static void AddEdge(Canvas canvas, LaidOutEdge e, FlowchartDirection dir)
+    private static void AddEdge(Canvas canvas, LaidOutEdge e, LaidOutGraph laid)
     {
         if (e.Points.Length < 2) return;
 
@@ -134,7 +134,10 @@ public static class FlowchartRenderer
 
         // Cubic Bezier control points, biased along the layout's layer axis so
         // edges leave the source and enter the target tangent to that axis.
-        var (c1x, c1y, c2x, c2y) = BezierControls(sx, sy, tx, ty, dir);
+        // If the resulting curve would slice through an unrelated node's
+        // bounding box, bulge the control points outward until the curve
+        // clears the obstacle (or we run out of attempts).
+        var (c1x, c1y, c2x, c2y) = BezierControls(sx, sy, tx, ty, laid, e.Source, e.Target);
 
         var path = new Path
         {
@@ -183,30 +186,121 @@ public static class FlowchartRenderer
 
     /// <summary>
     /// Compute cubic Bezier control points so the curve leaves the source
-    /// and enters the target tangent to the layout's layer axis. Works for
-    /// both forward edges and back-edges (where the target's layer axis
-    /// coordinate is below the source's).
+    /// and enters the target tangent to the layout's layer axis.
+    ///
+    /// Obstacle-aware: the tangent magnitude stays fixed at the aesthetic
+    /// baseline (40% of the axis span). What changes on retry is a
+    /// *perpendicular* bulge applied to both control points — shifted in the
+    /// cross-axis direction away from any obstacles the baseline curve hits.
+    /// Stretching the tangent instead would just extend the curve along the
+    /// layer axis, which rarely helps when the obstacle sits beside the
+    /// layer-axis midline.
     /// </summary>
     private static (double C1x, double C1y, double C2x, double C2y) BezierControls(
+        double sx, double sy, double tx, double ty,
+        LaidOutGraph laid, LaidOutNode? srcNode, LaidOutNode? dstNode)
+    {
+        var (bc1x, bc1y, bc2x, bc2y) = TangentControls(sx, sy, tx, ty, laid.Direction);
+
+        var violations = CountObstacleHits(sx, sy, bc1x, bc1y, bc2x, bc2y, tx, ty,
+                                           laid.Nodes, srcNode, dstNode, laid.Direction,
+                                           out var avgHitCross);
+        if (violations == 0) return (bc1x, bc1y, bc2x, bc2y);
+
+        var sourceCross = CrossCoord(sx, sy, laid.Direction);
+        var sign = avgHitCross >= sourceCross ? -1.0 : 1.0;
+
+        // Try progressively stronger perpendicular shifts. The step size is
+        // tied to LayerGap so bulges scale with the graph density rather than
+        // the tangent magnitude.
+        double[] perpMultipliers = { 0.6, 1.0, 1.6, 2.4 };
+        (double c1x, double c1y, double c2x, double c2y) best = (bc1x, bc1y, bc2x, bc2y);
+        var bestHits = violations;
+        foreach (var pm in perpMultipliers)
+        {
+            var (dx, dy) = PerpOffset(laid.Direction, pm);
+            var c1x = bc1x + dx * sign;
+            var c1y = bc1y + dy * sign;
+            var c2x = bc2x + dx * sign;
+            var c2y = bc2y + dy * sign;
+            var hits = CountObstacleHits(sx, sy, c1x, c1y, c2x, c2y, tx, ty,
+                                         laid.Nodes, srcNode, dstNode, laid.Direction, out _);
+            if (hits == 0) return (c1x, c1y, c2x, c2y);
+            if (hits < bestHits)
+            {
+                bestHits = hits;
+                best = (c1x, c1y, c2x, c2y);
+            }
+        }
+        return best;
+    }
+
+    private static (double C1x, double C1y, double C2x, double C2y) TangentControls(
         double sx, double sy, double tx, double ty, FlowchartDirection dir)
     {
+        const double BaselineMag = 0.4;
         var verticalAxis = dir is FlowchartDirection.TopDown or FlowchartDirection.BottomUp;
         if (verticalAxis)
         {
             var dy = ty - sy;
             var sign = dy >= 0 ? 1.0 : -1.0;
-            // Offset: 40% of axis span, but at least a chunk of the layer gap
-            // so tiny same-layer edges still curve.
-            var offset = Math.Max(Math.Abs(dy) * 0.4, FlowchartLayout.LayerGap * 0.35);
+            var offset = Math.Max(Math.Abs(dy) * BaselineMag, FlowchartLayout.LayerGap * 0.35);
             return (sx, sy + sign * offset, tx, ty - sign * offset);
         }
         else
         {
             var dx = tx - sx;
             var sign = dx >= 0 ? 1.0 : -1.0;
-            var offset = Math.Max(Math.Abs(dx) * 0.4, FlowchartLayout.LayerGap * 0.35);
+            var offset = Math.Max(Math.Abs(dx) * BaselineMag, FlowchartLayout.LayerGap * 0.35);
             return (sx + sign * offset, sy, tx - sign * offset, ty);
         }
+    }
+
+    private static (double dx, double dy) PerpOffset(FlowchartDirection dir, double mag) =>
+        dir is FlowchartDirection.TopDown or FlowchartDirection.BottomUp
+            ? (FlowchartLayout.LayerGap * mag, 0.0)
+            : (0.0, FlowchartLayout.LayerGap * mag);
+
+    private static double CrossCoord(double x, double y, FlowchartDirection dir) =>
+        dir is FlowchartDirection.TopDown or FlowchartDirection.BottomUp ? x : y;
+
+    /// <summary>
+    /// Count how many curve samples fall inside a non-endpoint node's bbox,
+    /// and report the average cross-axis coordinate of those hits so the
+    /// caller can bulge the curve toward the clearer side.
+    /// </summary>
+    private static int CountObstacleHits(
+        double sx, double sy, double c1x, double c1y, double c2x, double c2y, double tx, double ty,
+        System.Collections.Generic.IReadOnlyList<LaidOutNode> nodes,
+        LaidOutNode? srcNode, LaidOutNode? dstNode, FlowchartDirection dir,
+        out double avgHitCross)
+    {
+        const int Samples = 16;
+        const double Inflate = 4;
+        var hits = 0;
+        double crossSum = 0;
+        var vertical = dir is FlowchartDirection.TopDown or FlowchartDirection.BottomUp;
+        for (var k = 1; k < Samples; k++)
+        {
+            var t = k / (double)Samples;
+            var u = 1 - t;
+            var bx = u * u * u * sx + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * tx;
+            var by = u * u * u * sy + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t * t * t * ty;
+            foreach (var n in nodes)
+            {
+                if (ReferenceEquals(n, srcNode) || ReferenceEquals(n, dstNode)) continue;
+                if (bx > n.X - Inflate && bx < n.X + n.Width + Inflate
+                    && by > n.Y - Inflate && by < n.Y + n.Height + Inflate)
+                {
+                    hits++;
+                    // cross-axis coord of the obstacle's centre
+                    crossSum += vertical ? (n.X + n.Width / 2.0) : (n.Y + n.Height / 2.0);
+                    break;
+                }
+            }
+        }
+        avgHitCross = hits == 0 ? 0 : crossSum / hits;
+        return hits;
     }
 
     private static PathGeometry BuildBezierGeometry(

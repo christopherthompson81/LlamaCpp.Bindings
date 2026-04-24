@@ -110,4 +110,54 @@ public class FlowchartLayoutTests
             Assert.True(n.Y + n.Height <= lo.Height + 0.01);
         }
     }
+
+    [Fact]
+    public void Multiple_Outgoing_Edges_Get_Distinct_Exit_Anchors()
+    {
+        // A has three outgoing edges. They should fan out across A's bottom
+        // side (for a TD flowchart) rather than all sharing the midpoint.
+        var g = FlowchartParser.Parse("graph TD\nA --> B\nA --> C\nA --> D");
+        var lo = FlowchartLayout.Compute(g, Measure);
+        var a = lo.Nodes.Single(n => n.Node.Id == "A");
+        var exitXs = lo.Edges
+            .Where(e => e.Edge.FromId == "A")
+            .Select(e => e.Points[0].X)
+            .ToArray();
+        Assert.Equal(3, exitXs.Length);
+        // All three exit points sit on A's bottom edge (within the node's
+        // horizontal extent), and no two share the same X.
+        foreach (var x in exitXs) Assert.InRange(x, a.X, a.X + a.Width);
+        Assert.Equal(exitXs.Length, exitXs.Distinct().Count());
+    }
+
+    [Fact]
+    public void Multiple_Incoming_Edges_Get_Distinct_Entry_Anchors()
+    {
+        // Three sources converge on D. D's top side should show three
+        // distinct entry points, not a single overlapping pile-up.
+        var g = FlowchartParser.Parse("graph TD\nA --> D\nB --> D\nC --> D");
+        var lo = FlowchartLayout.Compute(g, Measure);
+        var d = lo.Nodes.Single(n => n.Node.Id == "D");
+        var entryXs = lo.Edges
+            .Where(e => e.Edge.ToId == "D")
+            .Select(e => e.Points[^1].X)
+            .ToArray();
+        Assert.Equal(3, entryXs.Length);
+        foreach (var x in entryXs) Assert.InRange(x, d.X, d.X + d.Width);
+        Assert.Equal(entryXs.Length, entryXs.Distinct().Count());
+    }
+
+    [Fact]
+    public void Edge_Has_Source_And_Target_References()
+    {
+        // Renderer's obstacle-avoidance pass needs to skip the edge's own
+        // endpoints when testing curve/bbox intersection.
+        var g = FlowchartParser.Parse("graph TD\nA --> B");
+        var lo = FlowchartLayout.Compute(g, Measure);
+        var e = lo.Edges.Single();
+        Assert.NotNull(e.Source);
+        Assert.NotNull(e.Target);
+        Assert.Equal("A", e.Source!.Node.Id);
+        Assert.Equal("B", e.Target!.Node.Id);
+    }
 }

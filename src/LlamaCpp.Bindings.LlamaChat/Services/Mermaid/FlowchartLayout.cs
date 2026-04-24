@@ -187,21 +187,82 @@ public static class FlowchartLayout
             });
         }
 
-        // 10. Compute edge paths. v1: straight line from source centre to
-        //     target centre, clipped to each shape's boundary so the
-        //     arrowhead sits on the edge rather than inside the box.
-        foreach (var (f, t, e, _) in edgesForLayout)
+        // 10. Compute edge paths with anchor-point distribution.
+        //
+        // When multiple forward edges share a node side, distribute them across
+        // the side's length (at fractions 1/(n+1), 2/(n+1) ...) rather than
+        // piling onto the midpoint — so fan-ins read as distinct arrows
+        // instead of a single thick convergence line. Sorting by the far
+        // endpoint's cross-axis position minimises visual crossings.
+        //
+        // Non-forward edges (back-edges within the layered DAG, same-layer
+        // edges) fall back to the centre-clip endpoints. They're rarer and
+        // the clipped centre is a sensible default for a curved Bezier.
+        var outgoingForward = new Dictionary<int, List<(int edgeIndex, int otherIndex)>>();
+        var incomingForward = new Dictionary<int, List<(int edgeIndex, int otherIndex)>>();
+        for (var ei = 0; ei < edgesForLayout.Count; ei++)
         {
+            var (f, t, _, _) = edgesForLayout[ei];
+            if (layer[t] <= layer[f]) continue; // not strictly forward
+            if (!outgoingForward.TryGetValue(f, out var oList)) outgoingForward[f] = oList = new();
+            oList.Add((ei, t));
+            if (!incomingForward.TryGetValue(t, out var iList)) incomingForward[t] = iList = new();
+            iList.Add((ei, f));
+        }
+
+        var edgeAnchors = new ((double X, double Y) Src, (double X, double Y) Dst)[edgesForLayout.Count];
+        var anchorFilledSrc = new bool[edgesForLayout.Count];
+        var anchorFilledDst = new bool[edgesForLayout.Count];
+
+        int CrossAxisKey(LaidOutNode n) =>
+            g.Direction is FlowchartDirection.TopDown or FlowchartDirection.BottomUp
+                ? (int)(n.X + n.Width / 2.0)
+                : (int)(n.Y + n.Height / 2.0);
+
+        foreach (var kv in outgoingForward)
+        {
+            var src = layout.Nodes[kv.Key];
+            var list = kv.Value;
+            list.Sort((a, b) => CrossAxisKey(layout.Nodes[a.otherIndex])
+                                .CompareTo(CrossAxisKey(layout.Nodes[b.otherIndex])));
+            for (var i = 0; i < list.Count; i++)
+            {
+                var frac = (i + 1.0) / (list.Count + 1.0);
+                edgeAnchors[list[i].edgeIndex].Src = ExitAnchor(src, frac, g.Direction);
+                anchorFilledSrc[list[i].edgeIndex] = true;
+            }
+        }
+        foreach (var kv in incomingForward)
+        {
+            var dst = layout.Nodes[kv.Key];
+            var list = kv.Value;
+            list.Sort((a, b) => CrossAxisKey(layout.Nodes[a.otherIndex])
+                                .CompareTo(CrossAxisKey(layout.Nodes[b.otherIndex])));
+            for (var i = 0; i < list.Count; i++)
+            {
+                var frac = (i + 1.0) / (list.Count + 1.0);
+                edgeAnchors[list[i].edgeIndex].Dst = EntryAnchor(dst, frac, g.Direction);
+                anchorFilledDst[list[i].edgeIndex] = true;
+            }
+        }
+
+        for (var ei = 0; ei < edgesForLayout.Count; ei++)
+        {
+            var (f, t, e, _) = edgesForLayout[ei];
             var src = layout.Nodes[f];
             var dst = layout.Nodes[t];
             var srcCenter = (X: src.X + src.Width / 2.0, Y: src.Y + src.Height / 2.0);
             var dstCenter = (X: dst.X + dst.Width / 2.0, Y: dst.Y + dst.Height / 2.0);
-            var srcExit = ClipToShape(srcCenter, dstCenter, src);
-            var dstEntry = ClipToShape(dstCenter, srcCenter, dst);
+            if (!anchorFilledSrc[ei])
+                edgeAnchors[ei].Src = ClipToShape(srcCenter, dstCenter, src);
+            if (!anchorFilledDst[ei])
+                edgeAnchors[ei].Dst = ClipToShape(dstCenter, srcCenter, dst);
             layout.Edges.Add(new LaidOutEdge
             {
                 Edge = e,
-                Points = new[] { srcExit, dstEntry },
+                Points = new[] { edgeAnchors[ei].Src, edgeAnchors[ei].Dst },
+                Source = src,
+                Target = dst,
             });
         }
 
@@ -378,6 +439,27 @@ public static class FlowchartLayout
         target.AddRange(reordered);
     }
 
+    // ---- anchor fractions along a node's exit / entry side ----
+    // Fraction 0..1 along the side; 0.5 = the side's midpoint.
+
+    private static (double X, double Y) ExitAnchor(LaidOutNode n, double frac, FlowchartDirection d) => d switch
+    {
+        FlowchartDirection.TopDown    => (n.X + n.Width * frac, n.Y + n.Height),
+        FlowchartDirection.BottomUp   => (n.X + n.Width * frac, n.Y),
+        FlowchartDirection.LeftRight  => (n.X + n.Width, n.Y + n.Height * frac),
+        FlowchartDirection.RightLeft  => (n.X, n.Y + n.Height * frac),
+        _                             => (n.X + n.Width * frac, n.Y + n.Height),
+    };
+
+    private static (double X, double Y) EntryAnchor(LaidOutNode n, double frac, FlowchartDirection d) => d switch
+    {
+        FlowchartDirection.TopDown    => (n.X + n.Width * frac, n.Y),
+        FlowchartDirection.BottomUp   => (n.X + n.Width * frac, n.Y + n.Height),
+        FlowchartDirection.LeftRight  => (n.X, n.Y + n.Height * frac),
+        FlowchartDirection.RightLeft  => (n.X + n.Width, n.Y + n.Height * frac),
+        _                             => (n.X + n.Width * frac, n.Y),
+    };
+
     // ---- clip line from a box centre to a point on its shape boundary ----
 
     private static (double X, double Y) ClipToShape((double X, double Y) from, (double X, double Y) to, LaidOutNode n)
@@ -429,6 +511,10 @@ public sealed class LaidOutEdge
 {
     public required FlowchartEdge Edge { get; init; }
     public required (double X, double Y)[] Points;
+    /// <summary>Back-reference to the source node's laid-out bounds. Used by
+    /// the renderer's obstacle-avoidance pass to skip its own endpoints.</summary>
+    public LaidOutNode? Source { get; init; }
+    public LaidOutNode? Target { get; init; }
 }
 
 public sealed class LaidOutGraph
