@@ -29,6 +29,7 @@ import argparse
 import dataclasses
 import hashlib
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -226,6 +227,38 @@ def extract_libs(archive: Path, kind: str, out_dir: Path) -> list[Path]:
     return extracted
 
 
+def _ensure_linux_soname_symlinks(out_dir: Path) -> None:
+    """Create missing unversioned and SONAME symlinks after release-mode extraction.
+
+    Ubuntu prebuilt archives ship versioned files only (e.g. libllama.so.0.0.8893)
+    without the libllama.so or libllama.so.0 symlinks that the dynamic loader and
+    NativeLibraryResolver need.  For each libfoo.so.A.B… file that arrived without
+    its chain, synthesise:
+        libfoo.so.A  ->  libfoo.so.A.B…   (SONAME — needed by ELF NEEDED entries)
+        libfoo.so    ->  libfoo.so.A.B…   (dev link — needed by NativeLibraryResolver)
+    """
+    versioned = re.compile(r"^(lib.+\.so)\.(\d+)(\.\d+)+$")
+    created: list[Path] = []
+    for p in sorted(out_dir.iterdir()):
+        if p.is_symlink():
+            continue
+        m = versioned.match(p.name)
+        if not m:
+            continue
+        base = m.group(1)            # e.g. "libllama.so"
+        major = m.group(2)           # e.g. "0"
+        soname = f"{base}.{major}"   # e.g. "libllama.so.0"
+        for sym_name in (soname, base):
+            sym = out_dir / sym_name
+            if not sym.exists() and not sym.is_symlink():
+                os.symlink(p.name, sym)
+                created.append(sym)
+    for sym in created:
+        print(f"  -> {sym.relative_to(REPO_ROOT)}  (symlink -> {os.readlink(sym)})")
+    if created:
+        print(f"  {len(created)} SONAME symlink(s) synthesised")
+
+
 def fetch_one(tag: str, platform: str, backend: str, force: bool) -> None:
     asset = resolve_asset(tag, platform, backend)
     print(f"[{platform} / {backend}] asset = {asset.filename}")
@@ -240,6 +273,8 @@ def fetch_one(tag: str, platform: str, backend: str, force: bool) -> None:
     for p in sorted(libs):
         print(f"  -> {p.relative_to(REPO_ROOT)}  ({p.stat().st_size / 1e6:.2f} MB)")
     print(f"  {len(libs)} file(s) written to {out_dir.relative_to(REPO_ROOT)}")
+    if platform.startswith("linux-"):
+        _ensure_linux_soname_symlinks(out_dir)
 
 
 # Un-versioned SONAME entry points we care about. Everything reachable by
