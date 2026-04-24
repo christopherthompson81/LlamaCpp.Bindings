@@ -113,6 +113,14 @@ internal static class DialogService
         await win.ShowDialog(owner);
     }
 
+    public static async Task ShowPendingAttachmentsAsync(MainWindowViewModel vm)
+    {
+        var owner = Owner;
+        if (owner is null) return;
+        var win = new PendingAttachmentsDialog(vm);
+        await win.ShowDialog(owner);
+    }
+
     /// <summary>
     /// Open-file picker for a conversation-bundle JSON. Returns the path
     /// the user selected, or null if cancelled.

@@ -112,9 +112,34 @@
                         <TextBlock Text="Settings" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <TextBlock Grid.Column="6" Text="{Binding ModelSummary}" Classes="muted xs"
-                           VerticalAlignment="Center" Margin="16,0,0,0"
-                           TextTrimming="CharacterEllipsis" />
+                <!-- Loaded-model info strip: profile name + modality badges + the
+                     rest of the summary. Badges self-hide when the loaded model
+                     lacks that modality; entire strip is empty when nothing is loaded. -->
+                <StackPanel Grid.Column="6" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="16,0,0,0" Spacing="6">
+                    <TextBlock Text="{Binding ProfileDisplayName}"
+                               Classes="muted xs" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                    <Border IsVisible="{Binding CanAttachImages}"
+                            BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                            Background="{DynamicResource Muted}"
+                            CornerRadius="4" Padding="4,2"
+                            ToolTip.Tip="Vision-capable — accepts image attachments"
+                            a:AutomationProperties.Name="Vision capable">
+                        <Path Classes="icon xs" Data="{StaticResource IconEye}" />
+                    </Border>
+                    <Border IsVisible="{Binding CanAttachAudio}"
+                            BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                            Background="{DynamicResource Muted}"
+                            CornerRadius="4" Padding="4,2"
+                            ToolTip.Tip="Audio-capable — accepts audio attachments and mic"
+                            a:AutomationProperties.Name="Audio capable">
+                        <Path Classes="icon xs" Data="{StaticResource IconVolume}" />
+                    </Border>
+                    <TextBlock Text="{Binding ModelSummary}" Classes="muted xs"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
 
                 <!-- Active MCP servers: compact avatar strip. Each server
                      shows its first-letter initial in a circle. Click
@@ -574,45 +599,67 @@
                       Margin="0,12,0,0">
                     <!-- Pending-attachment thumbnail strip. Sits above the
                          TextBox and only renders when there's something to
-                         show — keeps the compose area compact otherwise. -->
-                    <ItemsControl Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="3"
-                                  ItemsSource="{Binding PendingAttachments}"
-                                  IsVisible="{Binding HasPendingAttachments}"
-                                  Margin="0,0,0,6">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" Spacing="6" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border BorderBrush="{DynamicResource Border}" BorderThickness="1"
-                                        CornerRadius="6" Background="{DynamicResource Muted}"
-                                        Padding="2" Width="72" Height="72">
-                                    <Grid>
-                                        <Image IsVisible="{Binding IsImage}"
-                                               Source="{Binding Converter={StaticResource AttachmentThumbnail}}"
-                                               Stretch="UniformToFill" />
-                                        <Path IsVisible="{Binding IsAudio}"
-                                              Classes="icon lg" Data="{StaticResource IconVolume}"
-                                              HorizontalAlignment="Center"
-                                              VerticalAlignment="Center" />
-                                        <Button Classes="ghost icon sm"
-                                                HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                Width="18" Height="18"
-                                                Background="{DynamicResource Card}"
-                                                CornerRadius="9" Margin="0,-4,-4,0"
-                                                Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemovePendingAttachmentCommand}"
-                                                CommandParameter="{Binding}"
-                                                ToolTip.Tip="Remove"
-                                                a:AutomationProperties.Name="Remove attachment">
-                                            <Path Classes="icon xs" Data="{StaticResource IconX}" />
-                                        </Button>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                         show — keeps the compose area compact otherwise.
+                         The strip self-caps at a handful of tiles; an overflow
+                         tile next to it opens the gallery modal when more
+                         attachments are queued than fit comfortably inline. -->
+                    <StackPanel Grid.Column="0" Grid.Row="0" Grid.ColumnSpan="3"
+                                Orientation="Horizontal" Spacing="6"
+                                IsVisible="{Binding HasPendingAttachments}"
+                                Margin="0,0,0,6">
+                        <ItemsControl ItemsSource="{Binding VisiblePendingAttachments}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="6" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                            CornerRadius="6" Background="{DynamicResource Muted}"
+                                            Padding="2" Width="72" Height="72"
+                                            ToolTip.Tip="{Binding FileName}">
+                                        <Grid>
+                                            <Image IsVisible="{Binding IsImage}"
+                                                   Source="{Binding Converter={StaticResource AttachmentThumbnail}}"
+                                                   Stretch="UniformToFill" />
+                                            <Path IsVisible="{Binding IsAudio}"
+                                                  Classes="icon lg" Data="{StaticResource IconVolume}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                                            <Button Classes="ghost icon sm"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                    Width="18" Height="18"
+                                                    Background="{DynamicResource Card}"
+                                                    CornerRadius="9" Margin="0,-4,-4,0"
+                                                    Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemovePendingAttachmentCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip.Tip="Remove"
+                                                    a:AutomationProperties.Name="Remove attachment">
+                                                <Path Classes="icon xs" Data="{StaticResource IconX}" />
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <!-- Overflow tile: visible when there are more pending
+                             attachments than fit inline. Click opens the gallery. -->
+                        <Button Classes="ghost" Width="72" Height="72" Padding="0"
+                                IsVisible="{Binding HasAttachmentOverflow}"
+                                Command="{Binding ShowPendingAttachmentsCommand}"
+                                ToolTip.Tip="View all pending attachments"
+                                a:AutomationProperties.Name="View all pending attachments">
+                            <Border BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                    CornerRadius="6" Background="{DynamicResource Muted}"
+                                    Padding="2">
+                                <TextBlock Text="{Binding OverflowAttachmentCount, StringFormat='+{0}'}"
+                                           FontSize="18" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Foreground}" />
+                            </Border>
+                        </Button>
+                    </StackPanel>
 
                     <!-- Attach / prompt / resource buttons stacked vertically so
                          we don't eat horizontal space in the compose row. -->

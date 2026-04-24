@@ -117,29 +117,29 @@
                         </StackPanel>
 
                         <StackPanel Spacing="6">
-                            <CheckBox Content="Auto-scroll new messages"
-                                      IsChecked="{Binding AutoScroll}" />
+                            <ToggleButton Classes="switch" Content="Auto-scroll new messages"
+                                          IsChecked="{Binding AutoScroll}" />
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
                                        Text="Keep the chat pinned to the newest content as it streams. Turn off to scroll freely mid-response." />
                         </StackPanel>
 
                         <StackPanel Spacing="6">
-                            <CheckBox Content="Show message stats"
-                                      IsChecked="{Binding ShowMessageStats}" />
+                            <ToggleButton Classes="switch" Content="Show message stats"
+                                          IsChecked="{Binding ShowMessageStats}" />
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
                                        Text="Token count and tokens-per-second shown under each assistant reply." />
                         </StackPanel>
 
                         <StackPanel Spacing="6">
-                            <CheckBox Content="Expand reasoning during streaming"
-                                      IsChecked="{Binding ShowReasoningInProgress}" />
+                            <ToggleButton Classes="switch" Content="Expand reasoning during streaming"
+                                          IsChecked="{Binding ShowReasoningInProgress}" />
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
                                        Text="Auto-open the &lt;think&gt; panel while a reply is mid-stream so you can watch the trace as it appears." />
                         </StackPanel>
 
                         <StackPanel Spacing="6">
-                            <CheckBox Content="Heightened accessibility mode"
-                                      IsChecked="{Binding HighAccessibilityMode}" />
+                            <ToggleButton Classes="switch" Content="Heightened accessibility mode"
+                                          IsChecked="{Binding HighAccessibilityMode}" />
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
                                        Text="Always-visible message action bar (no hover-to-reveal) so every action is reachable without a pointer." />
                         </StackPanel>

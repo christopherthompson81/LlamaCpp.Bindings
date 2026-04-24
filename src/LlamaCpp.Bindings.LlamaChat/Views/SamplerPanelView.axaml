@@ -33,47 +33,56 @@
             <TextBlock Grid.Column="0" Text="Temperature" VerticalAlignment="Center" />
             <NumericUpDown Grid.Column="1" Value="{Binding Temperature}" Minimum="0" Increment="0.05" FormatString="F2" />
         </Grid>
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Width of the temperature swing for dynamic temperature. Temp varies ±range around the base value based on entropy. 0 disables.">
             <TextBlock Grid.Column="0" Text="Dynatemp range" VerticalAlignment="Center" />
             <NumericUpDown Grid.Column="1" Value="{Binding DynaTempRange}" Minimum="0" Increment="0.05" FormatString="F2" />
         </Grid>
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Exponent for the dynatemp entropy curve. Higher values bias toward the base temp; lower values react more strongly to entropy.">
             <TextBlock Grid.Column="0" Text="Dynatemp exp" VerticalAlignment="Center" />
             <NumericUpDown Grid.Column="1" Value="{Binding DynaTempExponent}" Minimum="0" Increment="0.1" FormatString="F2" />
         </Grid>
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="RNG seed for reproducibility. 0 picks a random seed each generation.">
             <TextBlock Grid.Column="0" Text="Seed" VerticalAlignment="Center" />
             <NumericUpDown Grid.Column="1" Value="{Binding Seed}" Minimum="0" Increment="1" FormatString="F0" />
         </Grid>
 
         <TextBlock Classes="section" Text="Truncation" />
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Keep only the top-K most likely tokens before sampling. Lower = more focused.">
             <CheckBox Grid.Column="0" Content="top-k" IsChecked="{Binding TopKEnabled}" />
             <NumericUpDown Grid.Column="1" Value="{Binding TopK}" Minimum="1" Increment="1"
                            IsEnabled="{Binding TopKEnabled}" FormatString="F0" />
         </Grid>
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Nucleus sampling: keep the smallest set of tokens whose cumulative probability ≥ P. 0.9 is a common default.">
             <CheckBox Grid.Column="0" Content="top-p" IsChecked="{Binding TopPEnabled}" />
             <NumericUpDown Grid.Column="1" Value="{Binding TopP}" Minimum="0" Maximum="1" Increment="0.01"
                            IsEnabled="{Binding TopPEnabled}" FormatString="F2" />
         </Grid>
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Drop tokens whose probability is less than min-p × the top token's probability. Often a better alternative to top-p.">
             <CheckBox Grid.Column="0" Content="min-p" IsChecked="{Binding MinPEnabled}" />
             <NumericUpDown Grid.Column="1" Value="{Binding MinP}" Minimum="0" Maximum="1" Increment="0.01"
                            IsEnabled="{Binding MinPEnabled}" FormatString="F2" />
         </Grid>
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Locally-typical sampling: prefer tokens whose surprisal matches the distribution's entropy. Tunes output coherence.">
             <CheckBox Grid.Column="0" Content="typical" IsChecked="{Binding TypicalEnabled}" />
             <NumericUpDown Grid.Column="1" Value="{Binding Typical}" Minimum="0" Maximum="1" Increment="0.01"
                            IsEnabled="{Binding TypicalEnabled}" FormatString="F2" />
         </Grid>
-        <Grid Classes="row" ColumnDefinitions="130,*">
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Keep only tokens within N standard deviations of the top logit. Threshold-based truncation orthogonal to top-k/top-p.">
             <CheckBox Grid.Column="0" Content="top-n-σ" IsChecked="{Binding TopNSigmaEnabled}" />
             <NumericUpDown Grid.Column="1" Value="{Binding TopNSigma}" Minimum="0" Increment="0.1"
                            IsEnabled="{Binding TopNSigmaEnabled}" FormatString="F2" />
         </Grid>
 
-        <TextBlock Classes="section" Text="XTC" />
+        <TextBlock Classes="section" Text="XTC"
+                   ToolTip.Tip="eXclude Top Choices — with the given probability, drops high-probability tokens to force more varied output." />
         <CheckBox Content="Enabled" IsChecked="{Binding XtcEnabled}" />
         <Grid Classes="row" ColumnDefinitions="130,*">
             <TextBlock Grid.Column="0" Text="Probability" VerticalAlignment="Center" />

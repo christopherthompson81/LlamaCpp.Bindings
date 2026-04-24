@@ -235,6 +235,99 @@
     </Style>
 
     <!-- ================================================================
+         ToolTip — shadcn-style dark pill, theme-independent. We don't reuse
+         the theme tokens because that couples the tooltip bg to whatever
+         Foreground ends up being in each theme (and inverting the theme
+         tokens produced white-on-white inside message action-bar tooltips,
+         where the parent Foreground inherits down through the popup).
+         Hardcoding the dark-pill pair keeps contrast consistent everywhere.
+         The TextBlock.Foreground attached-property setter forces the color
+         on the ContentPresenter's generated TextBlock regardless of which
+         TextBlock.Foreground value would otherwise inherit from the owner.
+         ================================================================ -->
+    <Style Selector="ToolTip">
+        <Setter Property="Background" Value="#18181B" />
+        <Setter Property="Foreground" Value="#FAFAFA" />
+        <Setter Property="BorderBrush" Value="#27272A" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource RadiusSm}" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeXs}" />
+    </Style>
+    <Style Selector="ToolTip TextBlock">
+        <Setter Property="Foreground" Value="#FAFAFA" />
+    </Style>
+
+    <!-- ================================================================
+         ToggleButton.switch — shadcn-style animated switch
+         Usage: <ToggleButton Classes="switch" IsChecked="..." Content="label" />
+         A pill-shaped track with a sliding thumb; the label sits to the
+         right of the track and binds to Content like a CheckBox. The
+         Margin + Background transitions give the animated feel.
+         ================================================================ -->
+    <Style Selector="ToggleButton.switch">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSizeSm}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid ColumnDefinitions="Auto,*">
+                    <Border Grid.Column="0" Name="Track"
+                            Width="32" Height="18" CornerRadius="9"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource Muted}"
+                            BorderBrush="{DynamicResource Border}"
+                            BorderThickness="1">
+                        <Border.Transitions>
+                            <Transitions>
+                                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                            </Transitions>
+                        </Border.Transitions>
+                        <Border Name="Knob" Width="12" Height="12" CornerRadius="6"
+                                HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Margin="2,0,0,0"
+                                Background="{DynamicResource Foreground}">
+                            <Border.Transitions>
+                                <Transitions>
+                                    <ThicknessTransition Property="Margin" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                                </Transitions>
+                            </Border.Transitions>
+                        </Border>
+                    </Border>
+                    <ContentPresenter Grid.Column="1"
+                                     Content="{TemplateBinding Content}"
+                                     ContentTemplate="{TemplateBinding ContentTemplate}"
+                                     Margin="10,0,0,0"
+                                     VerticalAlignment="Center"
+                                     TextBlock.Foreground="{TemplateBinding Foreground}"
+                                     TextBlock.FontSize="{TemplateBinding FontSize}" />
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <Style Selector="ToggleButton.switch:checked /template/ Border#Track">
+        <Setter Property="Background" Value="{DynamicResource Primary}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
+    </Style>
+    <Style Selector="ToggleButton.switch:checked /template/ Border#Knob">
+        <Setter Property="Margin" Value="16,0,0,0" />
+        <Setter Property="Background" Value="{DynamicResource PrimaryForeground}" />
+    </Style>
+    <Style Selector="ToggleButton.switch:pointerover /template/ Border#Track">
+        <Setter Property="BorderBrush" Value="{DynamicResource Foreground}" />
+    </Style>
+    <Style Selector="ToggleButton.switch:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- ================================================================
          ListBox / ListBoxItem — used for profile list & messages
          ================================================================ -->
     <Style Selector="ListBox">

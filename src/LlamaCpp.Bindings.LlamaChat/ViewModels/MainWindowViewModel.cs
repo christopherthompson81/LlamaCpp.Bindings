@@ -72,6 +72,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     [ObservableProperty] private string _statusText = "Not loaded.";
     [ObservableProperty] private string _modelSummary = string.Empty;
+    [ObservableProperty] private string _profileDisplayName = string.Empty;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanSend))]
@@ -88,7 +89,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     /// </summary>
     public ObservableCollection<Attachment> PendingAttachments { get; } = new();
 
+    /// <summary>
+    /// Capped mirror of <see cref="PendingAttachments"/> for the compose-bar
+    /// strip. When the queue is deeper than <see cref="MaxInlinePendingAttachments"/>,
+    /// only the first N show inline; the rest live behind the overflow tile
+    /// that opens <see cref="PendingAttachmentsDialog"/>.
+    /// </summary>
+    public ObservableCollection<Attachment> VisiblePendingAttachments { get; } = new();
+
+    private const int MaxInlinePendingAttachments = 4;
+
     public bool HasPendingAttachments => PendingAttachments.Count > 0;
+    public int OverflowAttachmentCount =>
+        System.Math.Max(0, PendingAttachments.Count - MaxInlinePendingAttachments);
+    public bool HasAttachmentOverflow => OverflowAttachmentCount > 0;
 
     /// <summary>Disables the paperclip when the loaded model can't consume any media.</summary>
     public bool CanAttachMedia => Session?.SupportsMedia == true;
@@ -168,6 +182,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         PendingAttachments.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasPendingAttachments));
+            OnPropertyChanged(nameof(OverflowAttachmentCount));
+            OnPropertyChanged(nameof(HasAttachmentOverflow));
+            SyncVisiblePending();
         };
 
         // Start connecting to MCP servers in the background.
@@ -309,7 +326,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
             Session = session;
             _activeLoadedProfile = profile;
-            ModelSummary = $"{profile.Name}  ·  {Path.GetFileName(session.Model.ModelPath)}  ·  " +
+            ProfileDisplayName = profile.Name;
+            ModelSummary = $"·  {Path.GetFileName(session.Model.ModelPath)}  ·  " +
                            $"ctx={session.Context.ContextSize}  ·  layers={session.Model.LayerCount}  ·  " +
                            $"template={(string.IsNullOrEmpty(session.ChatTemplate) ? "(none)" : "embedded")}";
             StatusText = "Loaded.";
@@ -339,6 +357,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         Session = null;
         _activeLoadedProfile = null;
         ModelSummary = string.Empty;
+        ProfileDisplayName = string.Empty;
         StatusText = "Unloaded.";
     }
 
@@ -1384,6 +1403,23 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     {
         if (a is null) return;
         PendingAttachments.Remove(a);
+    }
+
+    [RelayCommand]
+    private void ClearPendingAttachments() => PendingAttachments.Clear();
+
+    private void SyncVisiblePending()
+    {
+        VisiblePendingAttachments.Clear();
+        var take = System.Math.Min(PendingAttachments.Count, MaxInlinePendingAttachments);
+        for (int i = 0; i < take; i++) VisiblePendingAttachments.Add(PendingAttachments[i]);
+    }
+
+    [RelayCommand]
+    private async Task ShowPendingAttachmentsAsync()
+    {
+        if (PendingAttachments.Count == 0) return;
+        await DialogService.ShowPendingAttachmentsAsync(this);
     }
 
     /// <summary>
