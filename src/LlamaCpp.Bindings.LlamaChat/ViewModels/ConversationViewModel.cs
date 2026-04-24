@@ -446,7 +446,7 @@ public partial class ConversationViewModel : ObservableObject
             },
             Content: m.Content,
             State: TurnState.Complete,
-            CreatedAt: UpdatedAt,
+            CreatedAt: m.CreatedAt,
             Reasoning: m.Reasoning,
             Stats: null,
             Attachments: m.Attachments.Count > 0

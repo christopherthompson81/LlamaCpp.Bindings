@@ -12,6 +12,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LlamaCpp.Bindings.LlamaChat.Models;
 using LlamaCpp.Bindings.LlamaChat.Services;
+using LlamaCpp.Bindings.LlamaChat.Services.Exporters;
 
 namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 
@@ -1455,6 +1456,63 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     [RelayCommand]
     private async Task ShowAboutAsync() => await DialogService.ShowAboutAsync();
+
+    /// <summary>
+    /// Export a single conversation through one of the
+    /// <see cref="IConversationExporter"/>s. The parameter is a tuple
+    /// packed as "formatId|conversationId"; if the conversationId is
+    /// empty, the current <see cref="SelectedConversation"/> is used.
+    /// This shape keeps the XAML bindable without inventing a custom
+    /// parameter converter — <c>MenuItem.CommandParameter</c> only wants
+    /// a single string.
+    /// </summary>
+    [RelayCommand]
+    private async Task ExportConversationAsync(string? formatAndId)
+    {
+        if (string.IsNullOrWhiteSpace(formatAndId))
+        {
+            ToastService.Error("Export", "No export format supplied.");
+            return;
+        }
+
+        var bar = formatAndId.IndexOf('|');
+        var formatId = bar < 0 ? formatAndId : formatAndId[..bar];
+        var convIdStr = bar < 0 ? string.Empty : formatAndId[(bar + 1)..];
+
+        ConversationViewModel? target = null;
+        if (Guid.TryParse(convIdStr, out var convId))
+            target = Conversations.FirstOrDefault(c => c.Id == convId);
+        target ??= SelectedConversation;
+        if (target is null)
+        {
+            ToastService.Error("Export", "No conversation selected.");
+            return;
+        }
+
+        var exporter = ConversationExporterRegistry.ByFormatId(formatId);
+        if (exporter is null)
+        {
+            ToastService.Error("Export", $"Unknown export format '{formatId}'.");
+            return;
+        }
+
+        var path = await DialogService.PickConversationExportFileAsync(exporter, target.Title);
+        if (string.IsNullOrEmpty(path)) return;
+
+        try
+        {
+            var model = target.ToModel();
+            await using (var fs = File.Create(path))
+            {
+                await exporter.ExportAsync(model, fs, ExportOptions.Default);
+            }
+            ToastService.Success("Exported", $"{target.DisplayTitle} → {Path.GetFileName(path)}");
+        }
+        catch (Exception ex)
+        {
+            ToastService.Error("Export failed", ex.Message);
+        }
+    }
 
     [RelayCommand]
     private async Task ExportConversationsAsync()

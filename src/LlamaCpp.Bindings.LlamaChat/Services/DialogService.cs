@@ -142,6 +142,36 @@ internal static class DialogService
         return result.Count > 0 ? result[0].TryGetLocalPath() : null;
     }
 
+    /// <summary>
+    /// Save-file picker for a single-conversation export via one of the
+    /// <see cref="Exporters.IConversationExporter"/> implementations. The
+    /// picker auto-populates the suggested filename from the conversation
+    /// title and sets the file type filter to match the chosen exporter.
+    /// </summary>
+    public static async Task<string?> PickConversationExportFileAsync(
+        Exporters.IConversationExporter exporter, string conversationTitle)
+    {
+        var owner = Owner;
+        if (owner is null) return null;
+
+        var safeTitle = System.Text.RegularExpressions.Regex.Replace(
+            (conversationTitle ?? "conversation").Trim(), @"[^\w\-\. ]+", "_");
+        if (string.IsNullOrWhiteSpace(safeTitle)) safeTitle = "conversation";
+        var suggested = $"{safeTitle} — {System.DateTime.Now:yyyy-MM-dd}.{exporter.FileExtension}";
+
+        var result = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = $"Export conversation — {exporter.DisplayName}",
+            SuggestedFileName = suggested,
+            DefaultExtension = exporter.FileExtension,
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType(exporter.DisplayName) { Patterns = new[] { "*." + exporter.FileExtension } },
+            },
+        });
+        return result?.TryGetLocalPath();
+    }
+
     /// <summary>Save-file picker for exporting the conversation bundle.</summary>
     public static async Task<string?> PickExportFileAsync()
     {

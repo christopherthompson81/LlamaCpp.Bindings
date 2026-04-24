@@ -21,6 +21,14 @@ public partial class MessageViewModel : ObservableObject
     public Guid Id { get; init; } = Guid.NewGuid();
 
     /// <summary>
+    /// When this turn was first created. Preserved through load/save round
+    /// trips so exports can stamp individual messages with their real wall
+    /// time. Display-only — the UI does not currently render per-turn
+    /// timestamps.
+    /// </summary>
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
     /// Id of the turn immediately preceding this one in the tree. Null for
     /// the root turn of a conversation. A set of turns sharing the same
     /// <see cref="ParentId"/> are siblings — alternative branches the user
@@ -363,6 +371,7 @@ public partial class MessageViewModel : ObservableObject
         {
             Id = t.Id,
             ParentId = t.ParentId,
+            CreatedAt = t.CreatedAt,
             Role = t.Role.ToString().ToLowerInvariant(),
             Content = t.Content,
             Reasoning = t.Reasoning,

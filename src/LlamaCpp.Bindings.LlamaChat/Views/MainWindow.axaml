@@ -34,6 +34,23 @@
                 <MenuItem Header="_Unload"     Command="{Binding UnloadCommand}" />
                 <MenuItem Header="Model _info..." Command="{Binding ShowModelInfoCommand}" />
                 <Separator />
+                <MenuItem Header="Export conv_ersation">
+                    <MenuItem Header="_Markdown (.md)"
+                              Command="{Binding ExportConversationCommand}" CommandParameter="markdown" />
+                    <MenuItem Header="_HTML (.html)"
+                              Command="{Binding ExportConversationCommand}" CommandParameter="html" />
+                    <MenuItem Header="_JSON (.json)"
+                              Command="{Binding ExportConversationCommand}" CommandParameter="json" />
+                    <MenuItem Header="Plain _text (.txt)"
+                              Command="{Binding ExportConversationCommand}" CommandParameter="txt" />
+                    <Separator />
+                    <MenuItem Header="_Word (.docx)"
+                              Command="{Binding ExportConversationCommand}" CommandParameter="docx" />
+                    <MenuItem Header="_PDF (.pdf)"
+                              Command="{Binding ExportConversationCommand}" CommandParameter="pdf" />
+                    <MenuItem Header="E_xcel (.xlsx)"
+                              Command="{Binding ExportConversationCommand}" CommandParameter="xlsx" />
+                </MenuItem>
                 <MenuItem Header="_Export conversations..." Command="{Binding ExportConversationsCommand}" />
                 <MenuItem Header="_Import conversations..." Command="{Binding ImportConversationsCommand}" />
                 <Separator />
@@ -269,6 +286,30 @@
                                             <MenuItem Header="Pin / unpin"
                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).TogglePinnedCommand}"
                                                       CommandParameter="{Binding}" />
+                                            <MenuItem Header="Export">
+                                                <MenuItem Header="Markdown (.md)"
+                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportConversationCommand}"
+                                                          CommandParameter="{Binding Id, StringFormat='markdown|{0}'}" />
+                                                <MenuItem Header="HTML (.html)"
+                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportConversationCommand}"
+                                                          CommandParameter="{Binding Id, StringFormat='html|{0}'}" />
+                                                <MenuItem Header="JSON (.json)"
+                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportConversationCommand}"
+                                                          CommandParameter="{Binding Id, StringFormat='json|{0}'}" />
+                                                <MenuItem Header="Plain text (.txt)"
+                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportConversationCommand}"
+                                                          CommandParameter="{Binding Id, StringFormat='txt|{0}'}" />
+                                                <Separator />
+                                                <MenuItem Header="Word (.docx)"
+                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportConversationCommand}"
+                                                          CommandParameter="{Binding Id, StringFormat='docx|{0}'}" />
+                                                <MenuItem Header="PDF (.pdf)"
+                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportConversationCommand}"
+                                                          CommandParameter="{Binding Id, StringFormat='pdf|{0}'}" />
+                                                <MenuItem Header="Excel (.xlsx)"
+                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).ExportConversationCommand}"
+                                                          CommandParameter="{Binding Id, StringFormat='xlsx|{0}'}" />
+                                            </MenuItem>
                                             <Separator />
                                             <MenuItem Header="Delete"
                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteConversationCommand}"
