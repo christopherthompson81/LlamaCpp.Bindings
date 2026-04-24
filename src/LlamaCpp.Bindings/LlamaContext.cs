@@ -834,11 +834,158 @@ public sealed class LlamaContext : IDisposable
         return tokens;
     }
 
+    // ----- LoRA adapters (Tier 2 expansion) -----
+    //
+    // The pinned llama.cpp exposes a single `llama_set_adapters_lora` that
+    // replaces the full active-adapter list in one call. We track the
+    // desired set in managed memory and re-sync on every Attach/Detach so
+    // callers can work in the more intuitive per-adapter model. Scales are
+    // stored alongside the adapter pointer.
+    //
+    // The dictionary is keyed by adapter identity (reference equality). An
+    // adapter attached twice with different scales gets its scale updated
+    // in-place — the underlying native list only ever contains each adapter
+    // at most once.
+
+    private readonly Dictionary<LlamaLoraAdapter, float> _activeAdapters = new();
+
+    /// <summary>
+    /// Snapshot of the currently attached adapters and their scales. The
+    /// returned dictionary is a copy — later mutations via
+    /// <see cref="AttachLoraAdapter"/> / <see cref="DetachLoraAdapter"/> do
+    /// not affect it.
+    /// </summary>
+    public IReadOnlyDictionary<LlamaLoraAdapter, float> ActiveLoraAdapters
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return new Dictionary<LlamaLoraAdapter, float>(_activeAdapters);
+        }
+    }
+
+    /// <summary>
+    /// Attach <paramref name="adapter"/> with the given <paramref name="scale"/>
+    /// (0 = off, 1 = full, &gt;1 = amplified, &lt;0 = inverted). If the
+    /// adapter is already attached, its scale is updated in place.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// The adapter belongs to a different base model than this context.
+    /// </exception>
+    public void AttachLoraAdapter(LlamaLoraAdapter adapter, float scale = 1.0f)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(adapter);
+        if (!ReferenceEquals(adapter.BaseModel, _model))
+        {
+            throw new ArgumentException(
+                "LoRA adapter was loaded against a different base model than this context. " +
+                "Adapters are not transferable between models — reload the adapter against " +
+                "this context's model.",
+                nameof(adapter));
+        }
+
+        _activeAdapters[adapter] = scale;
+        SyncLoraAdapters();
+    }
+
+    /// <summary>
+    /// Detach <paramref name="adapter"/> from this context. No-op if the
+    /// adapter wasn't attached.
+    /// </summary>
+    public void DetachLoraAdapter(LlamaLoraAdapter adapter)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(adapter);
+        if (_activeAdapters.Remove(adapter))
+        {
+            SyncLoraAdapters();
+        }
+    }
+
+    /// <summary>
+    /// Detach every adapter currently attached to this context.
+    /// </summary>
+    public void DetachAllLoraAdapters()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_activeAdapters.Count == 0) return;
+        _activeAdapters.Clear();
+        SyncLoraAdapters();
+    }
+
+    /// <summary>
+    /// Atomic bulk replace of the active-adapter set. Useful when swapping
+    /// from one adapter list to another without intermediate states. Pairs
+    /// from <paramref name="adapters"/> with a scale of zero are dropped.
+    /// </summary>
+    public void SetLoraAdapters(IEnumerable<KeyValuePair<LlamaLoraAdapter, float>> adapters)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(adapters);
+
+        _activeAdapters.Clear();
+        foreach (var pair in adapters)
+        {
+            ArgumentNullException.ThrowIfNull(pair.Key);
+            if (!ReferenceEquals(pair.Key.BaseModel, _model))
+            {
+                throw new ArgumentException(
+                    "LoRA adapter was loaded against a different base model than this context.",
+                    nameof(adapters));
+            }
+            _activeAdapters[pair.Key] = pair.Value;
+        }
+        SyncLoraAdapters();
+    }
+
+    private unsafe void SyncLoraAdapters()
+    {
+        int count = _activeAdapters.Count;
+        if (count == 0)
+        {
+            // Clear path: llama.cpp accepts a NULL adapter array with n=0.
+            var rc0 = NativeMethods.llama_set_adapters_lora(
+                _handle.DangerousHandle, null, 0, null);
+            if (rc0 != 0)
+            {
+                throw new LlamaException(nameof(NativeMethods.llama_set_adapters_lora), rc0,
+                    "Failed to clear LoRA adapters on the context.");
+            }
+            return;
+        }
+
+        var ptrs = new IntPtr[count];
+        var scales = new float[count];
+        int i = 0;
+        foreach (var kvp in _activeAdapters)
+        {
+            ptrs[i] = kvp.Key.Handle.DangerousHandle;
+            scales[i] = kvp.Value;
+            i++;
+        }
+
+        int rc;
+        fixed (IntPtr* ptrPtr = ptrs)
+        fixed (float* scalePtr = scales)
+        {
+            rc = NativeMethods.llama_set_adapters_lora(
+                _handle.DangerousHandle, ptrPtr, (nuint)count, scalePtr);
+        }
+        if (rc != 0)
+        {
+            throw new LlamaException(nameof(NativeMethods.llama_set_adapters_lora), rc,
+                $"llama_set_adapters_lora failed with status {rc} while syncing " +
+                $"{count} adapter(s). Check the native log.");
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _memoryHandleCache = IntPtr.Zero;
+        _activeAdapters.Clear();
         _handle.Dispose();
     }
 }

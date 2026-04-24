@@ -18,10 +18,30 @@ internal static class TestModelProvider
     private const string DefaultName = "Qwen3-0.6B-UD-Q6_K_XL.gguf";
     private const string DownloadUrl = "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-UD-Q6_K_XL.gguf";
 
+    // LoRA adapter built against Qwen3-0.6B. 77 MB. Bound to the default
+    // base model's architecture — if LLAMACPP_TEST_MODEL is overridden to a
+    // non-Qwen3 model, LoRA behavioural tests will need a matching adapter
+    // supplied via LLAMACPP_TEST_LORA.
+    private const string LoraEnvVar      = "LLAMACPP_TEST_LORA";
+    private const string LoraDefaultName = "qwen3-0.6b-lora-test.gguf";
+    private const string LoraDownloadUrl = "https://huggingface.co/Chiichen/QWen3-0.6B-Lora-GGUF-Test/resolve/main/Lora-F16-LoRA.gguf";
+
     private static readonly Lazy<string> _path =
         new(Resolve, LazyThreadSafetyMode.ExecutionAndPublication);
 
+    private static readonly Lazy<string?> _loraPath =
+        new(ResolveLora, LazyThreadSafetyMode.ExecutionAndPublication);
+
     public static string EnsureModelPath() => _path.Value;
+
+    /// <summary>
+    /// Returns a LoRA adapter GGUF compatible with the default test base
+    /// model, or null if resolution failed (e.g. offline, or
+    /// <c>LLAMACPP_TEST_MODEL</c> was overridden to a different architecture
+    /// without also setting <c>LLAMACPP_TEST_LORA</c>). Tests should skip
+    /// gracefully on null rather than failing.
+    /// </summary>
+    public static string? TryGetLoraAdapterPath() => _loraPath.Value;
 
     private static string Resolve()
     {
@@ -43,6 +63,45 @@ internal static class TestModelProvider
         if (!File.Exists(dest))
             Download(DownloadUrl, dest);
 
+        return dest;
+    }
+
+    private static string? ResolveLora()
+    {
+        var env = Environment.GetEnvironmentVariable(LoraEnvVar);
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            if (!File.Exists(env))
+                throw new FileNotFoundException(
+                    $"{LoraEnvVar}='{env}' but the file does not exist.", env);
+            return env;
+        }
+
+        // Only auto-fetch the default adapter when the base model is also the
+        // default — a custom model may have an incompatible architecture.
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EnvVar)))
+        {
+            return null;
+        }
+
+        var cacheDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".cache", "llama-test-models");
+        Directory.CreateDirectory(cacheDir);
+
+        var dest = Path.Combine(cacheDir, LoraDefaultName);
+        if (!File.Exists(dest))
+        {
+            try
+            {
+                Download(LoraDownloadUrl, dest);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TestModelProvider] LoRA download failed: {ex.Message}");
+                return null;
+            }
+        }
         return dest;
     }
 

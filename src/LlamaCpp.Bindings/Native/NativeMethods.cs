@@ -569,6 +569,55 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial void llama_memory_seq_div(IntPtr mem, int seq_id, int p0, int p1, int d);
 
+    // ----- LoRA adapters -----
+    //
+    // The adapter lifecycle is pinned to its base model: `llama_adapter_lora_init`
+    // returns a pointer that is valid only as long as the associated
+    // llama_model is alive, and the header documents that adapters left
+    // un-freed at model teardown are cleaned up alongside the model. Our
+    // SafeHandle still calls `_free` explicitly for deterministic cleanup.
+    //
+    // The pinned header has a single `llama_set_adapters_lora` that replaces
+    // the full active-adapter list on the context in one call — there are no
+    // separate add/remove/clear functions. The C# context wraps this behind
+    // Attach / Detach / DetachAll by tracking the desired set in managed
+    // memory and re-syncing on every mutation.
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr llama_adapter_lora_init(IntPtr model, string path_lora);
+
+    [LibraryImport(LibName)]
+    internal static partial void llama_adapter_lora_free(IntPtr adapter);
+
+    [LibraryImport(LibName)]
+    internal static partial int llama_adapter_meta_count(IntPtr adapter);
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int llama_adapter_meta_val_str(
+        IntPtr adapter, string key, byte* buf, nuint buf_size);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_adapter_meta_key_by_index(
+        IntPtr adapter, int i, byte* buf, nuint buf_size);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_adapter_meta_val_str_by_index(
+        IntPtr adapter, int i, byte* buf, nuint buf_size);
+
+    [LibraryImport(LibName)]
+    internal static partial ulong llama_adapter_get_alora_n_invocation_tokens(IntPtr adapter);
+
+    // Returns a pointer into adapter-owned memory; do not free. The length is
+    // llama_adapter_get_alora_n_invocation_tokens(adapter).
+    [LibraryImport(LibName)]
+    internal static unsafe partial int* llama_adapter_get_alora_invocation_tokens(IntPtr adapter);
+
+    // Replace the context's active-adapter list. Returns 0 on success, negative
+    // on failure. Pass n_adapters=0 (or adapters=NULL) to clear.
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_set_adapters_lora(
+        IntPtr ctx, IntPtr* adapters, nuint n_adapters, float* scales);
+
     // ----- State / sessions -----
     //
     // Whole-context and per-sequence snapshot primitives. Snapshots are tied
