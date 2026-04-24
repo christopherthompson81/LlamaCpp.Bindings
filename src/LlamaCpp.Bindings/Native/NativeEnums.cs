@@ -152,3 +152,13 @@ internal enum ggml_numa_strategy : int
     GGML_NUMA_STRATEGY_NUMACTL    = 3,
     GGML_NUMA_STRATEGY_MIRROR     = 4,
 }
+
+// From ggml-backend.h — consumed by ggml_backend_dev_type().
+internal enum ggml_backend_dev_type : int
+{
+    GGML_BACKEND_DEVICE_TYPE_CPU   = 0,
+    GGML_BACKEND_DEVICE_TYPE_GPU   = 1,
+    GGML_BACKEND_DEVICE_TYPE_IGPU  = 2,
+    GGML_BACKEND_DEVICE_TYPE_ACCEL = 3,
+    GGML_BACKEND_DEVICE_TYPE_META  = 4,
+}

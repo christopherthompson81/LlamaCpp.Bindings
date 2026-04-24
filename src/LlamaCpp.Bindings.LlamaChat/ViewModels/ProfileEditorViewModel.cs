@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using LlamaCpp.Bindings.LlamaChat.Models;
+using LlamaCpp.Bindings.LlamaChat.Services;
 
 namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 
@@ -119,6 +120,33 @@ public partial class ProfileEditorViewModel : ObservableObject
     /// <summary>Reset the Sampling sub-panel to code defaults. Load settings are preserved.</summary>
     public void ResetSamplerDefaults() =>
         SamplerPanel.LoadFrom(SamplerSettings.Default, new GenerationSettings());
+
+    /// <summary>
+    /// Overwrite load + sampling fields with the recommendations in
+    /// <paramref name="result"/>. The profile name and system prompt are
+    /// preserved; the model path is replaced only if the new one is
+    /// non-empty (the service always sets it to the probed path, so in
+    /// practice it doesn't change).
+    /// </summary>
+    public void ApplyAutoConfigure(AutoConfigureResult result)
+    {
+        var load = result.Load;
+        if (!string.IsNullOrEmpty(load.ModelPath)) ModelPath = load.ModelPath;
+        ContextSize       = load.ContextSize;
+        GpuLayerCount     = load.GpuLayerCount;
+        LogicalBatchSize  = load.LogicalBatchSize;
+        PhysicalBatchSize = load.PhysicalBatchSize;
+        UseMmap           = load.UseMmap;
+        UseMlock          = load.UseMlock;
+        OffloadKQV        = load.OffloadKQV;
+        FlashAttention    = load.FlashAttention;
+        KvCacheType       = load.KvCacheTypeK;
+
+        // Apply the service's generation settings too — auto-configure
+        // picks a higher MaxTokens than the code-default because the
+        // default is too low for modern reasoning/thinking models.
+        SamplerPanel.LoadFrom(result.Sampler, result.Generation);
+    }
 
     public override string ToString() => Name;
 }

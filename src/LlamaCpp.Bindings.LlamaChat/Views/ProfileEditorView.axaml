@@ -58,6 +58,20 @@
         </Grid>
 
         <TextBlock Classes="section" Text="Load" />
+        <Grid Classes="row" ColumnDefinitions="130,*,Auto">
+            <TextBlock Grid.Column="0" Text="Auto-configure" VerticalAlignment="Center"
+                       ToolTip.Tip="Probe the GGUF + local hardware and suggest context size, GPU layers, KV cache type, and publisher-recommended sampler values." />
+            <TextBlock Grid.Column="1" Classes="muted xs" TextWrapping="Wrap" VerticalAlignment="Center"
+                       Text="Requires a valid Model path. Overwrites load + sampler fields; you can tweak before saving." />
+            <Button Grid.Column="2" Margin="4,0,0,0"
+                    Command="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).AutoConfigureCommand}"
+                    ToolTip.Tip="Probe this model and hardware, then populate the settings below.">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Path Classes="icon sm" Data="{StaticResource IconSparkles}" />
+                    <TextBlock Text="Automagic" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </Grid>
         <Grid Classes="row" ColumnDefinitions="130,*">
             <TextBlock Grid.Column="0" Text="Context size" VerticalAlignment="Center" />
             <NumericUpDown Grid.Column="1" Value="{Binding ContextSize}" Minimum="128" Increment="512" FormatString="F0" />

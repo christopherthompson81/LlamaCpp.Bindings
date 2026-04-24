@@ -42,6 +42,21 @@ internal static partial class NativeMethods
     [LibraryImport(LibGgml)]
     internal static partial nuint ggml_backend_dev_count();
 
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr ggml_backend_dev_get(nuint index);
+
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr ggml_backend_dev_name(IntPtr device);
+
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr ggml_backend_dev_description(IntPtr device);
+
+    [LibraryImport(LibGgml)]
+    internal static partial ggml_backend_dev_type ggml_backend_dev_type(IntPtr device);
+
+    [LibraryImport(LibGgml)]
+    internal static unsafe partial void ggml_backend_dev_memory(IntPtr device, nuint* free, nuint* total);
+
     // Callback: void (*)(ggml_log_level level, const char * text, void * user_data)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void GgmlLogCallback(ggml_log_level level, IntPtr text, IntPtr user_data);

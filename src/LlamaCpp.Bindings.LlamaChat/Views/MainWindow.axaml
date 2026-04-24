@@ -90,7 +90,7 @@
                         ToolTip.Tip="Load selected profile (Ctrl+L)"
                         a:AutomationProperties.Name="Load selected profile">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <Path Classes="icon sm" Data="{StaticResource IconPlay}" />
+                        <Path Classes="icon sm" Data="{StaticResource IconBrainCircuit}" />
                         <TextBlock Text="Load" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>

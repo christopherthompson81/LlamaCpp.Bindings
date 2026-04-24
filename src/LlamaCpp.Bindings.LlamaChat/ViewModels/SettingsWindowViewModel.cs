@@ -116,5 +116,31 @@ public partial class SettingsWindowViewModel : ObservableObject
         Status = "Reset sampling to defaults.";
     }
 
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private async Task AutoConfigureAsync()
+    {
+        if (SelectedProfile is null) return;
+        var path = SelectedProfile.ModelPath;
+        if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+        {
+            Status = "Auto-configure: set a valid Model path first.";
+            return;
+        }
+
+        Status = "Auto-configuring — probing model and hardware…";
+        try
+        {
+            // Off the UI thread: the brief llama_model load blocks for
+            // hundreds of ms; the ggml device probe blocks briefly too.
+            var result = await Task.Run(() => AutoConfigureService.Configure(path));
+            SelectedProfile.ApplyAutoConfigure(result);
+            Status = "Auto-configure applied. " + result.Explanation;
+        }
+        catch (System.Exception ex)
+        {
+            Status = $"Auto-configure failed: {ex.Message}";
+        }
+    }
+
     private bool HasSelection() => SelectedProfile is not null;
 }

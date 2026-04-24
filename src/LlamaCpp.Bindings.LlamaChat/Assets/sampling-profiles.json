@@ -1,0 +1,225 @@
+{
+  "$schema": "sampling-profiles.schema.json",
+  "description": "Publisher-recommended sampler settings per model family. First match wins — list more specific entries before more general ones. Match keys: 'architecture' (GGUF general.architecture, case-insensitive), 'namePattern' (regex against GGUF general.name, case-insensitive). Missing match keys wildcard. Every entry should carry a 'source' field so maintenance can sanity-check against the original recommendation.",
+  "profiles": [
+    {
+      "id": "qwen3-thinking",
+      "match": { "architecture": "qwen3", "namePattern": "(?i)thinking|reasoning|reasoner|qwq" },
+      "sampling": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Qwen team recommends these for Qwen3 thinking mode / QwQ.",
+      "source": "https://qwenlm.github.io/blog/qwen3/"
+    },
+    {
+      "id": "qwen3",
+      "match": { "architecture": "qwen3" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Qwen3 non-thinking / instruct defaults per Qwen blog.",
+      "source": "https://qwenlm.github.io/blog/qwen3/"
+    },
+    {
+      "id": "qwen3-moe-thinking",
+      "match": { "architecture": "qwen3moe", "namePattern": "(?i)thinking|reasoning|reasoner" },
+      "sampling": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Qwen3 MoE thinking (e.g. Qwen3-30B-A3B-Thinking) — same recipe as dense Qwen3 thinking.",
+      "source": "https://qwenlm.github.io/blog/qwen3/"
+    },
+    {
+      "id": "qwen3-moe",
+      "match": { "architecture": "qwen3moe" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Qwen3 MoE instruct (e.g. Qwen3-30B-A3B).",
+      "source": "https://qwenlm.github.io/blog/qwen3/"
+    },
+    {
+      "id": "qwen35-moe-thinking",
+      "match": { "architecture": "qwen35moe", "namePattern": "(?i)thinking|reasoning|reasoner" },
+      "sampling": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Qwen3.5/3.6 MoE (gated-delta-net hybrid) thinking mode — Qwen3 recipe is the best-known starting point.",
+      "source": "https://qwenlm.github.io/blog/qwen3/"
+    },
+    {
+      "id": "qwen35-moe",
+      "match": { "architecture": "qwen35moe" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Qwen3.5/3.6 MoE (e.g. Qwen3.6-35B-A3B) — hybrid attention model, uses Qwen3-family sampling recipe.",
+      "source": "https://qwenlm.github.io/blog/qwen3/"
+    },
+    {
+      "id": "qwen2",
+      "match": { "architecture": "qwen2" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0.0,
+        "penaltyRepeat": 1.05
+      },
+      "notes": "Qwen2 / Qwen2.5 instruct defaults.",
+      "source": "https://huggingface.co/Qwen"
+    },
+    {
+      "id": "deepseek-r1",
+      "match": { "architecture": "deepseek2", "namePattern": "(?i)r1|reasoner|distill" },
+      "sampling": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 0,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "DeepSeek-R1 + distilled variants — official recommendation is temp in [0.5, 0.7], 0.6 as the middle pick.",
+      "source": "https://github.com/deepseek-ai/DeepSeek-R1"
+    },
+    {
+      "id": "deepseek",
+      "match": { "architecture": "deepseek2" },
+      "sampling": {
+        "temperature": 0.3,
+        "topP": 0.95,
+        "topK": 0,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "DeepSeek-V2/V3 general use — official recommends lower temp than reasoning variant.",
+      "source": "https://huggingface.co/deepseek-ai"
+    },
+    {
+      "id": "llama3",
+      "match": { "architecture": "llama", "namePattern": "(?i)llama[\\s._-]?3" },
+      "sampling": {
+        "temperature": 0.6,
+        "topP": 0.9,
+        "topK": 0,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Llama 3 / 3.1 / 3.2 / 3.3 instruct — Meta's reference inference uses these.",
+      "source": "https://github.com/meta-llama/llama-recipes"
+    },
+    {
+      "id": "gemma3",
+      "match": { "architecture": "gemma3" },
+      "sampling": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Gemma 3 instruct — Google's published recommendation uses a notably higher temperature than most instruct models.",
+      "source": "https://ai.google.dev/gemma/docs"
+    },
+    {
+      "id": "gemma2",
+      "match": { "architecture": "gemma2" },
+      "sampling": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.0,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Gemma 2 — same higher-temp profile as Gemma 3.",
+      "source": "https://ai.google.dev/gemma/docs"
+    },
+    {
+      "id": "phi4",
+      "match": { "architecture": "phi3", "namePattern": "(?i)phi[\\s._-]?4" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 0.9,
+        "topK": 40,
+        "minP": 0.05,
+        "penaltyRepeat": 1.1
+      },
+      "notes": "Phi-4 — Microsoft's reference uses a standard instruct profile.",
+      "source": "https://huggingface.co/microsoft/phi-4"
+    },
+    {
+      "id": "phi3",
+      "match": { "architecture": "phi3" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 0.9,
+        "topK": 40,
+        "minP": 0.05,
+        "penaltyRepeat": 1.1
+      },
+      "notes": "Phi-3 / Phi-3.5 — standard instruct profile.",
+      "source": "https://huggingface.co/microsoft"
+    },
+    {
+      "id": "mixtral",
+      "match": { "architecture": "llama", "namePattern": "(?i)mixtral" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 1.0,
+        "topK": 0,
+        "minP": 0.05,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Mixtral MoE instruct.",
+      "source": "https://huggingface.co/mistralai"
+    },
+    {
+      "id": "mistral",
+      "match": { "architecture": "llama", "namePattern": "(?i)mistral" },
+      "sampling": {
+        "temperature": 0.7,
+        "topP": 1.0,
+        "topK": 0,
+        "minP": 0.05,
+        "penaltyRepeat": 1.0
+      },
+      "notes": "Mistral instruct family (also covers Mistral-Small, Ministral etc.).",
+      "source": "https://huggingface.co/mistralai"
+    }
+  ],
+  "fallback": {
+    "id": "generic",
+    "sampling": {
+      "temperature": 0.7,
+      "topP": 0.9,
+      "topK": 40,
+      "minP": 0.05,
+      "penaltyRepeat": 1.1
+    },
+    "notes": "Conservative generic instruct defaults. Applied when no family rule matches."
+  }
+}
