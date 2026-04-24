@@ -139,7 +139,8 @@ public class AdvancedSamplerGenerationTests
         var sb = new System.Text.StringBuilder();
         await foreach (var p in gen.GenerateAsync(
             "Briefly: say hi.", maxTokens: 20,
-            addSpecial: false, parseSpecial: false))
+            addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(p);
         }
@@ -160,7 +161,8 @@ public class AdvancedSamplerGenerationTests
         var sb = new System.Text.StringBuilder();
         await foreach (var p in gen.GenerateAsync(
             "Say yes.", maxTokens: 20,
-            addSpecial: false, parseSpecial: false))
+            addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(p);
         }
@@ -188,7 +190,8 @@ public class AdvancedSamplerGenerationTests
         int emitted = 0;
         await foreach (var _ in gen.GenerateAsync(
             "Say ok.", maxTokens: 15,
-            addSpecial: false, parseSpecial: false))
+            addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             emitted++;
         }

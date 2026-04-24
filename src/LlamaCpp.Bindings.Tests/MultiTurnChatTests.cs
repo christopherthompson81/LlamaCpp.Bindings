@@ -37,7 +37,8 @@ public class MultiTurnChatTests
         // Generate a small chunk so the cache clearly advances.
         int emitted = 0;
         await foreach (var _ in gen.GenerateAsync("The capital of France is", maxTokens: 8,
-                                                   addSpecial: false, parseSpecial: false))
+                                                   addSpecial: false, parseSpecial: false,
+                                                   cancellationToken: TestContext.Current.CancellationToken))
         {
             emitted++;
         }
@@ -60,7 +61,8 @@ public class MultiTurnChatTests
         using var sampler = new LlamaSamplerBuilder().WithTemperature(0.7f).WithDistribution(seed: 1).Build();
         var gen = new LlamaGenerator(_fx.Context, sampler);
 
-        await foreach (var _ in gen.GenerateAsync("Hello world", maxTokens: 5, addSpecial: false, parseSpecial: false)) { }
+        await foreach (var _ in gen.GenerateAsync("Hello world", maxTokens: 5, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken)) { }
         Assert.NotNull(_fx.Context.SequencePositionRange(0).Maximum);
 
         _fx.Context.ClearKvCache();
@@ -83,7 +85,8 @@ public class MultiTurnChatTests
 
         // Turn 1: establish a fact the model could only know from the prompt.
         const string turn1 = "Remember this: my secret codeword is 'pineapple'.\nAssistant:";
-        await foreach (var _ in gen.GenerateAsync(turn1, maxTokens: 20, addSpecial: false, parseSpecial: false)) { }
+        await foreach (var _ in gen.GenerateAsync(turn1, maxTokens: 20, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken)) { }
 
         var posAfterTurn1 = _fx.Context.SequencePositionRange(0).Maximum;
         Assert.NotNull(posAfterTurn1);
@@ -93,7 +96,8 @@ public class MultiTurnChatTests
         // has no way to answer correctly.
         const string turn2 = "\nUser: What was the codeword?\nAssistant:";
         var sb = new StringBuilder();
-        await foreach (var piece in gen.GenerateAsync(turn2, maxTokens: 30, addSpecial: false, parseSpecial: false))
+        await foreach (var piece in gen.GenerateAsync(turn2, maxTokens: 30, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(piece);
         }
@@ -126,7 +130,8 @@ public class MultiTurnChatTests
         // Load a distinctive token into history.
         await foreach (var _ in gen1.GenerateAsync(
             "The secret word is zebra.\nAssistant: Got it.",
-            maxTokens: 5, addSpecial: false, parseSpecial: false)) { }
+            maxTokens: 5, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken)) { }
 
         _fx.Context.ClearKvCache();
 
@@ -139,7 +144,8 @@ public class MultiTurnChatTests
         var sb = new StringBuilder();
         await foreach (var piece in gen2.GenerateAsync(
             "What's 7 times 6? Just the number.",
-            maxTokens: 40, addSpecial: false, parseSpecial: false))
+            maxTokens: 40, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(piece);
         }
@@ -190,7 +196,8 @@ public class MultiTurnChatTests
         {
             var genA = new LlamaGenerator(_fx.Context, samplerA);
             await foreach (var p in genA.GenerateAsync(tokens, maxTokens: maxGen,
-                                                        firstNewIndex: 0)) outputA.Append(p);
+                                                        firstNewIndex: 0,
+                                                        cancellationToken: TestContext.Current.CancellationToken)) outputA.Append(p);
         }
 
         // Pass B: split decode. Decode tokens[0..half-1] via a throwaway
@@ -207,7 +214,8 @@ public class MultiTurnChatTests
         {
             var genThrow = new LlamaGenerator(_fx.Context, throwaway);
             await foreach (var _ in genThrow.GenerateAsync(firstHalf, maxTokens: 1,
-                                                            firstNewIndex: 0)) { }
+                                                            firstNewIndex: 0,
+                                                            cancellationToken: TestContext.Current.CancellationToken)) { }
         }
         // Strip the throwaway's generated token so KV is exactly [0..half-1].
         var trimmed = _fx.Context.RemoveSequenceRange(0, fromPosition: half, toPosition: -1);
@@ -226,7 +234,8 @@ public class MultiTurnChatTests
         {
             var genB = new LlamaGenerator(_fx.Context, samplerB);
             await foreach (var p in genB.GenerateAsync(tokens, maxTokens: maxGen,
-                                                        firstNewIndex: half)) outputB.Append(p);
+                                                        firstNewIndex: half,
+                                                        cancellationToken: TestContext.Current.CancellationToken)) outputB.Append(p);
         }
 
         Assert.Equal(outputA.ToString(), outputB.ToString());
@@ -255,7 +264,8 @@ public class MultiTurnChatTests
             .WithTemperature(0.0f).WithDistribution(seed: 13).Build())
         {
             var genA = new LlamaGenerator(_fx.Context, samplerA);
-            await foreach (var p in genA.GenerateAsync(prompt, maxTokens: totalGen)) outputA.Append(p);
+            await foreach (var p in genA.GenerateAsync(prompt, maxTokens: totalGen,
+                cancellationToken: TestContext.Current.CancellationToken)) outputA.Append(p);
         }
 
         // Pass B: generate first half, then "continue" via back-off-by-one.
@@ -269,7 +279,8 @@ public class MultiTurnChatTests
         {
             var genB1 = new LlamaGenerator(_fx.Context, samplerB1);
             await foreach (var p in genB1.GenerateAsync(
-                prompt, maxTokens: firstHalf, onTokenDecoded: decodedSoFar.Add)) outputB.Append(p);
+                prompt, maxTokens: firstHalf, onTokenDecoded: decodedSoFar.Add,
+                cancellationToken: TestContext.Current.CancellationToken)) outputB.Append(p);
         }
 
         // Now do the continuation — back off one, fresh sampler same seed.
@@ -289,7 +300,8 @@ public class MultiTurnChatTests
                 decodedSoFar,
                 maxTokens: totalGen - firstHalf,
                 firstNewIndex: decodedSoFar.Count - 1,
-                onTokenDecoded: decodedSoFar.Add)) outputB.Append(p);
+                onTokenDecoded: decodedSoFar.Add,
+                cancellationToken: TestContext.Current.CancellationToken)) outputB.Append(p);
         }
 
         Assert.Equal(outputA.ToString(), outputB.ToString());
@@ -311,7 +323,8 @@ public class MultiTurnChatTests
 
         // Step 1: decode a prompt + ~10 tokens. Captures (min=0, max=some N).
         await foreach (var _ in gen.GenerateAsync("Count: one two three", maxTokens: 10,
-                                                   addSpecial: false, parseSpecial: false)) { }
+                                                   addSpecial: false, parseSpecial: false,
+                                                   cancellationToken: TestContext.Current.CancellationToken)) { }
         var (_, maxBefore) = _fx.Context.SequencePositionRange(0);
         Assert.NotNull(maxBefore);
         int lenBefore = maxBefore!.Value + 1; // positions are 0-indexed inclusive
@@ -331,7 +344,8 @@ public class MultiTurnChatTests
         // trimAt onward; the new max should be > trimAt-1 but <= trimAt + new.
         int emittedSecond = 0;
         await foreach (var _ in gen.GenerateAsync(" four", maxTokens: 5,
-                                                   addSpecial: false, parseSpecial: false))
+                                                   addSpecial: false, parseSpecial: false,
+                                                   cancellationToken: TestContext.Current.CancellationToken))
         {
             emittedSecond++;
         }
@@ -359,7 +373,8 @@ public class MultiTurnChatTests
         var gen = new LlamaGenerator(_fx.Context, sampler);
 
         await foreach (var _ in gen.GenerateAsync("Say ten words quickly.", maxTokens: 10,
-                                                   addSpecial: false, parseSpecial: false)) { }
+                                                   addSpecial: false, parseSpecial: false,
+                                                   cancellationToken: TestContext.Current.CancellationToken)) { }
 
         var (_, maxBefore) = _fx.Context.SequencePositionRange(0);
         Assert.NotNull(maxBefore);

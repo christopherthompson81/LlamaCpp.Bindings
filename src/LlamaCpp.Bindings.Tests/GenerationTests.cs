@@ -107,7 +107,8 @@ public class GenerationTests
         var generator = new LlamaGenerator(_fx.Context, sampler);
 
         var pieces = new List<string>();
-        await foreach (var p in generator.GenerateAsync(prompt, maxTokens: 50, addSpecial: false, parseSpecial: true))
+        await foreach (var p in generator.GenerateAsync(prompt, maxTokens: 50, addSpecial: false, parseSpecial: true,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             pieces.Add(p);
             if (pieces.Count >= 50) break; // belt-and-suspenders
@@ -165,7 +166,8 @@ public class GenerationTests
         var gen = new LlamaGenerator(_fx.Context, sampler);
         var sb = new System.Text.StringBuilder();
         await foreach (var p in gen.GenerateAsync(
-            Prompt, maxTokens: 15, addSpecial: true, parseSpecial: false))
+            Prompt, maxTokens: 15, addSpecial: true, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(p);
         }
@@ -210,7 +212,8 @@ public class GenerationTests
         var gen = new LlamaGenerator(_fx.Context, sampler);
         var sb = new System.Text.StringBuilder();
         await foreach (var p in gen.GenerateAsync(
-            Prompt, maxTokens: 25, addSpecial: true, parseSpecial: false))
+            Prompt, maxTokens: 25, addSpecial: true, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(p);
         }

@@ -82,7 +82,8 @@ public class PerformanceLiveTests
         var gen = new LlamaGenerator(_fx.Context, sampler);
         int piecesEmitted = 0;
         await foreach (var _ in gen.GenerateAsync(
-            "Hello.", maxTokens: 10, addSpecial: false, parseSpecial: false))
+            "Hello.", maxTokens: 10, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             piecesEmitted++;
         }
@@ -110,7 +111,8 @@ public class PerformanceLiveTests
             .WithTemperature(0.7f).WithDistribution(seed: 8).Build();
         var gen = new LlamaGenerator(_fx.Context, sampler);
         await foreach (var _ in gen.GenerateAsync(
-            "Warm up.", maxTokens: 5, addSpecial: false, parseSpecial: false)) { }
+            "Warm up.", maxTokens: 5, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken)) { }
 
         var before = _fx.Context.GetPerformance();
         Assert.True(before.GeneratedTokenCount > 1,

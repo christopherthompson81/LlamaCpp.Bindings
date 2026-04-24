@@ -133,7 +133,8 @@ public class MtmdTests : IClassFixture<MtmdFixture>
         var prompt = $"{_fx.Mtmd.DefaultMediaMarker} describe.";
         var newNPast = await _fx.Mtmd.EvalPromptAsync(
             lctx, prompt, [bmp], nPast: 0,
-            addSpecial: true, parseSpecial: true);
+            addSpecial: true, parseSpecial: true,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         // A 512x512-ish test image plus the surrounding text should consume
         // well over a handful of positions. The exact count depends on the
@@ -158,7 +159,8 @@ public class MtmdTests : IClassFixture<MtmdFixture>
         // Two markers, one bitmap — tokenize should return status 1.
         var prompt = $"{_fx.Mtmd.DefaultMediaMarker} and {_fx.Mtmd.DefaultMediaMarker}";
         var ex = await Assert.ThrowsAsync<LlamaException>(() =>
-            _fx.Mtmd.EvalPromptAsync(lctx, prompt, [bmp], nPast: 0));
+            _fx.Mtmd.EvalPromptAsync(lctx, prompt, [bmp], nPast: 0,
+                cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("mtmd_tokenize", ex.FunctionName);
         Assert.Equal(1, ex.StatusCode);
     }

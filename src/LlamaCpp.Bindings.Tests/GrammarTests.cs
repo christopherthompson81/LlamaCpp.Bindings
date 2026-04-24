@@ -80,7 +80,8 @@ public class GrammarGenerationTests
         var sb = new System.Text.StringBuilder();
         await foreach (var p in gen.GenerateAsync(
             "Is the sky blue? Answer yes or no.",
-            maxTokens: 20, addSpecial: false, parseSpecial: false))
+            maxTokens: 20, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(p);
         }
@@ -109,7 +110,8 @@ public class GrammarGenerationTests
         var sb = new System.Text.StringBuilder();
         await foreach (var p in gen.GenerateAsync(
             "Emit a JSON object with a name and age. Output JSON only.\n",
-            maxTokens: 200, addSpecial: false, parseSpecial: false))
+            maxTokens: 200, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(p);
         }

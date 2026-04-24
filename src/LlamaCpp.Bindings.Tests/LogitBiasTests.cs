@@ -97,7 +97,8 @@ public class LogitBiasBehaviouralTests
         var sb = new StringBuilder();
         await foreach (var p in gen.GenerateAsync(
             "User: Please say the single word hello.\nAssistant: ",
-            maxTokens: 30, addSpecial: false, parseSpecial: false))
+            maxTokens: 30, addSpecial: false, parseSpecial: false,
+            cancellationToken: TestContext.Current.CancellationToken))
         {
             sb.Append(p);
         }
