@@ -528,6 +528,312 @@ public sealed class LlamaContext : IDisposable
         NativeMethods.llama_perf_context_print(_handle.DangerousHandle);
     }
 
+    // ----- State / session snapshots (Tier 2 expansion) -----
+    //
+    // Snapshot bytes capture the full context state (KV cache, logits buffer,
+    // RNG state). They are tied to the exact pinned llama.cpp version: a
+    // snapshot taken on version X is not guaranteed to load on version Y.
+    // If you persist snapshots to disk, treat the pinned llama.cpp version
+    // as part of the schema and invalidate old snapshots when you bump it.
+    //
+    // File variants stream directly through llama.cpp's native I/O — preferred
+    // for large contexts where a round-trip through a managed byte[] would
+    // allocate hundreds of megabytes (KV cache size scales with ctx × layers
+    // × heads × kv_bits).
+
+    /// <summary>Size in bytes required to hold a full-context snapshot.</summary>
+    public long GetStateSize()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return (long)NativeMethods.llama_state_get_size(_handle.DangerousHandle);
+    }
+
+    /// <summary>
+    /// Snapshot the entire context state into a freshly-allocated array.
+    /// Convenient for small contexts; for production use with large models
+    /// prefer <see cref="SaveStateToFile"/> or the <see cref="Span{Byte}"/>
+    /// overload with a pooled buffer.
+    /// </summary>
+    public byte[] SaveState()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var size = NativeMethods.llama_state_get_size(_handle.DangerousHandle);
+        var buffer = new byte[size];
+        var written = SaveState(buffer);
+        if (written != buffer.Length)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_state_get_data),
+                $"Expected {buffer.Length} bytes, got {written}.");
+        }
+        return buffer;
+    }
+
+    /// <summary>
+    /// Snapshot the context state into <paramref name="destination"/>. The
+    /// buffer must be at least <see cref="GetStateSize"/> bytes; callers
+    /// typically rent it from <c>ArrayPool&lt;byte&gt;.Shared</c>.
+    /// </summary>
+    /// <returns>Number of bytes actually written.</returns>
+    public unsafe int SaveState(Span<byte> destination)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var required = NativeMethods.llama_state_get_size(_handle.DangerousHandle);
+        if ((nuint)destination.Length < required)
+        {
+            throw new ArgumentException(
+                $"Destination buffer too small: need {required} bytes, have {destination.Length}.",
+                nameof(destination));
+        }
+        fixed (byte* ptr = destination)
+        {
+            var written = NativeMethods.llama_state_get_data(
+                _handle.DangerousHandle, ptr, (nuint)destination.Length);
+            return checked((int)written);
+        }
+    }
+
+    /// <summary>
+    /// Restore context state from <paramref name="source"/>. The bytes must
+    /// have been produced by <see cref="SaveState()"/> on a context built
+    /// against the same pinned llama.cpp version.
+    /// </summary>
+    /// <returns>Number of bytes consumed.</returns>
+    public unsafe int RestoreState(ReadOnlySpan<byte> source)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (source.IsEmpty)
+        {
+            throw new ArgumentException("Snapshot is empty.", nameof(source));
+        }
+        fixed (byte* ptr = source)
+        {
+            var read = NativeMethods.llama_state_set_data(
+                _handle.DangerousHandle, ptr, (nuint)source.Length);
+            if (read == 0)
+            {
+                throw new LlamaException(
+                    nameof(NativeMethods.llama_state_set_data),
+                    "Failed to restore state. The snapshot may be corrupt or from an " +
+                    "incompatible llama.cpp version.");
+            }
+            return checked((int)read);
+        }
+    }
+
+    /// <summary>
+    /// Save the context state plus an optional associated token array to
+    /// <paramref name="path"/>. The tokens are the prompt that produced the
+    /// current KV state; storing them alongside lets a later load verify the
+    /// cache is consistent with a prompt before reusing it.
+    /// </summary>
+    public unsafe void SaveStateToFile(string path, ReadOnlySpan<int> tokens = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(path);
+
+        bool ok;
+        fixed (int* tokPtr = tokens)
+        {
+            ok = NativeMethods.llama_state_save_file(
+                _handle.DangerousHandle, path, tokPtr, (nuint)tokens.Length);
+        }
+        if (!ok)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_state_save_file),
+                $"Failed to save state to '{path}'.");
+        }
+    }
+
+    /// <summary>
+    /// Load a context snapshot previously written by
+    /// <see cref="SaveStateToFile"/>. Returns the token array that was saved
+    /// alongside (empty if none were recorded).
+    /// </summary>
+    /// <param name="path">File written by <see cref="SaveStateToFile"/>.</param>
+    /// <param name="maxTokenCapacity">
+    /// Upper bound on the token array we're willing to allocate. Must be
+    /// large enough to hold the tokens saved alongside the snapshot; if the
+    /// saved array is larger, the native call will fail.
+    /// </param>
+    public unsafe int[] LoadStateFromFile(string path, int maxTokenCapacity = 65536)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTokenCapacity);
+
+        var buffer = new int[maxTokenCapacity];
+        nuint count;
+        bool ok;
+        fixed (int* bufPtr = buffer)
+        {
+            ok = NativeMethods.llama_state_load_file(
+                _handle.DangerousHandle, path, bufPtr, (nuint)maxTokenCapacity, &count);
+        }
+        if (!ok)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_state_load_file),
+                $"Failed to load state from '{path}'. File may be missing, corrupt, " +
+                $"from an incompatible llama.cpp version, or contain more than " +
+                $"{maxTokenCapacity} tokens.");
+        }
+        if (count == 0) return Array.Empty<int>();
+        var tokens = new int[(int)count];
+        Array.Copy(buffer, tokens, (int)count);
+        return tokens;
+    }
+
+    /// <summary>
+    /// Size in bytes required to snapshot a single sequence's state.
+    /// </summary>
+    public long GetSequenceStateSize(int sequenceId, LlamaStateSeqFlags flags = LlamaStateSeqFlags.None)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return flags == LlamaStateSeqFlags.None
+            ? (long)NativeMethods.llama_state_seq_get_size(_handle.DangerousHandle, sequenceId)
+            : (long)NativeMethods.llama_state_seq_get_size_ext(_handle.DangerousHandle, sequenceId, (uint)flags);
+    }
+
+    /// <summary>
+    /// Snapshot the state of a single sequence into a freshly-allocated array.
+    /// Useful for cheap branching (clone a conversation, mutate one side,
+    /// restore the other) without copying the rest of the KV cache.
+    /// </summary>
+    public byte[] SaveSequenceState(int sequenceId, LlamaStateSeqFlags flags = LlamaStateSeqFlags.None)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var size = GetSequenceStateSize(sequenceId, flags);
+        var buffer = new byte[size];
+        var written = SaveSequenceState(sequenceId, buffer, flags);
+        if (written != buffer.Length)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_state_seq_get_data),
+                $"Expected {buffer.Length} bytes, got {written}.");
+        }
+        return buffer;
+    }
+
+    /// <summary>
+    /// Snapshot a single sequence's state into <paramref name="destination"/>.
+    /// </summary>
+    /// <returns>Number of bytes written.</returns>
+    public unsafe int SaveSequenceState(
+        int sequenceId, Span<byte> destination, LlamaStateSeqFlags flags = LlamaStateSeqFlags.None)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var required = (nuint)GetSequenceStateSize(sequenceId, flags);
+        if ((nuint)destination.Length < required)
+        {
+            throw new ArgumentException(
+                $"Destination buffer too small: need {required} bytes, have {destination.Length}.",
+                nameof(destination));
+        }
+        fixed (byte* ptr = destination)
+        {
+            var written = flags == LlamaStateSeqFlags.None
+                ? NativeMethods.llama_state_seq_get_data(
+                    _handle.DangerousHandle, ptr, (nuint)destination.Length, sequenceId)
+                : NativeMethods.llama_state_seq_get_data_ext(
+                    _handle.DangerousHandle, ptr, (nuint)destination.Length, sequenceId, (uint)flags);
+            return checked((int)written);
+        }
+    }
+
+    /// <summary>
+    /// Restore a single sequence's state from <paramref name="source"/>,
+    /// writing into <paramref name="destinationSequenceId"/>. The source
+    /// sequence ID captured at save time is ignored — the caller chooses
+    /// the target slot, which makes this the primitive for cheap forks
+    /// (save sequence 0, restore into sequence 1, diverge from there).
+    /// </summary>
+    public unsafe int RestoreSequenceState(
+        int destinationSequenceId,
+        ReadOnlySpan<byte> source,
+        LlamaStateSeqFlags flags = LlamaStateSeqFlags.None)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (source.IsEmpty)
+        {
+            throw new ArgumentException("Snapshot is empty.", nameof(source));
+        }
+        fixed (byte* ptr = source)
+        {
+            var read = flags == LlamaStateSeqFlags.None
+                ? NativeMethods.llama_state_seq_set_data(
+                    _handle.DangerousHandle, ptr, (nuint)source.Length, destinationSequenceId)
+                : NativeMethods.llama_state_seq_set_data_ext(
+                    _handle.DangerousHandle, ptr, (nuint)source.Length, destinationSequenceId, (uint)flags);
+            if (read == 0)
+            {
+                throw new LlamaException(
+                    nameof(NativeMethods.llama_state_seq_set_data),
+                    "Failed to restore sequence state. Snapshot may be corrupt or incompatible.");
+            }
+            return checked((int)read);
+        }
+    }
+
+    /// <summary>
+    /// Save a single sequence's state plus its associated token array to
+    /// <paramref name="path"/>.
+    /// </summary>
+    public unsafe void SaveSequenceStateToFile(
+        string path, int sequenceId, ReadOnlySpan<int> tokens = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(path);
+
+        nuint written;
+        fixed (int* tokPtr = tokens)
+        {
+            written = NativeMethods.llama_state_seq_save_file(
+                _handle.DangerousHandle, path, sequenceId, tokPtr, (nuint)tokens.Length);
+        }
+        if (written == 0)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_state_seq_save_file),
+                $"Failed to save sequence {sequenceId} state to '{path}'.");
+        }
+    }
+
+    /// <summary>
+    /// Load a sequence snapshot previously written by
+    /// <see cref="SaveSequenceStateToFile"/>, writing the KV state into
+    /// <paramref name="destinationSequenceId"/>. Returns the tokens that
+    /// were saved alongside (empty if none).
+    /// </summary>
+    public unsafe int[] LoadSequenceStateFromFile(
+        string path, int destinationSequenceId, int maxTokenCapacity = 65536)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTokenCapacity);
+
+        var buffer = new int[maxTokenCapacity];
+        nuint count;
+        nuint read;
+        fixed (int* bufPtr = buffer)
+        {
+            read = NativeMethods.llama_state_seq_load_file(
+                _handle.DangerousHandle, path, destinationSequenceId,
+                bufPtr, (nuint)maxTokenCapacity, &count);
+        }
+        if (read == 0)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_state_seq_load_file),
+                $"Failed to load sequence state from '{path}'.");
+        }
+        if (count == 0) return Array.Empty<int>();
+        var tokens = new int[(int)count];
+        Array.Copy(buffer, tokens, (int)count);
+        return tokens;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

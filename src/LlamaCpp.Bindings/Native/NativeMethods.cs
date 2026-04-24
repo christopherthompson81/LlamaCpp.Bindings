@@ -569,6 +569,64 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static partial void llama_memory_seq_div(IntPtr mem, int seq_id, int p0, int p1, int d);
 
+    // ----- State / sessions -----
+    //
+    // Whole-context and per-sequence snapshot primitives. Snapshots are tied
+    // to the exact pinned llama.cpp version — bytes produced here are not
+    // guaranteed to load after a version bump. File-I/O variants also carry
+    // an associated token array (the prompt the KV state was built from)
+    // which enables llama.cpp's prompt-cache workflow.
+
+    [LibraryImport(LibName)]
+    internal static partial nuint llama_state_get_size(IntPtr ctx);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial nuint llama_state_get_data(IntPtr ctx, byte* dst, nuint size);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial nuint llama_state_set_data(IntPtr ctx, byte* src, nuint size);
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static unsafe partial bool llama_state_load_file(
+        IntPtr ctx, string path_session, int* tokens_out, nuint n_token_capacity, nuint* n_token_count_out);
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static unsafe partial bool llama_state_save_file(
+        IntPtr ctx, string path_session, int* tokens, nuint n_token_count);
+
+    [LibraryImport(LibName)]
+    internal static partial nuint llama_state_seq_get_size(IntPtr ctx, int seq_id);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial nuint llama_state_seq_get_data(
+        IntPtr ctx, byte* dst, nuint size, int seq_id);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial nuint llama_state_seq_set_data(
+        IntPtr ctx, byte* src, nuint size, int dest_seq_id);
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial nuint llama_state_seq_save_file(
+        IntPtr ctx, string filepath, int seq_id, int* tokens, nuint n_token_count);
+
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial nuint llama_state_seq_load_file(
+        IntPtr ctx, string filepath, int dest_seq_id,
+        int* tokens_out, nuint n_token_capacity, nuint* n_token_count_out);
+
+    [LibraryImport(LibName)]
+    internal static partial nuint llama_state_seq_get_size_ext(IntPtr ctx, int seq_id, uint flags);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial nuint llama_state_seq_get_data_ext(
+        IntPtr ctx, byte* dst, nuint size, int seq_id, uint flags);
+
+    [LibraryImport(LibName)]
+    internal static unsafe partial nuint llama_state_seq_set_data_ext(
+        IntPtr ctx, byte* src, nuint size, int dest_seq_id, uint flags);
+
     // ----- Capability / misc (Tier 1 expansion) -----
 
     [LibraryImport(LibName)]
