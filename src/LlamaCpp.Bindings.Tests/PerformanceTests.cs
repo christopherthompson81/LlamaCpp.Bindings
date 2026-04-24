@@ -72,7 +72,6 @@ public class PerformanceLiveTests
     [Fact]
     public async Task Context_Perf_Shows_Tokens_After_Generation()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
         _fx.Context.ResetPerformance();
 
@@ -105,7 +104,6 @@ public class PerformanceLiveTests
     [Fact]
     public async Task ResetPerformance_Returns_Counters_To_Native_Floor()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler = new LlamaSamplerBuilder()

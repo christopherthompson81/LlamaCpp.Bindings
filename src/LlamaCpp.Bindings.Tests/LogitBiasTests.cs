@@ -20,7 +20,6 @@ public class LogitBiasTests : IClassFixture<ModelFixture>
     [Fact]
     public void Empty_Bias_List_Is_Noop()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         using var s = new LlamaSamplerBuilder()
             .WithLogitBias(_fx.Model.Vocab, Array.Empty<(int, float)>())
             .WithGreedy()
@@ -32,7 +31,6 @@ public class LogitBiasTests : IClassFixture<ModelFixture>
     [Fact]
     public void Bias_With_Valid_Tokens_Adds_Stage()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
         using var s = new LlamaSamplerBuilder()
             .WithLogitBias(v, new[] { (0, 1.0f), (1, -2.0f) })
@@ -45,7 +43,6 @@ public class LogitBiasTests : IClassFixture<ModelFixture>
     [Fact]
     public void Bias_Rejects_Out_Of_Range_Token()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new LlamaSamplerBuilder()
@@ -63,7 +60,6 @@ public class LogitBiasTests : IClassFixture<ModelFixture>
     [Fact]
     public void BannedTokens_Applies_NegativeInfinity()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
         using var s = new LlamaSamplerBuilder()
             .WithBannedTokens(v, new[] { 0, 1, 2 })
@@ -82,7 +78,6 @@ public class LogitBiasBehaviouralTests
     [Fact]
     public async Task Banning_Specific_Tokens_Suppresses_Their_Output()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         var v = _fx.Model.Vocab;

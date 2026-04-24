@@ -8,7 +8,6 @@ public class GrammarBuilderTests : IClassFixture<ModelFixture>
     [Fact]
     public void Grammar_Is_Held_Separately_From_The_Chain()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
 
         using var s = new LlamaSamplerBuilder()
             .WithGrammar(_fx.Model.Vocab, LlamaGrammar.Json)
@@ -25,7 +24,6 @@ public class GrammarBuilderTests : IClassFixture<ModelFixture>
     [Fact]
     public void Grammar_Rejects_Empty_Source()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         Assert.Throws<ArgumentException>(() =>
             new LlamaSamplerBuilder()
                 .WithGrammar(_fx.Model.Vocab, new LlamaGrammar(""))
@@ -42,7 +40,6 @@ public class GrammarBuilderTests : IClassFixture<ModelFixture>
     [Fact]
     public void LazyGrammar_Accepts_Patterns_And_Tokens()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         using var s = new LlamaSamplerBuilder()
             .WithLazyGrammar(_fx.Model.Vocab, new LlamaLazyGrammar(
                 Grammar: LlamaGrammar.Json,
@@ -65,7 +62,6 @@ public class GrammarGenerationTests
     [Fact]
     public async Task Simple_Grammar_Constrains_Output_To_Literal_Choices()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         // Minimal grammar: the model must emit either "yes" or "no". Once
@@ -96,7 +92,6 @@ public class GrammarGenerationTests
     [Fact]
     public async Task Json_Grammar_Produces_Parseable_Json()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         // With the rejection-sampling design, grammar is held separately from
@@ -129,7 +124,6 @@ public class GrammarGenerationTests
     [Fact]
     public void IsGrammarSatisfied_Is_False_On_Non_Grammar_Sampler()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         using var plain = new LlamaSamplerBuilder().WithGreedy().Build();
         Assert.False(plain.HasGrammar);
         Assert.False(plain.IsGrammarSatisfied(_fx.Model.Vocab));
@@ -138,7 +132,6 @@ public class GrammarGenerationTests
     [Fact]
     public void IsGrammarSatisfied_Is_False_Before_Any_Accept()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         // Fresh grammar sampler hasn't advanced state; there are still valid
         // non-EOG tokens to emit.
         using var s = new LlamaSamplerBuilder()

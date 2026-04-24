@@ -13,7 +13,6 @@ public class MemoryExtraTests
     [Fact]
     public void ShiftSequencePositions_Behaves_Per_Backend_Support()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         if (!_fx.Context.SupportsPositionShift())
@@ -37,7 +36,6 @@ public class MemoryExtraTests
     [Fact]
     public void DivideSequencePositions_Rejects_NonPositive_Divisor()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             _fx.Context.DivideSequencePositions(0, 0, -1, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() =>

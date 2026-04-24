@@ -20,7 +20,6 @@ public class MultiTurnChatTests
     [Fact]
     public void SequencePositionRange_On_Fresh_Context_Is_Empty()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
         var range = _fx.Context.SequencePositionRange(sequenceId: 0);
         Assert.Null(range.Minimum);
@@ -30,7 +29,6 @@ public class MultiTurnChatTests
     [Fact]
     public async Task Decode_Advances_Sequence_Position_Counter()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler = new LlamaSamplerBuilder().WithTemperature(0.7f).WithDistribution(seed: 1).Build();
@@ -57,7 +55,6 @@ public class MultiTurnChatTests
     [Fact]
     public async Task ClearKvCache_Resets_Sequence_Range()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler = new LlamaSamplerBuilder().WithTemperature(0.7f).WithDistribution(seed: 1).Build();
@@ -76,7 +73,6 @@ public class MultiTurnChatTests
     [Fact]
     public async Task Multi_Turn_History_Is_Retained_Without_Reprocessing()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         // Reuse a single sampler across turns so penalty history carries over the
@@ -121,7 +117,6 @@ public class MultiTurnChatTests
     [Fact]
     public async Task After_ClearKvCache_New_Conversation_Does_Not_Leak_Prior_Context()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler1 = new LlamaSamplerBuilder()
@@ -163,7 +158,6 @@ public class MultiTurnChatTests
     [Fact]
     public void Removing_Range_Reports_Success_Or_Failure()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         // Removing from an empty sequence is a no-op that succeeds.
@@ -180,7 +174,6 @@ public class MultiTurnChatTests
         // same stream as GenerateAsync with firstNewIndex=N when the KV
         // already contains the first N tokens. This is the invariant that
         // lets ChatSession skip re-decoding the common prefix each turn.
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
 
         var vocab = _fx.Model.Vocab;
         var tokens = vocab.Tokenize(
@@ -248,7 +241,6 @@ public class MultiTurnChatTests
         // stream as a single longer generation call, given identical
         // prompt tokens and identical sampler seed. This is the invariant
         // the "Continue" button rides on.
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
 
         var vocab = _fx.Model.Vocab;
         var prompt = vocab.Tokenize(
@@ -311,7 +303,6 @@ public class MultiTurnChatTests
         // decode should position its tokens starting at K, not at the
         // pre-trim length. If this test ever fails we have to switch the
         // ChatSession prefix-reuse path to explicit-position batches.
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler = new LlamaSamplerBuilder()
@@ -361,7 +352,6 @@ public class MultiTurnChatTests
     [Fact]
     public async Task Removing_Tail_Trims_Sequence_Position_Range_When_Backend_Supports_It()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler = new LlamaSamplerBuilder()

@@ -51,8 +51,6 @@ public class GenerationTests
     [Fact]
     public async Task Greedy_Generation_Produces_Plausible_Output()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
-
         // Greedy (argmax) should produce deterministic-ish output — but on CUDA
         // with an MoE model (Qwen3 A3B here) it is NOT bit-reproducible across
         // separate context instances: expert routing + kernel non-determinism
@@ -70,8 +68,6 @@ public class GenerationTests
     [Fact]
     public async Task Distribution_Generation_With_Fixed_Seed_Is_Reproducible()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
-
         var prompt = BuildPrompt(_fx.Model, "Write the word 'cat' exactly once.");
         const uint Seed = 42;
 
@@ -100,8 +96,6 @@ public class GenerationTests
     [Fact]
     public async Task Generation_Produces_Nonempty_Output_In_Under_Token_Budget()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
-
         var prompt = BuildPrompt(_fx.Model, "Say hello.");
         _fx.ResetContextFor(prompt);
 
@@ -130,7 +124,6 @@ public class GenerationTests
     [Fact]
     public async Task Penalty_Sampler_Sees_Prompt_Tokens_Tinyllama_Reference()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
         // Reference output is captured against this exact build of TinyLlama
         // (Q4_K_M, CPU). Other LLaMA-family models or Qwen would produce
         // different tokens and the assertion would fire spuriously. The
@@ -184,7 +177,6 @@ public class GenerationTests
     [Fact]
     public async Task Dry_Default_Sequence_Breakers_Match_Llama_Completion_Tinyllama_Reference()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
         if (_fx.Capabilities.SkipUnlessFamily("llama")) return;
         if (_fx.Capabilities.ParameterCount > 2_000_000_000)
         {
@@ -231,8 +223,6 @@ public class GenerationTests
     [Fact]
     public async Task Generation_Respects_Cancellation_Token()
     {
-        if (_fx.Model is null || _fx.Context is null) { _fx.SkipMessage(); return; }
-
         var prompt = BuildPrompt(_fx.Model, "Count to one thousand slowly.");
         _fx.ResetContextFor(prompt);
 
@@ -300,57 +290,28 @@ public sealed class GpuCollection : ICollectionFixture<GpuGenerationFixture>
 }
 
 /// <summary>
-/// Loads the smoke-test GGUF with full GPU offload and builds a fresh context
-/// per test (via <see cref="ResetContextFor"/>) so KV state doesn't leak
-/// between tests that share the fixture.
+/// Loads the test GGUF with all-layers offload and builds a shared context.
+/// KV cache is cleared between tests via <see cref="ResetContextFor"/> to
+/// prevent state leaking across tests in the same collection.
+/// Set <c>LLAMACPP_TEST_MODEL</c> to override the model; otherwise the default
+/// test model is downloaded automatically via <see cref="TestModelProvider"/>.
 /// </summary>
 public sealed class GpuGenerationFixture : IDisposable
 {
-    private const string DefaultModelPath = "/mnt/data/models/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf";
-
-    public LlamaModel? Model { get; }
-    public LlamaContext? Context { get; private set; }
+    public LlamaModel Model { get; }
+    public LlamaContext Context { get; }
     public ModelCapabilities Capabilities { get; }
 
     public GpuGenerationFixture()
     {
-        var path = Environment.GetEnvironmentVariable("LLAMACPP_TEST_MODEL");
-        if (string.IsNullOrWhiteSpace(path)) path = DefaultModelPath;
-        if (!File.Exists(path))
-        {
-            Capabilities = ModelCapabilities.Empty;
-            return;
-        }
-
+        var path = TestModelProvider.EnsureModelPath();
         LlamaBackend.Initialize();
         Model = new LlamaModel(path, new LlamaModelParameters
         {
-            GpuLayerCount = -1, // all layers on GPU for real generation
+            GpuLayerCount = -1, // all layers to best available backend
             UseMmap = true,
         });
-        Context = BuildContext();
-        Capabilities = ModelCapabilities.Probe(Model);
-    }
-
-    public void SkipMessage()
-    {
-        Console.WriteLine(
-            $"SKIP: Generation tests require {DefaultModelPath} (or $LLAMACPP_TEST_MODEL).");
-    }
-
-    /// <summary>
-    /// Reset KV cache so each test starts fresh. Phase 4 replaced the original
-    /// Dispose+recreate hack with a proper ClearKvCache call.
-    /// </summary>
-    public void ResetContextFor(string prompt)
-    {
-        _ = prompt;
-        Context?.ClearKvCache();
-    }
-
-    private LlamaContext BuildContext()
-    {
-        return new LlamaContext(Model!, new LlamaContextParameters
+        Context = new LlamaContext(Model, new LlamaContextParameters
         {
             ContextSize = 2048,
             LogicalBatchSize = 512,
@@ -358,11 +319,21 @@ public sealed class GpuGenerationFixture : IDisposable
             MaxSequenceCount = 1,
             OffloadKQV = true,
         });
+        Capabilities = ModelCapabilities.Probe(Model);
+    }
+
+    /// <summary>
+    /// Reset KV cache so each test starts fresh.
+    /// </summary>
+    public void ResetContextFor(string prompt)
+    {
+        _ = prompt;
+        Context.ClearKvCache();
     }
 
     public void Dispose()
     {
-        Context?.Dispose();
-        Model?.Dispose();
+        Context.Dispose();
+        Model.Dispose();
     }
 }

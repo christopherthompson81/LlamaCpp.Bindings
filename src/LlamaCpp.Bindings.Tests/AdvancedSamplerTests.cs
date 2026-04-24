@@ -75,7 +75,6 @@ public class AdvancedSamplerTests : IClassFixture<ModelFixture>
     [Fact]
     public void Dry_Requires_Vocab_And_Is_Non_Terminal()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
 
         using var s = new LlamaSamplerBuilder()
             .WithDry(
@@ -102,7 +101,6 @@ public class AdvancedSamplerTests : IClassFixture<ModelFixture>
     [Fact]
     public void Infill_Requires_Vocab()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
 
         using var s = new LlamaSamplerBuilder()
             .WithTopK(40).WithTopP(0.9f)
@@ -130,7 +128,6 @@ public class AdvancedSamplerGenerationTests
     [Fact]
     public async Task MirostatV2_Generation_Produces_Output()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         // Mirostat is a terminal — it stands in for distribution.
@@ -152,7 +149,6 @@ public class AdvancedSamplerGenerationTests
     [Fact]
     public async Task AdaptiveP_Generation_Produces_Output()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler = new LlamaSamplerBuilder()
@@ -174,7 +170,6 @@ public class AdvancedSamplerGenerationTests
     [Fact]
     public async Task Xtc_In_Chain_Produces_Output()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         _fx.Context.ClearKvCache();
 
         using var sampler = new LlamaSamplerBuilder()

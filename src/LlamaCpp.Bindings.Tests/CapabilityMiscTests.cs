@@ -51,7 +51,6 @@ public class ContextRuntimeSettingsTests
     [Fact]
     public void Thread_Counts_Are_Readable_And_Settable()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         var c = _fx.Context;
 
         int originalGen = c.ThreadCount;
@@ -70,7 +69,6 @@ public class ContextRuntimeSettingsTests
     [Fact]
     public void PoolingType_Reports_Default()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         var p = _fx.Context.PoolingType;
         // Any valid enum value. Generative models typically report None or Unspecified.
         Assert.InRange((int)p, -1, 4);
@@ -79,7 +77,6 @@ public class ContextRuntimeSettingsTests
     [Fact]
     public void SequenceContextSize_Matches_Or_Below_ContextSize()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         var c = _fx.Context;
         Assert.True(c.SequenceContextSize > 0);
         Assert.True(c.SequenceContextSize <= c.ContextSize);
@@ -88,14 +85,12 @@ public class ContextRuntimeSettingsTests
     [Fact]
     public void Synchronize_Does_Not_Throw()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         _fx.Context.Synchronize();
     }
 
     [Fact]
     public void Runtime_Flag_Setters_Run()
     {
-        if (_fx.Context is null) { _fx.SkipMessage(); return; }
         var c = _fx.Context;
         // We don't assert behavioural consequences here — each setter just
         // mutates a flag the next decode consults. Verifying the flags'
@@ -110,7 +105,6 @@ public class ContextRuntimeSettingsTests
     [Fact]
     public void DetokenizeNative_Roundtrip()
     {
-        if (_fx.Context is null || _fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         const string text = "Hello, world.";

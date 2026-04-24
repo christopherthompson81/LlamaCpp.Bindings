@@ -6,21 +6,12 @@ namespace LlamaCpp.Bindings.Tests;
 /// actually dlopen libllama.so — until this passes, everything upstream
 /// (struct layouts, P/Invoke signatures) is theoretical.
 ///
-/// The test is gated on <c>LLAMACPP_TEST_MODEL</c> (default
-/// <c>/mnt/data/models/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf</c>). If the file is
-/// missing the test skips with a useful message rather than failing the
-/// suite — CI rigs and other dev machines shouldn't need this 17GB model.
+/// The model is resolved via <see cref="TestModelProvider"/>: if
+/// <c>LLAMACPP_TEST_MODEL</c> is set it is used (missing file = hard failure);
+/// otherwise the default 0.6B test model is downloaded automatically.
 /// </summary>
 public class SmokeTests
 {
-    private const string DefaultModelPath = "/mnt/data/models/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf";
-
-    private static string? ResolveModelPath()
-    {
-        var path = Environment.GetEnvironmentVariable("LLAMACPP_TEST_MODEL");
-        if (string.IsNullOrWhiteSpace(path)) path = DefaultModelPath;
-        return File.Exists(path) ? path : null;
-    }
 
     [Fact]
     public void Backend_Initializes_And_Shuts_Down_Cleanly()
@@ -87,20 +78,10 @@ public class SmokeTests
     [Fact]
     public void Can_Load_Model_Create_Context_And_Dispose()
     {
-        var modelPath = ResolveModelPath();
-        if (modelPath is null)
-        {
-            // xUnit 2.x doesn't support dynamic skip via Assert. Log and pass — the
-            // test runner's output will make it clear this was conditionally bypassed.
-            Console.WriteLine(
-                $"SKIP: Smoke test model not found at {DefaultModelPath}. " +
-                $"Set LLAMACPP_TEST_MODEL to a GGUF path to actually exercise load+create+dispose.");
-            return;
-        }
-
+        var modelPath = TestModelProvider.EnsureModelPath();
         LlamaBackend.Initialize((lvl, msg) => TestOutput.LastLog = (lvl, msg));
 
-        using var model = new LlamaModel(modelPath!, new LlamaModelParameters
+        using var model = new LlamaModel(modelPath, new LlamaModelParameters
         {
             // Keep VRAM pressure light for the smoke test; Phase 3+ will exercise full offload.
             GpuLayerCount = 0,

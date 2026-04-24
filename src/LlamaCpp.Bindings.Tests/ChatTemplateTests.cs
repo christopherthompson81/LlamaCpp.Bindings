@@ -17,7 +17,7 @@ public class ChatTemplateTests : IClassFixture<ModelFixture>
             Console.WriteLine($"SKIP: {_fx.Capabilities.DisplayLabel} ships no chat template.");
             return;
         }
-        var tmpl = _fx.Model!.GetChatTemplate();
+        var tmpl = _fx.Model.GetChatTemplate();
         Assert.False(string.IsNullOrWhiteSpace(tmpl));
     }
 
@@ -27,7 +27,7 @@ public class ChatTemplateTests : IClassFixture<ModelFixture>
         if (_fx.Capabilities.SkipUnlessFamily("qwen2", "qwen3")) return;
         // Qwen uses <|im_start|>/<|im_end|> ChatML-style tokens. Pinned so a
         // future llama.cpp change to chat-template extraction would surface here.
-        var tmpl = _fx.Model!.GetChatTemplate();
+        var tmpl = _fx.Model.GetChatTemplate();
         Assert.False(string.IsNullOrWhiteSpace(tmpl));
         Assert.True(tmpl!.Contains("im_start", StringComparison.Ordinal) ||
                     tmpl.Contains("im_end", StringComparison.Ordinal),
@@ -37,7 +37,6 @@ public class ChatTemplateTests : IClassFixture<ModelFixture>
     [Fact]
     public void Apply_Template_Produces_Prompt_Containing_Message_Content()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var tmpl = _fx.Model.GetChatTemplate();
         Assert.NotNull(tmpl);
 
@@ -56,7 +55,6 @@ public class ChatTemplateTests : IClassFixture<ModelFixture>
     [Fact]
     public void Apply_Template_With_And_Without_Assistant_Prefix_Differ()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var tmpl = _fx.Model.GetChatTemplate();
         Assert.NotNull(tmpl);
 
@@ -77,7 +75,6 @@ public class ChatTemplateTests : IClassFixture<ModelFixture>
     [Fact]
     public void Template_Output_Tokenizes_With_parseSpecial_true()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var tmpl = _fx.Model.GetChatTemplate();
         Assert.NotNull(tmpl);
 

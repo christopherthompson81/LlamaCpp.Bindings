@@ -17,7 +17,6 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void VocabType_Is_Known()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         // Qwen3 is byte-level BPE. But this test is really about "did we plumb
         // the enum correctly" — accept any of the known types.
         var v = _fx.Model.Vocab.VocabType;
@@ -33,7 +32,7 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
         // in the vocab. We already observed this during Phase 2 testing — this
         // test pins that observation so a future llama.cpp change would surface
         // it via a test failure.
-        var v = _fx.Model!.Vocab;
+        var v = _fx.Model.Vocab;
         Assert.NotNull(v.Bos);
         Assert.False(v.AddsBosAutomatically,
             "Qwen's tokenizer_config has add_bos_token=false; if this fires, either the model changed or llama.cpp's reading of the config did.");
@@ -42,7 +41,6 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void GetTokenText_Returns_NonEmpty_For_Content_Tokens()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         var tokens = v.Tokenize("hello", addSpecial: false, parseSpecial: false);
@@ -57,7 +55,6 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void GetTokenAttributes_Marks_Content_Tokens_As_Normal()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         var tokens = v.Tokenize("word", addSpecial: false, parseSpecial: false);
@@ -75,7 +72,6 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void GetTokenAttributes_Marks_Eos_As_Control()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
         var terminator = v.Eos ?? v.Eot;
         Assert.NotNull(terminator);
@@ -89,7 +85,6 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void GetTokenScore_Is_Finite()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
         var tokens = v.Tokenize("test", addSpecial: false, parseSpecial: false);
         foreach (var t in tokens)
@@ -102,7 +97,6 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void Mask_Token_Is_Null_For_NonMLM_Model()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         // Qwen3 isn't a masked-LM model.
         Assert.Null(_fx.Model.Vocab.Mask);
     }
@@ -110,7 +104,6 @@ public class VocabAdvancedTests : IClassFixture<ModelFixture>
     [Fact]
     public void FIM_Tokens_Plumbing_Works()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         // Qwen3 is trained for FIM too (surprising — usually only code models

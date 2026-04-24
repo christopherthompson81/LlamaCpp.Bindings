@@ -13,7 +13,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void Architecture_Accessors_Report_Sane_Values()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var m = _fx.Model;
 
         Assert.True(m.AttentionHeadCount > 0);
@@ -29,7 +28,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void Size_And_ParameterCount_Match_File()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var m = _fx.Model;
 
         // Size should roughly equal the GGUF file size on disk. llama_model_size
@@ -46,7 +44,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void Capability_Flags_Report_Decoder_Only()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var m = _fx.Model;
 
         // Qwen3 is decoder-only, autoregressive, hybrid-attention MoE.
@@ -64,7 +61,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void DecoderStartToken_Is_Null_For_DecoderOnly_Models()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         // Encoder-decoder models (T5 etc.) define this; Qwen3 does not.
         Assert.Null(_fx.Model.DecoderStartToken);
     }
@@ -72,7 +68,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void ClassifierOutputCount_Is_Nonnegative_And_Label_Lookup_Is_Bounded()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var m = _fx.Model;
 
         // llama_model_n_cls_out counts classifier heads for reranker / classifier
@@ -88,7 +83,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void Description_Is_Populated()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         // llama_model_desc emits something like "qwen3moe 35B A3B IQ4_XS" — don't
         // hard-code the string, just assert non-empty and contains recognisable
         // tokens from the architecture or quant type.
@@ -98,7 +92,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void RopeType_Is_Sensible()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var m = _fx.Model;
 
         // Qwen3.6-35B-A3B uses IMRope (interleaved M-RoPE, value 40). Asserting
@@ -112,7 +105,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void Metadata_Dictionary_Is_Populated_And_Contains_Well_Known_Keys()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var md = _fx.Model.Metadata;
 
         Assert.True(md.Count > 10, "GGUF metadata should have many keys");
@@ -124,7 +116,6 @@ public class ModelMetadataTests : IClassFixture<ModelFixture>
     [Fact]
     public void GetMetadata_Single_Key_Matches_Dictionary_Entry()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var md = _fx.Model.Metadata;
         const string key = "general.architecture";
         Assert.Equal(md[key], _fx.Model.GetMetadata(key));

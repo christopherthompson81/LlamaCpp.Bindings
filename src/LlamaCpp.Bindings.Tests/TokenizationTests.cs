@@ -5,8 +5,6 @@ namespace LlamaCpp.Bindings.Tests;
 
 /// <summary>
 /// Phase 2 tests: tokenizer round-trip, special token accessors, EOG detection.
-/// Shares the smoke-test model fixture — gated on availability so the suite
-/// stays green on machines without the GGUF.
 /// </summary>
 public class TokenizationTests : IClassFixture<ModelFixture>
 {
@@ -24,7 +22,6 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void Vocab_Reports_Token_Count_And_Special_Tokens()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         Assert.True(v.TokenCount > 0, "vocab should have at least one token");
@@ -36,8 +33,7 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void Tokenize_Roundtrip_Preserves_Content()
     {
-        if (_fx.Capabilities.SkipUnlessLoaded()) return;
-        var v = _fx.Model!.Vocab;
+        var v = _fx.Model.Vocab;
 
         // Tokenizer families differ in the edge: Qwen BPE round-trips ASCII
         // verbatim, LLaMA SentencePiece adds a leading space on detokenize
@@ -57,7 +53,6 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void Tokenize_AddSpecial_Flag_Is_Honoured_Or_Noop()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         // Whether addSpecial actually prepends BOS depends on the model's
@@ -80,7 +75,6 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void IsEndOfGeneration_Returns_True_For_Eos_Or_Eot()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         var terminator = v.Eos ?? v.Eot ?? throw new InvalidOperationException("model has no EOS or EOT");
@@ -94,7 +88,6 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void TokenToPiece_Returns_NonEmpty_For_Content_Tokens()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         var tokens = v.Tokenize("The quick brown fox.", addSpecial: false, parseSpecial: false);
@@ -108,7 +101,6 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void Tokenize_Handles_Empty_Input()
     {
-        if (_fx.Model is null) { _fx.SkipMessage(); return; }
         var v = _fx.Model.Vocab;
 
         // With addSpecial=false, empty input should produce zero tokens.
@@ -119,8 +111,7 @@ public class TokenizationTests : IClassFixture<ModelFixture>
     [Fact]
     public void Tokenize_Handles_Long_Input_Needing_Retry()
     {
-        if (_fx.Capabilities.SkipUnlessLoaded()) return;
-        var v = _fx.Model!.Vocab;
+        var v = _fx.Model.Vocab;
 
         // The point of this test is that the managed Tokenize() correctly
         // handles the "buffer too small, retry with reported size" path:
@@ -139,43 +130,27 @@ public class TokenizationTests : IClassFixture<ModelFixture>
 }
 
 /// <summary>
-/// Shared model fixture. Loads the smoke-test GGUF once for the whole class;
-/// exposes Model=null when the file is missing so individual tests can skip.
+/// Shared model fixture. Loads the test GGUF once per class. If no model is
+/// available it is downloaded automatically via <see cref="TestModelProvider"/>.
+/// Set <c>LLAMACPP_TEST_MODEL</c> to override the path.
 /// </summary>
 public sealed class ModelFixture : IDisposable
 {
-    private const string DefaultModelPath = "/mnt/data/models/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf";
-
-    public LlamaModel? Model { get; }
+    public LlamaModel Model { get; }
     public ModelCapabilities Capabilities { get; }
 
     public ModelFixture()
     {
-        var path = Environment.GetEnvironmentVariable("LLAMACPP_TEST_MODEL");
-        if (string.IsNullOrWhiteSpace(path)) path = DefaultModelPath;
-        if (!File.Exists(path))
-        {
-            Capabilities = ModelCapabilities.Empty;
-            return;
-        }
-
+        var path = TestModelProvider.EnsureModelPath();
         LlamaBackend.Initialize();
         Model = new LlamaModel(path, new LlamaModelParameters
         {
-            // Tokenizer + chat-template don't need GPU offload — skip to keep
-            // VRAM free and startup fast.
+            // Tokenizer + chat-template don't need GPU offload.
             GpuLayerCount = 0,
             UseMmap = true,
         });
         Capabilities = ModelCapabilities.Probe(Model);
     }
 
-    public void SkipMessage()
-    {
-        Console.WriteLine(
-            $"SKIP: Smoke test model not found at {DefaultModelPath}. " +
-            $"Set LLAMACPP_TEST_MODEL to a GGUF path to exercise Phase 2 tests.");
-    }
-
-    public void Dispose() => Model?.Dispose();
+    public void Dispose() => Model.Dispose();
 }
