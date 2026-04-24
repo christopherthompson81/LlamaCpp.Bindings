@@ -29,8 +29,10 @@ import argparse
 import dataclasses
 import hashlib
 import os
+import platform as _platform
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import urllib.error
@@ -79,6 +81,98 @@ def read_pinned_tag() -> str:
         f"Could not parse a release tag from {VERSION_FILE}.\n"
         "Pass --tag explicitly."
     )
+
+
+def detect_rid() -> str:
+    """Detect the .NET RID for the current machine."""
+    sys_name = _platform.system()
+    machine = _platform.machine().lower()
+    arch = "arm64" if machine in ("arm64", "aarch64") else "x64"
+    mapping = {"Windows": "win", "Darwin": "osx", "Linux": "linux"}
+    if sys_name not in mapping:
+        raise SystemExit(
+            f"Cannot auto-detect RID for OS '{sys_name}'. Pass --platform explicitly."
+        )
+    return f"{mapping[sys_name]}-{arch}"
+
+
+# CUDA asset names in ascending version order.  The highest entry whose minimum
+# toolkit version is satisfied by the detected install is chosen.
+_CUDA_ASSETS: list[tuple[tuple[int, int], str]] = [
+    ((12, 0), "cuda-12.4"),
+    ((13, 0), "cuda-13.1"),
+]
+
+
+def _detect_cuda_toolkit_version() -> tuple[int, int] | None:
+    """Return (major, minor) of the installed CUDA toolkit, or None."""
+    if shutil.which("nvcc"):
+        r = subprocess.run(
+            ["nvcc", "--version"], capture_output=True, text=True, check=False
+        )
+        m = re.search(r"release (\d+)\.(\d+)", r.stdout)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    # nvidia-smi reports the maximum CUDA version the driver supports —
+    # a reasonable proxy when nvcc isn't installed.
+    if shutil.which("nvidia-smi"):
+        r = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, check=False
+        )
+        m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", r.stdout)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    return None
+
+
+def detect_backend(rid: str) -> str:
+    """Best-effort detect the best available backend for the current machine.
+
+    On Linux with CUDA the function falls back to "cpu" and prints a warning
+    because llama.cpp does not publish Linux CUDA prebuilts; the caller should
+    use --from-local instead.
+    """
+    # macOS: Metal is always the right choice.
+    if rid.startswith("osx-"):
+        return "metal"
+
+    # NVIDIA GPU present?
+    if shutil.which("nvidia-smi"):
+        r = subprocess.run(
+            ["nvidia-smi", "-L"], capture_output=True, text=True, check=False
+        )
+        if r.returncode == 0 and "GPU" in r.stdout:
+            if rid.startswith("linux-"):
+                print(
+                    "  WARNING: NVIDIA GPU detected, but llama.cpp does not publish\n"
+                    "           Linux CUDA prebuilts. Fetching CPU binaries instead.\n"
+                    "           For CUDA, use: --from-local <your-build-dir>",
+                    file=sys.stderr,
+                )
+                return "cpu"
+            # Windows: pick the matching CUDA asset.
+            cuda_ver = _detect_cuda_toolkit_version()
+            backend = "cuda-12.4"  # conservative default
+            if cuda_ver:
+                for min_ver, name in _CUDA_ASSETS:
+                    if cuda_ver >= min_ver:
+                        backend = name
+            return backend
+
+    # AMD / ROCm?
+    if shutil.which("rocm-smi") or Path("/dev/kfd").exists():
+        return "rocm-7.2" if rid.startswith("linux-") else "hip-radeon"
+
+    # Vulkan available?
+    if shutil.which("vulkaninfo"):
+        r = subprocess.run(
+            ["vulkaninfo", "--summary"],
+            capture_output=True, text=True, check=False,
+        )
+        if r.returncode == 0:
+            return "vulkan"
+
+    return "cpu"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -429,7 +523,10 @@ def main(argv: list[str]) -> int:
         description="Fetch llama.cpp native binaries (prebuilt release OR local build).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--platform", required=True, help=f"RID, one of: {', '.join(sorted(SUPPORTED_RIDS))}")
+    ap.add_argument(
+        "--platform",
+        help=f"RID (default: auto-detect). One of: {', '.join(sorted(SUPPORTED_RIDS))}",
+    )
 
     src_group = ap.add_mutually_exclusive_group(required=False)
     src_group.add_argument(
@@ -444,8 +541,9 @@ def main(argv: list[str]) -> int:
 
     ap.add_argument(
         "--backend",
-        help="release mode: backend name (cpu, cuda-12.4, cuda-13.1, vulkan, "
-             "hip-radeon, sycl, metal, rocm-7.2, kleidiai)",
+        help="release mode: backend name (default: auto-detect). "
+             "Options: cpu, cuda-12.4, cuda-13.1, vulkan, "
+             "hip-radeon, sycl, metal, rocm-7.2, kleidiai",
     )
     ap.add_argument(
         "--with-cudart", metavar="VERSION",
@@ -455,28 +553,33 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--force", action="store_true", help="release mode: re-download even if cached")
     args = ap.parse_args(argv)
 
+    rid = args.platform or detect_rid()
+    if not args.platform:
+        print(f"  detected platform: {rid}")
+
     if args.from_local:
         if args.backend or args.with_cudart or args.force:
             print("warning: --backend/--with-cudart/--force ignored in local-build mode", file=sys.stderr)
-        copy_from_local(args.from_local, args.platform)
+        copy_from_local(args.from_local, rid)
         return 0
 
     tag = args.tag or read_pinned_tag()
     if not args.tag:
         print(f"  using pinned version: {tag}  (from {VERSION_FILE.relative_to(REPO_ROOT)})")
 
+    backend = args.backend or detect_backend(rid)
     if not args.backend:
-        ap.error("--backend is required in release mode (or pass --from-local)")
+        print(f"  detected backend:  {backend}")
 
-    fetch_one(tag, args.platform, args.backend, args.force)
+    fetch_one(tag, rid, backend, args.force)
 
     if args.with_cudart:
-        if not args.platform.startswith("win-"):
+        if not rid.startswith("win-"):
             raise SystemExit("--with-cudart only applies to Windows platforms")
-        print(f"[{args.platform} / cudart-{args.with_cudart}] fetching CUDA runtime bundle")
+        print(f"[{rid} / cudart-{args.with_cudart}] fetching CUDA runtime bundle")
         asset = cudart_asset(tag, args.with_cudart)
         archive = download(tag, asset, args.force)
-        out_dir = RUNTIMES_DIR / args.platform / "native"
+        out_dir = RUNTIMES_DIR / rid / "native"
         libs = extract_libs(archive, asset.archive_kind, out_dir)
         for p in sorted(libs):
             print(f"  -> {p.relative_to(REPO_ROOT)}  ({p.stat().st_size / 1e6:.2f} MB)")
