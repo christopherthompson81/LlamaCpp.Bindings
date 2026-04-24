@@ -72,22 +72,39 @@
                           RowSpacing="10">
                         <TextBlock Grid.Column="0" Grid.Row="0" Text="Name"
                                    VerticalAlignment="Center" />
-                        <TextBox Grid.Column="1" Grid.Row="0"
-                                 Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftName, Mode=TwoWay}" />
+                        <StackPanel Grid.Column="1" Grid.Row="0" Spacing="4">
+                            <TextBox Classes.invalid="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).IsNameInvalid}"
+                                     Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftName, Mode=TwoWay}" />
+                            <TextBlock Classes="xs"
+                                       Foreground="{DynamicResource Destructive}"
+                                       IsVisible="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).IsNameInvalid}"
+                                       Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).NameError}" />
+                        </StackPanel>
 
                         <TextBlock Grid.Column="0" Grid.Row="1" Text="URL"
                                    VerticalAlignment="Center" />
-                        <TextBox Grid.Column="1" Grid.Row="1"
-                                 PlaceholderText="https://example.com/mcp"
-                                 Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftUrl, Mode=TwoWay}" />
+                        <StackPanel Grid.Column="1" Grid.Row="1" Spacing="4">
+                            <TextBox Classes.invalid="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).IsUrlInvalid}"
+                                     PlaceholderText="https://example.com/mcp"
+                                     Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftUrl, Mode=TwoWay}" />
+                            <TextBlock Classes="xs"
+                                       Foreground="{DynamicResource Destructive}"
+                                       IsVisible="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).IsUrlInvalid}"
+                                       Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).UrlError}" />
+                        </StackPanel>
 
                         <TextBlock Grid.Column="0" Grid.Row="2" Text="Headers"
                                    VerticalAlignment="Top" Margin="0,4,0,0" />
                         <StackPanel Grid.Column="1" Grid.Row="2" Spacing="4">
                             <TextBox AcceptsReturn="True" TextWrapping="Wrap"
                                      MinHeight="80" MaxHeight="200"
+                                     Classes.invalid="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).IsHeadersInvalid}"
                                      PlaceholderText="One per line — Key: value"
                                      Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).DraftHeaders, Mode=TwoWay}" />
+                            <TextBlock Classes="xs"
+                                       Foreground="{DynamicResource Destructive}"
+                                       IsVisible="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).IsHeadersInvalid}"
+                                       Text="{Binding $parent[UserControl].((vm:McpSettingsViewModel)DataContext).HeadersError}" />
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
                                        Text="e.g. Authorization: Bearer abc123 — sent on every request to this server." />
                         </StackPanel>

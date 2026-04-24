@@ -29,6 +29,33 @@ public partial class McpSettingsViewModel : ObservableObject
     [ObservableProperty] private string _draftUrl = string.Empty;
     [ObservableProperty] private string _draftHeaders = string.Empty;
 
+    // Per-field validation state. Non-null message = invalid. The
+    // IsXxxInvalid bools exist so the XAML can drive both the inline error
+    // TextBlock and a Classes.invalid toggle on the TextBox from the same
+    // signal.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsNameInvalid), nameof(HasValidationErrors))]
+    [NotifyCanExecuteChangedFor(nameof(SaveSelectedCommand), nameof(ReconnectServerCommand),
+                                 nameof(ToggleEnabledCommand))]
+    private string? _nameError;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsUrlInvalid), nameof(HasValidationErrors))]
+    [NotifyCanExecuteChangedFor(nameof(SaveSelectedCommand), nameof(ReconnectServerCommand),
+                                 nameof(ToggleEnabledCommand))]
+    private string? _urlError;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsHeadersInvalid), nameof(HasValidationErrors))]
+    [NotifyCanExecuteChangedFor(nameof(SaveSelectedCommand), nameof(ReconnectServerCommand),
+                                 nameof(ToggleEnabledCommand))]
+    private string? _headersError;
+
+    public bool IsNameInvalid => !string.IsNullOrEmpty(NameError);
+    public bool IsUrlInvalid => !string.IsNullOrEmpty(UrlError);
+    public bool IsHeadersInvalid => !string.IsNullOrEmpty(HeadersError);
+    public bool HasValidationErrors => IsNameInvalid || IsUrlInvalid || IsHeadersInvalid;
+
     /// <summary>Status line shown at the bottom of the tab (save/connection feedback).</summary>
     [ObservableProperty] private string _status = string.Empty;
 
@@ -56,6 +83,41 @@ public partial class McpSettingsViewModel : ObservableObject
         DraftUrl = value.Config.Url;
         DraftHeaders = string.Join("\n",
             value.Config.Headers.Select(kv => $"{kv.Key}: {kv.Value}"));
+    }
+
+    partial void OnDraftNameChanged(string value) =>
+        NameError = string.IsNullOrWhiteSpace(value) ? "Name is required." : null;
+
+    partial void OnDraftUrlChanged(string value) => UrlError = ValidateUrl(value);
+
+    partial void OnDraftHeadersChanged(string value) => HeadersError = ValidateHeaders(value);
+
+    private static string? ValidateUrl(string value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0) return "URL is required.";
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            return "Not a valid URL.";
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            return "URL must use http:// or https://.";
+        return null;
+    }
+
+    private static string? ValidateHeaders(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        int lineNo = 0;
+        foreach (var raw in value.Split('\n'))
+        {
+            lineNo++;
+            var line = raw.Trim();
+            if (line.Length == 0) continue;
+            var colon = line.IndexOf(':');
+            if (colon <= 0) return $"Line {lineNo}: expected \"Key: value\".";
+            if (line[..colon].Trim().Length == 0)
+                return $"Line {lineNo}: header key is empty.";
+        }
+        return null;
     }
 
     [RelayCommand]
@@ -93,7 +155,7 @@ public partial class McpSettingsViewModel : ObservableObject
         Status = $"Deleted '{target.Config.Name}'.";
     }
 
-    [RelayCommand(CanExecute = nameof(HasSelection))]
+    [RelayCommand(CanExecute = nameof(CanCommitDrafts))]
     private async Task SaveSelectedAsync()
     {
         if (SelectedServer is null) return;
@@ -102,7 +164,7 @@ public partial class McpSettingsViewModel : ObservableObject
         Status = $"Saved '{SelectedServer.Config.Name}'.";
     }
 
-    [RelayCommand(CanExecute = nameof(HasSelection))]
+    [RelayCommand(CanExecute = nameof(CanCommitDrafts))]
     private async Task ReconnectServerAsync()
     {
         if (SelectedServer is null) return;
@@ -119,7 +181,7 @@ public partial class McpSettingsViewModel : ObservableObject
         };
     }
 
-    [RelayCommand(CanExecute = nameof(HasSelection))]
+    [RelayCommand(CanExecute = nameof(CanCommitDrafts))]
     private async Task ToggleEnabledAsync()
     {
         if (SelectedServer is null) return;
@@ -157,6 +219,7 @@ public partial class McpSettingsViewModel : ObservableObject
     }
 
     private bool HasSelection() => SelectedServer is not null;
+    private bool CanCommitDrafts() => HasSelection() && !HasValidationErrors;
 
     /// <summary>
     /// Parse the multi-line "Key: value" textbox into a case-insensitive dict.

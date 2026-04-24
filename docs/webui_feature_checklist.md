@@ -7,6 +7,7 @@ Reference snapshot of llama.cpp/tools/server/webui as of commit `1d6d4cf7a536104
 - `- [x]` **done** — implemented and wired up.
 - `- [ ]` **TODO** — actionable now. No precursor needed.
 - `- [~]` **deferred** — needs a precursor first (multimodal bindings, MCP client, tree-shaped transcript, etc.). The precursor is called out in the item's annotation.
+- `- [!]` **won't implement** — deliberately out of scope; we considered it and decided not to pursue. Different from deferred (which we intend to revisit) and N/A (which doesn't translate at all).
 - `- [-]` **N/A** — doesn't translate to a desktop Avalonia app (hash routing, mobile breakpoints, server-side knobs, in-browser-only concerns).
 
 ## Source layout
@@ -95,7 +96,7 @@ src/
 - [x] **Image display from attachments** — attached images render as a `WrapPanel` thumbnail row above the bubble content in the user bubble template, plus a matching 72×72 strip above the compose text box. `byte[] → Avalonia.Bitmap` via `Services/AttachmentThumbnailConverter.cs` (registered as `AttachmentThumbnail` resource in `App.axaml`). Conversations persist attachments inline — `System.Text.Json` serializes `byte[]` as base64 automatically, so a round-trip through `conversations.json` preserves the payload.
 - [x] **Image error fallback** — `AttachmentThumbnailConverter` returns null on decode exception; the `Image` control renders as an empty 72×72 rectangle (with the `Muted` background still visible) without taking down the bubble.
 - [x] **GFM tables** — rendered as a bordered Grid with Auto columns. Header row detected via Markdig's `TableRow.IsHeader`, emitted SemiBold.
-- [~] **Footnotes** — deferred. Not in our `MarkdownPipelineBuilder` extensions; webui doesn't support them either. Low priority.
+- [!] **Footnotes** — not implementing. webui doesn't support them either, and no user has asked. If this ever lands it's a one-line `UseFootnotes()` on the pipeline + two AST arms in `MarkdownRenderer`.
 - [x] **Mermaid diagrams** — flowchart v1 lands in `Services/Mermaid/`. `FlowchartParser` covers `graph / flowchart TD/TB/BT/LR/RL` headers, rectangle / rounded / stadium / circle / rhombus node shapes, `-->` / `---` / `-.->` / `==>` edges, pipe-form edge labels, chains, inline node defs, comments. `FlowchartLayout` runs a small Sugiyama (DFS back-edge cycle removal, longest-path layering, barycenter crossing reduction, evenly-spaced coords per-layer-centred). `FlowchartRenderer` walks the laid-out graph into an Avalonia `Canvas` with `Rectangle`/`Ellipse`/`Path` shapes + cubic Bezier edges whose tangent axis matches the flowchart direction + tangent-aligned arrowheads. Theme-aware brushes throughout. Parser + layout are Avalonia-free (36 unit tests in the bindings test project). Deferred: subgraphs, `A & B --> C` shorthand, obstacle-aware edge routing (edges can cross unrelated nodes when siblings converge — [#11](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/11)), and the other graph/linear/chart diagram types — the renderer is structured to accept those as node-template + edge-decorator registries once prioritised.
 - [x] **Streaming cursor/indicator** — `MarkdownView` exposes an `IsStreaming` StyledProperty; bubble template binds it from `MessageViewModel.IsStreaming`. When true, an `InlineUIContainer(TextBlock.cursor)` carrying `▌` is appended to the live tail. Blink animation (1s cycle, opacity 1 → 0.2 → 1) lives on the `TextBlock.cursor` style in `Theme/Controls.axaml`.
 - [x] **HTML sanitisation** — inert by construction: `HtmlInline` renders the raw tag string as literal text, so injected `<script>` etc. never becomes a control.
@@ -107,7 +108,7 @@ src/
 - [x] **Edit message** — inline edit surface (TextBox + Save / Cancel) replaces the read-only bubble body while `MessageViewModel.IsEditing`. On Save: user message → truncate downstream + regenerate; assistant message → overwrite in place. `EditDraft` is the buffer; `Content` only commits on Save.
 - [x] **Regenerate response** — `RegenerateMessageCommand` truncates the transcript starting at the target message (or right after, if the target was a user turn), `ClearKv()`s the session, and re-enters `GenerateAssistantReplyAsync`. Extracted from `SendAsync` so both share the same streaming path.
 - [x] **Continue generation** — `ContinueMessageCommand` on `MainWindowViewModel`, Continue button in the assistant bubble's action bar. Routes to `ChatSession.StreamContinuationAsync` which trims the last cached token from the KV and re-decodes it via the back-off-by-one path in `LlamaGenerator` so sampler priming happens against the full cached history. Only the *last* assistant message can be extended — clicking it on an older bubble surfaces a toast; extending an older message would require re-decoding the intervening transcript which the v1 flow doesn't cover.
-- [x] **Delete message** — `DeleteMessageCommand` removes the single clicked message (not downstream) and clears the KV cache. No confirmation dialog yet.
+- [x] **Delete message** — `DeleteMessageCommand` clears the KV cache and runs through a `DialogService.ConfirmAsync` prompt whose choices depend on the tree shape around the target (see *Message deletion dialog* below).
 - [x] **Branch navigation** — compact `‹ N/M ›` pill in each bubble header when `HasSiblings` is true. `SwitchPrevSibling` / `SwitchNextSibling` commands on `MainWindowViewModel` cycle through the siblings; `ConversationViewModel.SwitchToSibling` walks down to the most-recently-added leaf of the chosen branch so switching restores the sub-path through that branch, not just the single turn. Clears the KV cache on switch — next turn re-prefills through the prefix-cache path.
 - [x] **Fork conversation** — effectively covered by the tree + sibling-nav pair. Retry on an assistant creates a sibling reply under the same user turn; editing a user message adds a sibling user turn + regenerates under it. Both preserve the original branch. A dedicated "duplicate up to here into a new conversation" command is still a nice-to-have but not load-bearing.
 - [x] **Message deletion dialog** — `DialogService.ConfirmAsync` + `ConfirmDialog` (multi-choice). `DeleteMessageAsync` skips the prompt when there's nothing downstream; otherwise offers Cancel / Just this / This + N after.
@@ -131,8 +132,8 @@ src/
 ### 6. Chat settings
 
 - [x] **Settings sidebar panel** — `SettingsWindow.axaml` — modal `ShowDialog(owner)`, left-placed tab strip with Profiles + Display. Header with "Settings" title, footer with Save/Close + status line.
-- [~] **General tab** — N/A shape. Theme/API-key/paste-threshold/PDF-as-image are web-only concerns; System Message promoted to its own section inside ProfileEditorView (per-profile instead of global). "Continue button" deferred with continue-generation itself.
-- [x] **Display tab** — three toggles, all wired: `AutoScroll`, `ShowMessageStats`, `ShowReasoningInProgress`. Code-block theme and copy-as-plain-text deferred until we add the code-block toolbar. `AppSettings` record + `AppSettingsStore` persist to `app-settings.json` alongside profiles.
+- [-] **General tab** — N/A shape. Theme/API-key/paste-threshold/PDF-as-image are web-only concerns; System Message lives per-profile inside ProfileEditorView instead of globally; the Continue button it hinted at shipped as the per-assistant-bubble Continue action (see §4).
+- [x] **Display tab** — four live-preference switches: `AutoScroll`, `ShowMessageStats`, `ShowReasoningInProgress`, `HighAccessibilityMode`. Rendered with the `ToggleButton.switch` style (animated pill + sliding thumb). Theme picker is its own row above. `AppSettings` record + `AppSettingsStore` persist to `app-settings.json` alongside profiles. Code-block theme and copy-as-plain-text deferred until we add the code-block toolbar.
 - [x] **Sampling tab** — already implemented in `Views/SamplerPanelView.axaml` (embedded inside ProfileEditorView): temperature + dynatemp, top-k/p, min-p, typical, top-n-σ, XTC, DRY, repetition/frequency/presence penalties.
 - [x] **Advanced tab** — merged with Sampling: seed, dynamic-temp range/exponent, mirostat v1/v2 + tau/eta, grammar (GBNF). "Tokens to keep" + "ignore EOS" deferred (both require LlamaGenerator API extensions).
 - [x] **Tools/MCP tab** — third tab in `SettingsWindow`. `Views/McpSettingsView.axaml` renders server list + editor with URL/Headers/enable controls, live connection status, and an expandable per-tool view showing each tool's JSON input schema.
@@ -173,8 +174,8 @@ This whole section is shaped by webui's server-side model-list model. We use per
 - [-] **Model search/filter** — N/A. Few-profile case; a search box is overkill.
 - [-] **Grouped model list** — N/A.
 - [-] **Model option** — N/A.
-- [~] **Vision modality badge** — deferred. `ChatSession.SupportsImages` / `MtmdContext.SupportsVision` already expose the capability flag; a 👁 badge next to the profile name in the toolbar is a quick UI pass still to do. The paperclip button's enabled state already implicitly signals vision capability.
-- [~] **Audio modality badge** — deferred. `ChatSession.SupportsAudio` exposes the capability and the compose paperclip is now gated on `CanAttachMedia` (images OR audio), so the enable-state signals audio-capable models implicitly. A dedicated 🎵 badge next to the profile name is a polish pass still to do.
+- [x] **Vision modality badge** — 👁 pill next to the profile name in the toolbar, `IsVisible` bound to `CanAttachImages` (`Session?.SupportsImages == true`). `ProfileDisplayName` was split out of `ModelSummary` on the VM so the badge can sit between the name and the info tail.
+- [x] **Audio modality badge** — 🎵 pill, same pattern as the vision badge, bound to `CanAttachAudio`. Omni models show both badges side-by-side; unloaded state shows neither (the strip hides via the empty `ProfileDisplayName`).
 - [x] **Model info dialog** — `Views/ModelInfoDialog.cs`. File → Model info… (disabled when no model is loaded). Shows a summary block (profile / filename / description / parameter count / file size / training context / layers / embedding dim / capabilities / vocab size / template presence) plus the full GGUF key/value bag in a scrollable lower table. Long values clipped to 400 chars so the embedded Jinja template doesn't blow up the dialog.
 - [-] **Model not available dialog** — N/A. We read from a file path; "not available" = file missing, which we already report in the status bar.
 - [-] **Router mode** — N/A.
@@ -251,7 +252,7 @@ These items describe what the webui uses, not TODOs for us — we replaced Tailw
   - `--radius-lg: var(--radius)` — 10px
   - `--radius-xl: calc(var(--radius) + 4px)` — 14px
 - [-] **Z-index tokens** — N/A. Avalonia manages popup z-order; no explicit layer tokens needed.
-- [x] **Dark/light mode switch** — Avalonia `ThemeVariant` mechanism. Currently hard-coded to `Dark` in `App.axaml`; a user toggle + persisted preference is tracked as a follow-up.
+- [x] **Dark/light mode switch** — Avalonia `ThemeVariant` mechanism. `AppSettings.ThemeMode` (Auto / Light / Dark) picker on the Display tab drives `ThemeService.Apply`; `App.axaml` uses `Default` so the user setting wins at startup and on each change (via `AppSettingsViewModel.OnThemeModeChanged`).
 
 ### Typography
 
@@ -304,9 +305,9 @@ These items describe what the webui uses, not TODOs for us — we replaced Tailw
 - [x] **Textarea styling** — inherits TextBox style; compose bar uses `MinHeight="56" MaxHeight="200"` with `TextWrapping="Wrap"`.
 - [x] **Select/dropdown** — ComboBox picks up Input/Border/Ring tokens. No custom item-template styling yet.
 - [x] **Label + field layout** — `ProfileEditorView` / `SamplerPanelView` use 130,*-column Grid rows with labels on the left, helpers below as `xs muted`.
-- [~] **Form validation** — deferred. No inputs with validation yet.
-- [x] **Checkbox** — basic styling (Foreground + FontSize). Toggle/switch variant deferred.
-- [~] **Switch/toggle** — deferred. `CheckBox` is a stand-in for bool toggles; a proper animated switch is polish.
+- [x] **Form validation** — per-field `NameError` / `UrlError` / `HeadersError` state on `McpSettingsViewModel` drives inline error text + a `TextBox.invalid` red-border state. Rules: name non-empty, URL parses as absolute `http(s)://`, each header line matches `Key: value`. `Save` / `Reconnect` / `ToggleEnabled` gated on `!HasValidationErrors`. Other controls in the app either already clamp (`NumericUpDown` min/max) or are freeform / enumerated — so the MCP editor is the only surface needing validation.
+- [x] **Checkbox** — basic styling (Foreground + FontSize). Used for form-style multi-select / commit-on-save toggles (sampler method enables, profile-editor flags).
+- [x] **Switch/toggle** — `Style Selector="ToggleButton.switch"` in `Theme/Controls.axaml` — pill track + sliding thumb with `ThicknessTransition` on Margin and `BrushTransition` on Background / knob color. Used for live-preference toggles on the Display tab; form-style CheckBoxes elsewhere stay as-is.
 - [x] **Cards/panels** — `Border.card` and `Border.panel` classes in `Theme/Controls.axaml`. SettingsWindow uses `card`; MainWindow toolbar/status use `panel`/`statusbar`.
 - [x] **Message bubbles** — `Border.bubble.user` right-aligned Primary bg + max-width 640; `Border.bubble.assistant` left/stretch, Card bg + border. Role selection via bound bools `IsUser`/`IsAssistant`.
 - [x] **Settings form** — grouped `section` headers, vertical stack of rows with label column, footer with Save/Close.
@@ -318,13 +319,13 @@ These items describe what the webui uses, not TODOs for us — we replaced Tailw
 
 ### Motion + accessibility
 
-- [~] **Transitions** — deferred. Avalonia `Transitions` on properties; add fade-in for new messages and slide for Expander in a polish pass.
+- [!] **Transitions** — the switch control has `ThicknessTransition` + `BrushTransition` on its knob / track, and that's the scope. Bubble fade-in / Expander slide / toast enter-exit are *not* planned — the flat, immediate look is intentional; motion adds cognitive overhead when reading long streaming output.
 - [x] **Hover effects** — `:pointerover /template/ ContentPresenter#PART_ContentPresenter` setters on every Button variant.
 - [x] **Focus rings** — `TextBox:focus` thickens BorderBrush to `Ring`. Avalonia's built-in focus adorner is inherited from FluentTheme.
 - [x] **Disabled state** — `Button:disabled` and `TextBox:disabled` drop Opacity to 0.5; Button also flips Cursor to Arrow.
 - [x] **Streaming cursor animation** — see Message rendering. Avalonia `Animation` on `TextBlock.cursor` in `Theme/Controls.axaml`.
 - [x] **Auto-scroll on new messages** — implemented. Subscribes to `SelectedConversation.Messages.CollectionChanged` for new bubbles + 100 ms poll during `IsGenerating`, both gated on `AppSettings.AutoScroll`.
-- [~] **Reduced motion support** — deferred. Avalonia has no built-in `prefers-reduced-motion`; would need to poll platform APIs or add a user setting.
+- [!] **Reduced motion support** — moot now that **Transitions** is scoped to the switch knob only. With effectively no motion in the app, a reduced-motion toggle has nothing to reduce.
 - [x] **Focus trap in dialogs** — Avalonia's `ShowDialog` traps focus natively.
 - [x] **Keyboard navigation** — Avalonia defaults handle Tab/arrows/Escape. Our `Enter/Shift+Enter` handler is in `MainWindow.axaml.cs:12-22`. Ctrl+L (Load) and Ctrl+, (Preferences) wired via `InputGesture` on MenuItems.
 - [x] **ARIA labels** — Avalonia's analog is the `Avalonia.Automation.AutomationProperties` attached properties, which drive UIA on Windows / AT-SPI on Linux / NSAccessibility on macOS. Every icon-only button in `MainWindow.axaml` carries an explicit `AutomationProperties.Name` (sidebar toggle, load / unload / settings, branch nav, per-bubble action bar, compose bar attach / MCP prompt / resource, attachment remove, send / stop) plus a `HelpText` on the two buttons whose tooltip carried extra detail (Continue reply, Attach file). Chat bubbles get `LiveSetting=Polite` + a role-prefixed `Name` so new messages announce. Toasts get `LiveSetting=Polite` by default, escalated to `Assertive` via a style selector on `.warning` and `.error` so they interrupt. MCP toolbar avatars get a `Name` binding with the full server name. Dialog titles already serve as accessible names (verified across `ShortcutsDialog`, `ModelInfoDialog`, `CodePreviewDialog`, `McpExecutionLogDialog`, `McpPromptPickerDialog`, `McpResourcePickerDialog`, `AboutDialog`, `ConfirmDialog`, `SettingsWindow`). Buttons in other views (`SettingsWindow`, `McpSettingsView`) carry visible text content — the default `ButtonAutomationPeer` picks that up without further annotation. New `AppSettings.HighAccessibilityMode` toggle adds a root-window `Classes.a11y` binding; when on, an override style in `Theme/Controls.axaml` forces the message action bar always visible (bypassing hover-to-reveal) so every action is reachable without a pointer.
@@ -334,9 +335,9 @@ These items describe what the webui uses, not TODOs for us — we replaced Tailw
 
 - [x] **Utility-first via Style Selectors** — `Classes="outline sm"` composes like Tailwind classes. No CSS-in-C# library.
 - [x] **CSS variables analog** — `ResourceDictionary.ThemeDictionaries` + `DynamicResource` binding.
-- [~] **Backdrop blur** — deferred. Avalonia `ExperimentalAcrylicBorder` covers this; add if we want shadcn's frosted ghost hover.
-- [~] **Shadow scale** — deferred. No shadows applied; Avalonia uses `BoxShadows` property on Border.
-- [~] **Scrollbar styling** — deferred.
+- [!] **Backdrop blur** — not implementing. `ExperimentalAcrylicBorder` would work but the flat surfaces read fine against the app's neutral palette and acrylic adds compositor cost for no content benefit.
+- [!] **Shadow scale** — not implementing. The card + bubble edges rely on border strokes; box-shadow layering would be purely cosmetic and muddies focus contrast.
+- [!] **Scrollbar styling** — not implementing. Platform-native scrollbars are the right default; restyling invites inconsistencies with OS scroll gesture / hover behavior.
 - [x] **Global styles** — base `Window` and `TextBlock` selectors in `Theme/Controls.axaml` set Background/Foreground/FontSize.
 - [-] **Custom SCSS for external content** — N/A.
 
@@ -347,13 +348,13 @@ These items describe what the webui uses, not TODOs for us — we replaced Tailw
 - [x] Settings panels (Profiles + Display tabs)
 - [x] Message list UI (MVVM binding against `SelectedConversation.Messages`)
 - [x] Button / input component library (hand-rolled variants under `Theme/Controls.axaml`)
-- [x] Dark mode (ThemeVariant + tokens); theme toggle UI still TODO
+- [x] Dark mode — ThemeVariant + tokens + user-facing Auto / Light / Dark picker on the Display tab.
 - [x] Keyboard shortcuts (Ctrl+N / Ctrl+Shift+O / Ctrl+K / Ctrl+B / Ctrl+L / Ctrl+,)
 - [x] Conversation list with search (JSON-persisted, case-insensitive title + preview filter)
 
 ### Medium effort, well-scoped — status
 - [x] Markdown rendering with remark/rehype analog — Markdig → Avalonia control tree (see Message rendering section for the detailed breakdown).
-- [x] File attachments & drag-drop — images only for v1 (compose paperclip + drag-drop + clipboard paste + user-bubble thumbnails). Audio input still deferred.
+- [x] File attachments & drag-drop — images + audio (compose paperclip + drag-drop + clipboard paste + user-bubble thumbnails); an overflow gallery dialog opens when more than four attachments are queued.
 - [x] Audio recording — file attachment + mic capture (Silk.NET.OpenAL, 16 kHz mono PCM → WAV → existing attachment path).
 - [x] MCP protocol client — hand-rolled JSON-RPC over Streamable HTTP in `Services/McpClient.cs`. No external SDK — matches the project's thin-wrapper philosophy and avoids SDK version drift. Supports the full surface the UI needs: `initialize`, `tools/list`, `tools/call`, `prompts/list`, `prompts/get`, `resources/list`, `resources/read`. Responses parsed from both direct JSON bodies and SSE streams.
 - [-] Model selector with search — N/A (profile-based UI instead).
@@ -371,7 +372,7 @@ These items describe what the webui uses, not TODOs for us — we replaced Tailw
 - [x] **Fonts** — inherited system stack.
 - [x] **Spacing scale** — `SpacingXs/Sm/Md/Lg/Xl` + `PaddingXs/Sm/Md/Lg` resources.
 - [x] **Icons** — embedded lucide SVG paths as `StreamGeometry` resources in `Theme/Icons.axaml`; see Iconography section above for the full inventory.
-- [~] **Animations** — deferred.
+- [!] **Animations** — scoped to streaming-cursor blink + switch-knob slide + button hover opacity. Further motion (bubble fade-in, expander slide, toast enter-exit) is intentionally not planned — see *Transitions* above.
 
 ---
 

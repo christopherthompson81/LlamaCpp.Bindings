@@ -197,6 +197,16 @@
     <Style Selector="TextBox:disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
+    <!-- Form-validation invalid state: red border. Toggle via Classes.invalid
+         bound to an IsXxxInvalid bool on the owning view model. Works for
+         both unfocused and focused states; :focus.invalid still reads red. -->
+    <Style Selector="TextBox.invalid /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{DynamicResource Destructive}" />
+    </Style>
+    <Style Selector="TextBox.invalid:focus /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{DynamicResource Destructive}" />
+        <Setter Property="BorderThickness" Value="1.5" />
+    </Style>
 
     <!-- ================================================================
          ComboBox
