@@ -749,6 +749,26 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         StatusText = "Generating...";
         _generationCts = new CancellationTokenSource();
 
+        // Live-stats ticker: one Content / Reasoning event ≈ one decoded
+        // piece, which is close enough to a token for a visual tok/s meter.
+        // Running on a DispatcherTimer at 200 ms so the number is readable
+        // (faster ticks flicker; slower feels unresponsive). int reads are
+        // atomic on every platform .NET runs on, so the UI thread can read
+        // liveTokens directly while the pool thread increments it — worst
+        // case we render a stale count one tick late.
+        var liveTokens = 0;
+        var liveStart = DateTime.UtcNow;
+        var liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        liveTimer.Tick += (_, _) =>
+        {
+            var count = liveTokens;
+            if (count == 0) return;
+            var elapsed = (DateTime.UtcNow - liveStart).TotalSeconds;
+            var tps = elapsed > 0 ? count / elapsed : 0;
+            assistant.StatsSummary = $"{count} tok · {tps:F1} tok/s";
+        };
+        liveTimer.Start();
+
         try
         {
             // .ConfigureAwait(false): each MoveNextAsync resumes on a pool
@@ -762,10 +782,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 switch (evt)
                 {
                     case StreamEvent.Content c:
+                        System.Threading.Interlocked.Increment(ref liveTokens);
                         pendingContent.Append(c.Text);
                         TryFlush();
                         break;
                     case StreamEvent.Reasoning r:
+                        System.Threading.Interlocked.Increment(ref liveTokens);
                         pendingReasoning.Append(r.Text);
                         TryFlush();
                         break;
@@ -833,6 +855,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             _generationCts = null;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                liveTimer.Stop();
                 IsGenerating = false;
                 conv.UpdatedAt = DateTimeOffset.UtcNow;
                 SaveConversations();
