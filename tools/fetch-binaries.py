@@ -44,6 +44,7 @@ RELEASE_URL = f"https://github.com/{REPO}/releases/download"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = REPO_ROOT / "tools" / ".cache"
 RUNTIMES_DIR = REPO_ROOT / "runtimes"
+VERSION_FILE = REPO_ROOT / "third_party" / "llama.cpp" / "VERSION"
 
 # .NET runtime identifiers we care about. Extend as needed.
 SUPPORTED_RIDS = {
@@ -54,6 +55,30 @@ SUPPORTED_RIDS = {
     "osx-x64",
     "osx-arm64",
 }
+
+
+def read_pinned_tag() -> str:
+    """Extract the base release tag from third_party/llama.cpp/VERSION.
+
+    git_describe may be a clean tag (b8893) or a post-release descriptor
+    (b8893-1-g86db42e97).  Either way the leading bNNNN is the release tag.
+    """
+    if not VERSION_FILE.exists():
+        raise SystemExit(
+            f"VERSION file not found: {VERSION_FILE}\n"
+            "Pass --tag explicitly or create the VERSION file."
+        )
+    for raw in VERSION_FILE.read_text().splitlines():
+        line = raw.partition("#")[0].strip()
+        if line.startswith("git_describe"):
+            val = line.split("=", 1)[1].strip()
+            m = re.match(r"(b\d+)", val)
+            if m:
+                return m.group(1)
+    raise SystemExit(
+        f"Could not parse a release tag from {VERSION_FILE}.\n"
+        "Pass --tag explicitly."
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -406,8 +431,12 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument("--platform", required=True, help=f"RID, one of: {', '.join(sorted(SUPPORTED_RIDS))}")
 
-    src_group = ap.add_mutually_exclusive_group(required=True)
-    src_group.add_argument("--tag", help="release mode: llama.cpp release tag, e.g. b8875")
+    src_group = ap.add_mutually_exclusive_group(required=False)
+    src_group.add_argument(
+        "--tag",
+        help="release mode: llama.cpp release tag (default: read from "
+             "third_party/llama.cpp/VERSION)",
+    )
     src_group.add_argument(
         "--from-local", metavar="DIR", type=Path,
         help="local-build mode: copy *.so/*.dylib from this build output directory",
@@ -432,17 +461,21 @@ def main(argv: list[str]) -> int:
         copy_from_local(args.from_local, args.platform)
         return 0
 
+    tag = args.tag or read_pinned_tag()
+    if not args.tag:
+        print(f"  using pinned version: {tag}  (from {VERSION_FILE.relative_to(REPO_ROOT)})")
+
     if not args.backend:
         ap.error("--backend is required in release mode (or pass --from-local)")
 
-    fetch_one(args.tag, args.platform, args.backend, args.force)
+    fetch_one(tag, args.platform, args.backend, args.force)
 
     if args.with_cudart:
         if not args.platform.startswith("win-"):
             raise SystemExit("--with-cudart only applies to Windows platforms")
         print(f"[{args.platform} / cudart-{args.with_cudart}] fetching CUDA runtime bundle")
-        asset = cudart_asset(args.tag, args.with_cudart)
-        archive = download(args.tag, asset, args.force)
+        asset = cudart_asset(tag, args.with_cudart)
+        archive = download(tag, asset, args.force)
         out_dir = RUNTIMES_DIR / args.platform / "native"
         libs = extract_libs(archive, asset.archive_kind, out_dir)
         for p in sorted(libs):
