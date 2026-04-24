@@ -17,8 +17,15 @@ internal static partial class NativeMethods
 {
     private const string LibName = "llama";
     private const string LibMtmd = "mtmd";
+    private const string LibGgml = "ggml";
 
     // ----- Backend lifecycle -----
+
+    // Must be called before llama_backend_init() so the GGML CPU (and other)
+    // backend plugins are loaded. In b8893+ the plugins are separate .so files
+    // and llama_backend_init() no longer loads them automatically.
+    [LibraryImport(LibGgml)]
+    internal static partial void ggml_backend_load_all();
 
     [LibraryImport(LibName)]
     internal static partial void llama_backend_init();

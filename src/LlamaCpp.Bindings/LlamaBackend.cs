@@ -58,6 +58,10 @@ public static class LlamaBackend
                 InstallLogSink(logSink);
             }
 
+            // Load all GGML backend plugins (CPU variants, Vulkan, CUDA, etc.)
+            // before calling llama_backend_init(). In b8893+ the backends are
+            // separate .so/.dll files and are not auto-loaded by llama_backend_init.
+            NativeMethods.ggml_backend_load_all();
             NativeMethods.llama_backend_init();
             _initialized = true;
         }

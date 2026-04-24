@@ -34,7 +34,7 @@ internal static class NativeLibraryResolver
     {
         // Only intercept libraries we ship under runtimes/. Everything else
         // goes to the default resolver unchanged.
-        if (libraryName != "llama" && libraryName != "mtmd") return IntPtr.Zero;
+        if (libraryName != "llama" && libraryName != "mtmd" && libraryName != "ggml") return IntPtr.Zero;
 
         var probes = CandidatePaths(assembly, libraryName);
         foreach (var candidate in probes)
