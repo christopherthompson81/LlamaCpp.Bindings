@@ -84,6 +84,30 @@
                 </ComboBox.Items>
             </ComboBox>
         </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*"
+              ToolTip.Tip="Element type for the KV cache. Quantized (Q*/IQ*) halves or quarters memory use at a small accuracy cost on long contexts, and requires Flash Attention.">
+            <TextBlock Grid.Column="0" Text="KV cache type" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <ComboBox SelectedItem="{Binding KvCacheType}">
+                    <ComboBox.Items>
+                        <bindings:LlamaKvCacheType>F16</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>BF16</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>F32</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>Q8_0</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>Q5_1</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>Q5_0</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>Q4_1</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>Q4_0</bindings:LlamaKvCacheType>
+                        <bindings:LlamaKvCacheType>IQ4_NL</bindings:LlamaKvCacheType>
+                    </ComboBox.Items>
+                </ComboBox>
+                <TextBlock Classes="xs"
+                           Foreground="{DynamicResource Destructive}"
+                           TextWrapping="Wrap"
+                           IsVisible="{Binding FlashAttentionHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           Text="{Binding FlashAttentionHint}" />
+            </StackPanel>
+        </Grid>
         <CheckBox Content="mmap" IsChecked="{Binding UseMmap}" />
         <CheckBox Content="mlock" IsChecked="{Binding UseMlock}" />
         <CheckBox Content="offload KQV" IsChecked="{Binding OffloadKQV}" />

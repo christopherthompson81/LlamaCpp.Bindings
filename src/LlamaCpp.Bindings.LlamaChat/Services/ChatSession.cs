@@ -89,6 +89,8 @@ public sealed class ChatSession : IDisposable
                 MaxSequenceCount = 1,
                 OffloadKQV = settings.OffloadKQV,
                 FlashAttention = settings.FlashAttention,
+                KvCacheTypeK = settings.KvCacheTypeK,
+                KvCacheTypeV = settings.KvCacheTypeV,
             });
 
             if (!string.IsNullOrWhiteSpace(settings.MmprojPath) && System.IO.File.Exists(settings.MmprojPath))

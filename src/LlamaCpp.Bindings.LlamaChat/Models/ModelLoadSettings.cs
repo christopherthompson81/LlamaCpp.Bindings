@@ -38,4 +38,17 @@ public sealed record ModelLoadSettings
     public bool UseMlock { get; init; } = false;
     public bool OffloadKQV { get; init; } = true;
     public LlamaFlashAttention FlashAttention { get; init; } = LlamaFlashAttention.Auto;
+
+    /// <summary>
+    /// KV cache element type for the K tensor. Default <c>F16</c> matches
+    /// llama.cpp's native default. Quantized choices (Q8_0, Q5_0/1, Q4_0/1,
+    /// IQ4_NL) require <see cref="FlashAttention"/> to be effectively enabled
+    /// on the compute path — the UI auto-flips <see cref="FlashAttention"/>
+    /// to <see cref="LlamaFlashAttention.Enabled"/> when the user picks a
+    /// quantized KV type from the Auto default.
+    /// </summary>
+    public LlamaKvCacheType KvCacheTypeK { get; init; } = LlamaKvCacheType.F16;
+
+    /// <summary>See <see cref="KvCacheTypeK"/>.</summary>
+    public LlamaKvCacheType KvCacheTypeV { get; init; } = LlamaKvCacheType.F16;
 }

@@ -25,7 +25,42 @@ public partial class ProfileEditorViewModel : ObservableObject
     [ObservableProperty] private bool _useMmap = true;
     [ObservableProperty] private bool _useMlock = false;
     [ObservableProperty] private bool _offloadKQV = true;
-    [ObservableProperty] private LlamaFlashAttention _flashAttention = LlamaFlashAttention.Auto;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FlashAttentionHint))]
+    private LlamaFlashAttention _flashAttention = LlamaFlashAttention.Auto;
+
+    /// <summary>
+    /// Applied to both K and V by default — a single control in the UI keeps
+    /// the common case simple. Asymmetric K/V types (e.g. Q8_0 K + Q4_0 V for
+    /// extra V compression) still work via the profile JSON but aren't in the
+    /// dropdown. Auto-flips <see cref="FlashAttention"/> to Enabled on change
+    /// to a quantized type because llama.cpp requires FA for quantized caches.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FlashAttentionHint))]
+    private LlamaKvCacheType _kvCacheType = LlamaKvCacheType.F16;
+
+    partial void OnKvCacheTypeChanged(LlamaKvCacheType value)
+    {
+        if (IsQuantized(value) && FlashAttention == LlamaFlashAttention.Auto)
+            FlashAttention = LlamaFlashAttention.Enabled;
+    }
+
+    private static bool IsQuantized(LlamaKvCacheType t) => t switch
+    {
+        LlamaKvCacheType.F32 or LlamaKvCacheType.F16 or LlamaKvCacheType.BF16 => false,
+        _ => true,
+    };
+
+    /// <summary>
+    /// Helper line shown under the KV cache picker. Warns when a quantized
+    /// cache is selected but Flash Attention is explicitly disabled — that
+    /// combination triggers a runtime error in llama.cpp.
+    /// </summary>
+    public string? FlashAttentionHint =>
+        IsQuantized(KvCacheType) && FlashAttention == LlamaFlashAttention.Disabled
+            ? "Quantized KV cache requires Flash Attention — the model will fail to load while Flash is Disabled."
+            : null;
 
     // --- Sampling + generation (shared VM so the editor can mutate it live) ---
     public SamplerPanelViewModel SamplerPanel { get; } = new();
@@ -48,6 +83,9 @@ public partial class ProfileEditorViewModel : ObservableObject
         UseMlock = profile.Load.UseMlock;
         OffloadKQV = profile.Load.OffloadKQV;
         FlashAttention = profile.Load.FlashAttention;
+        // K/V are persisted independently; the UI picker collapses them into
+        // one choice, so we show K's value and write both back on snapshot.
+        KvCacheType = profile.Load.KvCacheTypeK;
         SamplerPanel.LoadFrom(profile.Sampler, profile.Generation);
     }
 
@@ -65,6 +103,8 @@ public partial class ProfileEditorViewModel : ObservableObject
         UseMlock = UseMlock,
         OffloadKQV = OffloadKQV,
         FlashAttention = FlashAttention,
+        KvCacheTypeK = KvCacheType,
+        KvCacheTypeV = KvCacheType,
     };
 
     public ModelProfile ToProfile() => new()

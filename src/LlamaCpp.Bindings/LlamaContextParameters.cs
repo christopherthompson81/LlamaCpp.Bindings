@@ -59,6 +59,20 @@ public sealed class LlamaContextParameters
     /// </summary>
     public bool MeasurePerformance { get; set; } = true;
 
+    /// <summary>
+    /// Element type for the K component of the KV cache. Default <c>F16</c>
+    /// matches <c>llama_context_default_params()</c>. Quantized options
+    /// (Q8_0 / Q5_0 / Q5_1 / Q4_0 / Q4_1 / IQ4_NL) roughly halve or quarter
+    /// the cache footprint but require Flash Attention on the compute path —
+    /// see <see cref="FlashAttention"/>. The llama.cpp header flags these
+    /// fields EXPERIMENTAL; breakage across version bumps is possible.
+    /// </summary>
+    public LlamaKvCacheType KvCacheTypeK { get; set; } = LlamaKvCacheType.F16;
+
+    /// <summary>Element type for the V component of the KV cache. See
+    /// <see cref="KvCacheTypeK"/> for caveats.</summary>
+    public LlamaKvCacheType KvCacheTypeV { get; set; } = LlamaKvCacheType.F16;
+
     internal llama_context_params ToNative()
     {
         var native = NativeMethods.llama_context_default_params();
@@ -73,6 +87,8 @@ public sealed class LlamaContextParameters
         native.offload_kqv = OffloadKQV;
         native.swa_full = UseFullSwaCache;
         native.no_perf = !MeasurePerformance;
+        native.type_k = (ggml_type)(int)KvCacheTypeK;
+        native.type_v = (ggml_type)(int)KvCacheTypeV;
         return native;
     }
 
@@ -100,6 +116,34 @@ public enum LlamaFlashAttention
     Auto     = -1,
     Disabled = 0,
     Enabled  = 1,
+}
+
+/// <summary>
+/// Subset of <c>ggml_type</c> values that llama.cpp accepts for the KV cache
+/// K and V element types (mirrors the allow-list in llama-server's
+/// <c>--cache-type-k/v</c> help output). Values match the underlying
+/// <c>ggml_type</c> integer constants so we can cast directly.
+/// </summary>
+public enum LlamaKvCacheType
+{
+    /// <summary>32-bit float (largest, highest fidelity).</summary>
+    F32    = 0,
+    /// <summary>16-bit float — llama.cpp default. 2 bytes per element.</summary>
+    F16    = 1,
+    /// <summary>bfloat16 — 2 bytes per element, wider exponent than F16.</summary>
+    BF16   = 30,
+    /// <summary>8-bit quantization. ~1 byte per element (~50% smaller than F16). Needs Flash Attention.</summary>
+    Q8_0   = 8,
+    /// <summary>5-bit quantization. ~0.6 bytes per element. Needs Flash Attention.</summary>
+    Q5_0   = 6,
+    /// <summary>5-bit quantization, alternate form. ~0.6 bytes per element. Needs Flash Attention.</summary>
+    Q5_1   = 7,
+    /// <summary>4-bit quantization. ~0.5 bytes per element (~75% smaller than F16). Needs Flash Attention.</summary>
+    Q4_0   = 2,
+    /// <summary>4-bit quantization, alternate form. ~0.5 bytes per element. Needs Flash Attention.</summary>
+    Q4_1   = 3,
+    /// <summary>Importance-weighted 4-bit non-linear quantization. ~0.5 bytes per element. Needs Flash Attention.</summary>
+    IQ4_NL = 20,
 }
 
 /// <summary>
