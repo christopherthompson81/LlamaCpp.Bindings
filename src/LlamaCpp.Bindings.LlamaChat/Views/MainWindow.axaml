@@ -290,6 +290,7 @@
                                         Classes.user="{Binding IsUser}"
                                         Classes.assistant="{Binding IsAssistant}"
                                         Classes.tool="{Binding IsTool}"
+                                        Classes.toolerror="{Binding IsToolError}"
                                         a:AutomationProperties.Name="{Binding Role, StringFormat='{}{0} message'}"
                                         a:AutomationProperties.LiveSetting="Polite">
                                     <StackPanel Spacing="6">

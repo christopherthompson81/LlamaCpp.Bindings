@@ -347,6 +347,24 @@ public sealed class McpClientService : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Flat list of every prefixed tool name currently reachable — used when
+    /// the model calls a tool that doesn't resolve, so the error message we
+    /// feed back to it lists what it could have picked instead.
+    /// </summary>
+    public IReadOnlyList<string> AvailableToolNames()
+    {
+        var names = new List<string>();
+        foreach (var s in Servers)
+        {
+            if (s.State != McpConnectionState.Ready) continue;
+            var prefix = NameToPrefix(s.Config.Name);
+            foreach (var t in s.Tools)
+                names.Add(string.IsNullOrEmpty(prefix) ? t.Name : $"{prefix}__{t.Name}");
+        }
+        return names;
+    }
+
     private static string NameToPrefix(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return string.Empty;

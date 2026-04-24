@@ -562,19 +562,28 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
             foreach (var call in calls)
             {
+                var ct = _generationCts?.Token ?? System.Threading.CancellationToken.None;
                 var resolved = McpClientService.Instance.ResolveToolCall(call.Name);
                 string resultText;
+                bool isError = false;
                 if (resolved is null)
                 {
-                    resultText = $"(error: no MCP server advertises tool '{call.Name}')";
+                    // Help the model pick a valid tool next time by naming
+                    // the ones it has available. Cheap and keeps it from
+                    // retrying the same wrong name.
+                    var available = McpClientService.Instance.AvailableToolNames();
+                    resultText = Services.ToolCall.ToolCallError.FormatForModel(
+                        available.Count == 0
+                            ? $"no MCP tool named '{call.Name}' and no servers are connected."
+                            : $"no MCP tool named '{call.Name}'. Available: {string.Join(", ", available)}.");
+                    isError = true;
                 }
                 else
                 {
                     try
                     {
                         var res = await McpClientService.Instance.CallToolAsync(
-                            resolved.Value.Server, resolved.Value.ToolName, call.Arguments,
-                            _generationCts?.Token ?? System.Threading.CancellationToken.None);
+                            resolved.Value.Server, resolved.Value.ToolName, call.Arguments, ct);
                         // Collapse the MCP envelope down to its text content
                         // for the bubble. Re-prompting the model uses this
                         // same text, which matches what most tool-use
@@ -582,10 +591,23 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                         // visible in the MCP execution-log dialog if the
                         // user needs to debug a response.
                         resultText = Services.ToolCall.ToolCallDisplay.FormatMcpResult(res);
+                        isError = Services.ToolCall.ToolCallDisplay.IsErrorResult(res);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        // User hit Stop mid-tool. Don't log this as an error and
+                        // don't reprompt the model — just break cleanly out of
+                        // the loop. The partial transcript stays where it is.
+                        ToastService.Info("Cancelled", "Tool call interrupted.");
+                        return;
                     }
                     catch (Exception ex)
                     {
-                        resultText = $"(error: {ex.Message})";
+                        ErrorBoundary.ReportNonFatal(ex,
+                            "Tool call failed",
+                            $"{resolved.Value.Server}/{resolved.Value.ToolName}");
+                        resultText = Services.ToolCall.ToolCallError.FormatForModel(ex);
+                        isError = true;
                     }
                 }
 
@@ -594,6 +616,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                     Role = "tool",
                     ToolName = call.Name,
                     Content = resultText,
+                    IsToolError = isError,
                 });
             }
 

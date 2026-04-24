@@ -445,6 +445,14 @@
         <Setter Property="Margin" Value="16,4,16,4" />
         <Setter Property="Opacity" Value="0.92" />
     </Style>
+    <!-- Errored tool result: keep the muted fill so the content stays legible,
+         but swap the border to Destructive and stretch it slightly so an
+         at-a-glance scan of the transcript shows which tool calls failed. -->
+    <Style Selector="Border.bubble.toolerror">
+        <Setter Property="BorderBrush" Value="{DynamicResource Destructive}" />
+        <Setter Property="BorderThickness" Value="1.5" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
 
     <!-- Tool-call chip: compact pill shown above an assistant reply when the
          model invoked a tool. Visual shorthand for the full markup which

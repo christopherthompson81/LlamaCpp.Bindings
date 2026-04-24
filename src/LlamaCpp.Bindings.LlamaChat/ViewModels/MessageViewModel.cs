@@ -108,6 +108,15 @@ public partial class MessageViewModel : ObservableObject
     /// </summary>
     [ObservableProperty] private string? _toolName;
 
+    /// <summary>
+    /// True when the tool call failed (exception, timeout, server-side
+    /// <c>isError</c> flag, or no MCP server advertised the tool). Drives a
+    /// destructive-coloured border on the tool bubble so the user can see at
+    /// a glance that the assistant's next turn is reasoning about an error,
+    /// not a successful result.
+    /// </summary>
+    [ObservableProperty] private bool _isToolError;
+
     // Threshold for auto-collapsing a tool result. Short replies (a single
     // number, a one-liner status) read naturally inline; long ones
     // (dumped API payloads, multi-paragraph summaries) get tucked behind

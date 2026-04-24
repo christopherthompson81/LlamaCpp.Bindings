@@ -93,6 +93,16 @@ public static class ToolCallDisplay
     /// the shape doesn't match at all we fall back to the raw JSON so at
     /// least the user can see what came back.
     /// </summary>
+    /// <summary>
+    /// True if the MCP response carries <c>isError: true</c>. Mirrors the
+    /// check inside <see cref="FormatMcpResult"/> but exposed separately so
+    /// callers can tag the tool-message bubble with a destructive state.
+    /// </summary>
+    public static bool IsErrorResult(JsonElement result) =>
+        result.ValueKind == JsonValueKind.Object
+        && result.TryGetProperty("isError", out var err)
+        && err.ValueKind == JsonValueKind.True;
+
     public static string FormatMcpResult(JsonElement result)
     {
         if (result.ValueKind == JsonValueKind.Object
