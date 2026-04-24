@@ -415,8 +415,14 @@ public static class MarkdownRenderer
         }
 
         var grid = new Grid();
+        // Star-sized columns: each claims an equal share of the available
+        // pane width. Cell TextBlocks (which already set TextWrapping.Wrap)
+        // only wrap when they have a constrained width — `Auto` would let
+        // cells grow to fit their longest line and the table would overflow
+        // the chat pane. A simple equal-share split trades ideal column
+        // proportions for content that actually fits the pane.
         for (var i = 0; i < colCount; i++)
-            grid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            grid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(1, GridUnitType.Star)));
 
         var rIdx = 0;
         foreach (var rowBlock in table)
