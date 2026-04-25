@@ -25,7 +25,34 @@ internal static class DialogService
         var owner = Owner;
         if (owner is null) return;
         var win = new SettingsWindow { DataContext = vm };
+        CenterOverOwner(win, owner);
         await win.ShowDialog(owner);
+    }
+
+    /// <summary>
+    /// Manually center <paramref name="child"/> on top of <paramref name="owner"/>.
+    /// Avalonia's <c>WindowStartupLocation="CenterOwner"</c> is honoured by
+    /// most window managers but not all — X11 tiling WMs and some GNOME/Wayland
+    /// configurations ignore it. Computing the position ourselves and pinning
+    /// it via <see cref="WindowStartupLocation.Manual"/> is the only reliable
+    /// way to guarantee the layout the user expects.
+    /// </summary>
+    private static void CenterOverOwner(Window child, Window owner)
+    {
+        // Position is in physical pixels; Width/ClientSize are in DIPs.
+        // Multiply by the owner's desktop scaling to get the right pixel
+        // offsets on HiDPI monitors.
+        var scale = owner.DesktopScaling;
+        var ownerWPx = (int)(owner.ClientSize.Width * scale);
+        var ownerHPx = (int)(owner.ClientSize.Height * scale);
+        var childWPx = (int)(child.Width * scale);
+        var childHPx = (int)(child.Height * scale);
+
+        var x = owner.Position.X + (ownerWPx - childWPx) / 2;
+        var y = owner.Position.Y + (ownerHPx - childHPx) / 2;
+
+        child.WindowStartupLocation = WindowStartupLocation.Manual;
+        child.Position = new PixelPoint(x, y);
     }
 
     public static async Task CopyToClipboardAsync(string? text)

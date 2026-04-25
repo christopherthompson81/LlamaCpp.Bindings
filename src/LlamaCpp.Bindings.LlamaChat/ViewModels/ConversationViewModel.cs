@@ -29,7 +29,9 @@ public partial class ConversationViewModel : ObservableObject
 
     public DateTimeOffset CreatedAt { get; }
 
-    [ObservableProperty] private DateTimeOffset _updatedAt;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DateLabel))]
+    private DateTimeOffset _updatedAt;
 
     /// <summary>Pinned conversations sort to the top of the sidebar.</summary>
     [ObservableProperty] private bool _pinned;
@@ -61,6 +63,30 @@ public partial class ConversationViewModel : ObservableObject
     [ObservableProperty] private Guid? _activeLeafId;
 
     public string DisplayTitle => string.IsNullOrWhiteSpace(Title) ? "(untitled)" : Title;
+
+    /// <summary>
+    /// Compact relative-date string for the sidebar (today → "14:32",
+    /// yesterday → "Yesterday", this week → "Mon", this year → "Apr 25",
+    /// older → "Apr 25, 2024"). Recomputed when <see cref="UpdatedAt"/>
+    /// changes; doesn't tick with wall-clock time, so a card opened at
+    /// 23:59 may still read "Today" past midnight until the next mutation.
+    /// Acceptable trade-off — every chat app behaves this way.
+    /// </summary>
+    public string DateLabel
+    {
+        get
+        {
+            var when = UpdatedAt.LocalDateTime;
+            var nowDate = DateTime.Now.Date;
+            var whenDate = when.Date;
+            if (whenDate == nowDate) return when.ToString("HH:mm");
+            if (whenDate == nowDate.AddDays(-1)) return "Yesterday";
+            var daysDiff = (nowDate - whenDate).Days;
+            if (daysDiff > 1 && daysDiff < 7) return when.ToString("ddd");
+            if (whenDate.Year == nowDate.Year) return when.ToString("MMM d");
+            return when.ToString("MMM d, yyyy");
+        }
+    }
 
     /// <summary>
     /// True when the active path ends with a user turn, meaning nothing

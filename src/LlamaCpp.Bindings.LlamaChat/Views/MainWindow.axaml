@@ -254,12 +254,17 @@
                                 <Grid Background="Transparent">
                                     <!-- Default display -->
                                     <StackPanel Spacing="2" IsVisible="{Binding !IsEditing}">
-                                        <Grid ColumnDefinitions="*,Auto">
+                                        <Grid ColumnDefinitions="*,Auto,Auto">
                                             <TextBlock Grid.Column="0"
                                                        Text="{Binding DisplayTitle}"
                                                        FontWeight="Medium"
                                                        TextTrimming="CharacterEllipsis" />
-                                            <Path Grid.Column="1" Classes="icon xs"
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding DateLabel}"
+                                                       Classes="muted xs"
+                                                       Margin="6,0,0,0"
+                                                       VerticalAlignment="Center" />
+                                            <Path Grid.Column="2" Classes="icon xs"
                                                   Data="{StaticResource IconPin}"
                                                   Opacity="0.7" Margin="6,0,0,0"
                                                   IsVisible="{Binding Pinned}" />
