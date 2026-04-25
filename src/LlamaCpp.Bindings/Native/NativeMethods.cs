@@ -655,6 +655,46 @@ internal static partial class NativeMethods
     internal static unsafe partial int llama_set_adapters_lora(
         IntPtr ctx, IntPtr* adapters, nuint n_adapters, float* scales);
 
+    // Apply (or clear) a control vector to a context. Pass data=null + len=0
+    // to clear. data is a flat float buffer of n_embd × n_layers (layer 1 at
+    // [0..n_embd), layer 2 at [n_embd..2*n_embd), etc.). il_start / il_end
+    // are inclusive layer-index bounds. Returns 0 on success, negative on
+    // failure (size mismatch / invalid range).
+    [LibraryImport(LibName)]
+    internal static unsafe partial int llama_set_adapter_cvec(
+        IntPtr ctx, float* data, nuint len, int n_embd, int il_start, int il_end);
+
+    // ----- GGUF reader (used by control-vector loader) -----
+    //
+    // Minimal subset of the gguf.h API. We pass no_alloc=true and ctx=null
+    // so ggml just parses the header + metadata into the gguf_context;
+    // tensor data stays on disk and we read it ourselves at the offsets
+    // gguf_get_tensor_offset reports.
+
+    [LibraryImport(LibGgml, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr gguf_init_from_file(string fname, gguf_init_params params_);
+
+    [LibraryImport(LibGgml)]
+    internal static partial void gguf_free(IntPtr ctx);
+
+    [LibraryImport(LibGgml)]
+    internal static partial long gguf_get_n_tensors(IntPtr ctx);
+
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr gguf_get_tensor_name(IntPtr ctx, long tensor_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial ggml_type gguf_get_tensor_type(IntPtr ctx, long tensor_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial nuint gguf_get_tensor_size(IntPtr ctx, long tensor_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial nuint gguf_get_tensor_offset(IntPtr ctx, long tensor_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial nuint gguf_get_data_offset(IntPtr ctx);
+
     // ----- State / sessions -----
     //
     // Whole-context and per-sequence snapshot primitives. Snapshots are tied

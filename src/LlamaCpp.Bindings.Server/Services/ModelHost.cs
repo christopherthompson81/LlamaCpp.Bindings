@@ -147,8 +147,64 @@ public sealed class ModelHost : IDisposable
             _adapters.Add(new LoadedAdapter(adapter, entry.Scale));
         }
 
-        _log.LogInformation("Model loaded. Context sizes: ctx={Ctx}, batch={Batch}, ubatch={Ubatch}, slots={Slots}, adapters={Adapters}",
-            Context.ContextSize, Context.LogicalBatchSize, Context.PhysicalBatchSize, Context.MaxSequenceCount, _adapters.Count);
+        // Control vectors: load each, merge by element-wise sum (with
+        // the configured per-file scale already baked in), then attach
+        // to the shared context with the optional layer range.
+        ActiveControlVector = ResolveAndAttachControlVector(_opts, Context, _log);
+
+        _log.LogInformation("Model loaded. Context sizes: ctx={Ctx}, batch={Batch}, ubatch={Ubatch}, slots={Slots}, adapters={Adapters}, cvec={Cvec}",
+            Context.ContextSize, Context.LogicalBatchSize, Context.PhysicalBatchSize, Context.MaxSequenceCount, _adapters.Count,
+            ActiveControlVector is not null ? "yes" : "no");
+    }
+
+    /// <summary>
+    /// Merged control vector applied to the shared context, exposed so
+    /// <see cref="DraftHost"/> can mirror the same data onto its
+    /// dedicated speculative main context.
+    /// </summary>
+    public LlamaControlVector? ActiveControlVector { get; }
+
+    /// <summary>The layer range used when attaching <see cref="ActiveControlVector"/>. Null when no vector is active.</summary>
+    public (int Start, int End)? ActiveControlVectorRange { get; private set; }
+
+    /// <summary>
+    /// Load + merge + attach the operator-supplied control vectors.
+    /// Returns the merged vector (so callers can re-attach it to other
+    /// contexts), or null when none were configured. Bad paths /
+    /// dimension mismatches surface eagerly via <see cref="LlamaControlVector.LoadFromFile"/>.
+    /// </summary>
+    private LlamaControlVector? ResolveAndAttachControlVector(
+        ServerOptions opts, LlamaContext context, ILogger log)
+    {
+        if (opts.ControlVectors.Count == 0) return null;
+
+        LlamaControlVector? merged = null;
+        foreach (var entry in opts.ControlVectors)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Path))
+            {
+                throw new InvalidOperationException(
+                    "LlamaServer:ControlVectors entry has empty Path.");
+            }
+            if (!File.Exists(entry.Path))
+            {
+                throw new FileNotFoundException(
+                    $"Control-vector file not found: {entry.Path}", entry.Path);
+            }
+            log.LogInformation("Loading control vector {Path} (scale={Scale})", entry.Path, entry.Scale);
+            var loaded = LlamaControlVector.LoadFromFile(entry.Path, entry.Scale);
+            merged = merged is null ? loaded : merged.Combine(loaded);
+        }
+        if (merged is null) return null;
+
+        int start = opts.ControlVectorLayerStart ?? 1;
+        int end = opts.ControlVectorLayerEnd ?? merged.LayerCount;
+        context.SetControlVector(merged, start, end);
+        ActiveControlVectorRange = (start, end);
+        log.LogInformation(
+            "Control vector applied: n_embd={NEmbd}, layers={Layers}, range=[{Start}..{End}]",
+            merged.NEmbd, merged.LayerCount, start, end);
+        return merged;
     }
 
     public void Dispose()

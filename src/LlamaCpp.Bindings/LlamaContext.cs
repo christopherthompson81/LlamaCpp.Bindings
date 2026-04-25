@@ -980,6 +980,71 @@ public sealed class LlamaContext : IDisposable
         }
     }
 
+    // ----- Control vectors (steering directions) -----
+    //
+    // A control vector blends per-layer F32 directions into the model's
+    // residual stream during inference, biasing generation toward (or
+    // away from) the direction. llama_set_adapter_cvec stores a snapshot
+    // of the data on the context — the managed array can be freed
+    // immediately after the call. Pass a null vector to ClearControlVector
+    // to detach.
+
+    /// <summary>
+    /// Apply <paramref name="vector"/> to this context, blending its
+    /// per-layer directions into inference between layers
+    /// <paramref name="layerStart"/> and <paramref name="layerEnd"/>
+    /// (both inclusive, 1-indexed). Replacing a previously-set vector is
+    /// safe — the old data is simply overwritten.
+    /// </summary>
+    /// <exception cref="ArgumentException">Layer range is invalid.</exception>
+    /// <exception cref="LlamaException">Native call failed (size mismatch or invalid range).</exception>
+    public unsafe void SetControlVector(LlamaControlVector vector, int layerStart, int layerEnd)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(vector);
+        if (layerStart < 1 || layerEnd < layerStart)
+        {
+            throw new ArgumentException(
+                $"Invalid control-vector layer range [{layerStart}, {layerEnd}]: " +
+                "start must be >= 1 and end must be >= start.");
+        }
+
+        var data = vector.Data;
+        fixed (float* ptr = data)
+        {
+            int rc = NativeMethods.llama_set_adapter_cvec(
+                _handle.DangerousHandle, ptr, (nuint)data.Length,
+                vector.NEmbd, layerStart, layerEnd);
+            if (rc != 0)
+            {
+                throw new LlamaException(
+                    nameof(NativeMethods.llama_set_adapter_cvec), rc,
+                    $"llama_set_adapter_cvec returned {rc}. Common causes: layer range " +
+                    "exceeds the model's layer count, or n_embd doesn't match the model's " +
+                    "embedding dimension.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Detach any control vector previously applied to this context.
+    /// Idempotent — clearing an unset context is a no-op.
+    /// </summary>
+    public unsafe void ClearControlVector()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        // llama_set_adapter_cvec accepts data=null + len=0 to clear.
+        // Passing nominal start/end values; they're ignored when len=0.
+        int rc = NativeMethods.llama_set_adapter_cvec(
+            _handle.DangerousHandle, null, 0, 0, 0, 0);
+        if (rc != 0)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.llama_set_adapter_cvec), rc,
+                $"llama_set_adapter_cvec returned {rc} while clearing.");
+        }
+    }
+
     // ----- Multi-session support (Tier 3 / issue #5) -----
     //
     // The native context reserves a fixed number of sequence-id slots

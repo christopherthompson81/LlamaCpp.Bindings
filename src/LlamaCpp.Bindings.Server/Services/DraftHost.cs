@@ -99,6 +99,14 @@ public sealed class DraftHost : IDisposable
             _mainContext.AttachLoraAdapter(loaded.Adapter, loaded.Scale);
         }
 
+        // Same story for control vectors — the merged data is independent
+        // of the context, so we apply it again here with the same range.
+        if (mainHost.ActiveControlVector is { } cvec
+            && mainHost.ActiveControlVectorRange is { } range)
+        {
+            _mainContext.SetControlVector(cvec, range.Start, range.End);
+        }
+
         _gate = new SemaphoreSlim(1, 1);
 
         _log.LogInformation(

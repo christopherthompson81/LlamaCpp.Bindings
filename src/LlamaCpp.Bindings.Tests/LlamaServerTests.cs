@@ -2359,6 +2359,55 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// Control-vector wiring. Bad path surfaces during startup; an empty
+/// configuration is a no-op the rest of the suite already exercises.
+/// A full load-and-attach smoke test would need a Qwen3-shaped control-
+/// vector GGUF, which we don't have in TestModelProvider yet — left
+/// for a follow-up if a public asset shows up.
+/// </summary>
+public class LlamaServerControlVectorTests
+{
+    [Fact]
+    public void Bad_Control_Vector_Path_Surfaces_During_Startup()
+    {
+        using var factory = new BadControlVectorFactory();
+        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        var inner = ex;
+        while (inner is not null)
+        {
+            if (inner.Message.Contains("not-a-real-cvec.gguf", StringComparison.Ordinal))
+            {
+                return;
+            }
+            inner = inner.InnerException;
+        }
+        Assert.Fail($"Expected error referencing the bad control-vector path, got: {ex}");
+    }
+
+    public sealed class BadControlVectorFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]                  = modelPath,
+                    ["LlamaServer:ContextSize"]                = "1024",
+                    ["LlamaServer:MaxSequenceCount"]           = "1",
+                    ["LlamaServer:GpuLayerCount"]              = "-1",
+                    ["LlamaServer:Urls"]                       = "",
+                    ["LlamaServer:ControlVectors:0:Path"]      = "/tmp/not-a-real-cvec.gguf",
+                    ["LlamaServer:ControlVectors:0:Scale"]     = "1.0",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
 /// NUMA strategy wiring. Boots with <c>NumaStrategy=Distribute</c> and
 /// verifies chat still serves. NUMA init is process-wide and persists
 /// across fixtures; on a single-node system it's effectively a no-op,

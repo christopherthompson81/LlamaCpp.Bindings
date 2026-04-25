@@ -316,6 +316,21 @@ internal struct mtmd_decoder_pos
 }
 
 /// <summary>
+/// Mirror of <c>gguf_init_params</c>. The 1-byte bool is followed by 7 bytes
+/// of padding before the pointer; <see cref="LayoutKind.Sequential"/> with
+/// the default Pack=8 reproduces that layout under .NET on 64-bit
+/// platforms.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct gguf_init_params
+{
+    [MarshalAs(UnmanagedType.I1)] public bool no_alloc;
+    public IntPtr ctx; // ggml_context** — pass IntPtr.Zero for "don't allocate"
+
+    public const int ExpectedSize = 16;
+}
+
+/// <summary>
 /// Struct layout assertions. Called once from <see cref="LlamaBackend"/>'s
 /// static constructor before any native call is made. If the native struct
 /// size has drifted from our C# mirror, we throw here rather than let the
@@ -338,6 +353,7 @@ internal static class NativeLayout
         Check<mtmd_context_params>(mtmd_context_params.ExpectedSize);
         Check<mtmd_input_text>(mtmd_input_text.ExpectedSize);
         Check<mtmd_decoder_pos>(mtmd_decoder_pos.ExpectedSize);
+        Check<gguf_init_params>(gguf_init_params.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct

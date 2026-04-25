@@ -410,6 +410,30 @@ public sealed class ServerOptions
     /// </remarks>
     public List<LoraAdapterConfig> LoraAdapters { get; set; } = new();
 
+    // ----- Control vectors -----
+
+    /// <summary>
+    /// Control-vector files to load and merge at startup. Each entry's
+    /// <see cref="ControlVectorConfig.Scale"/> multiplies its directions
+    /// before merging; multiple entries are summed element-wise (matching
+    /// llama-server's <c>--control-vector-scaled</c> semantics).
+    /// Empty = no control vector applied.
+    /// </summary>
+    public List<ControlVectorConfig> ControlVectors { get; set; } = new();
+
+    /// <summary>
+    /// Inclusive lower bound on the layer range at which the merged
+    /// control vector applies. <c>null</c> = layer 1 (the lowest non-
+    /// reserved layer; layer 0 is unused per the file format).
+    /// </summary>
+    public int? ControlVectorLayerStart { get; set; }
+
+    /// <summary>
+    /// Inclusive upper bound on the layer range. <c>null</c> = the
+    /// highest layer covered by the merged vector.
+    /// </summary>
+    public int? ControlVectorLayerEnd { get; set; }
+
     // ----- Authentication -----
 
     /// <summary>
@@ -453,6 +477,24 @@ public sealed class TensorBuftOverrideConfig
     /// even when the device is a GPU. Default false.
     /// </summary>
     public bool Host { get; set; } = false;
+}
+
+/// <summary>
+/// Configuration entry for a control vector loaded at startup. Mirrors
+/// one <c>--control-vector-scaled FILE SCALE</c> argument from
+/// llama-server.
+/// </summary>
+public sealed class ControlVectorConfig
+{
+    /// <summary>Path to the control-vector GGUF file. Required.</summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>
+    /// Multiplier applied to every direction during load. <c>1.0</c> =
+    /// full strength (default); <c>0.0</c> = no contribution; negative
+    /// values flip the direction.
+    /// </summary>
+    public float Scale { get; set; } = 1.0f;
 }
 
 /// <summary>

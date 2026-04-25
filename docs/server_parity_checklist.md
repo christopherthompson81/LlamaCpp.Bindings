@@ -311,7 +311,20 @@ Features clients expect from the OpenAI chat-completions API.
   attaches adapters to the context, not the session, so concurrent
   requests on one context share adapters; per-call switching needs
   more design.
-- [~] **`--control-vector`** — separate binding work.
+- [x] **`--control-vector`** /
+  **`--control-vector-scaled`** /
+  **`--control-vector-layer-range`** —
+  `ServerOptions.ControlVectors` (list of `{Path, Scale}` entries),
+  `ControlVectorLayerStart`, `ControlVectorLayerEnd`. ModelHost loads
+  each file, sums them element-wise, and attaches the merged vector
+  to the shared context with the configured layer range. DraftHost's
+  speculative main context mirrors the same data so speculative
+  requests inherit the steering. Binding row: a public
+  `LlamaControlVector` (with `LoadFromFile` + `Combine`) plus
+  `LlamaContext.SetControlVector` / `ClearControlVector`. The loader
+  uses `gguf_init_from_file(no_alloc=true)` to parse the header +
+  tensor offsets, then reads F32 bytes directly from the file —
+  avoids dragging in the ggml allocator API.
 
 ## 10. Sampling knobs not yet in chat/completion requests
 
@@ -392,9 +405,9 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 73 | shipped, tested |
+| `[x]` done | 74 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 2 | binding work first |
+| `[~]` needs binding | 0 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 7 | explicit non-goal |
 
@@ -429,10 +442,8 @@ All "binding already exposes" items are now wired. What remains:
 2. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
    probe) and remote-URL image fetch (needs a download manager with
    size caps + content-type sniffing).
-3. **Binding-blocked items** (`[~]`) — control-vector
-   (`llama_set_adapter_cvec` + a managed GGUF loader for the vector
-   data, since the public C API doesn't ship one) and control-vector
-   layer-range scaling.
+3. **Binding-blocked items** (`[~]`) — none. Every row that needed
+   binding work has shipped.
 4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
    rejection-sampling) is the largest remaining feature.
 
