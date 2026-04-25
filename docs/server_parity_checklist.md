@@ -225,10 +225,25 @@ Features clients expect from the OpenAI chat-completions API.
   whole set; `ModelHost` and `DraftHost` route through the same
   `BuildContextParameters` helper so both contexts pick up identical
   values. Defaults inherit GGUF metadata.
-- [~] **`-dio, --direct-io`**, **`--numa`**, **`--no-host`**,
-  **`--repack`**, **`-dev, --device`**, **`-ts, --tensor-split`**,
-  **`-ot, --override-tensor`**, **`--cpu-moe`** — all block on binding
-  work.
+- [x] **`-dio, --direct-io`** — `ServerOptions.UseDirectIo`.
+- [x] **`--no-host`** — `ServerOptions.NoHost`.
+- [x] **`--repack`** — `ServerOptions.UseExtraBufts` (true by default,
+  matches `llama_model_default_params`).
+- [x] **`-dev, --device`** — `ServerOptions.Devices` (list of names
+  resolved against `LlamaHardware.EnumerateDevices` at startup; bad
+  names fail fast with the available list). The binding's
+  `LlamaComputeDevice` now exposes its underlying
+  `ggml_backend_dev_t` so callers can pin a specific device list.
+- [x] **`-ts, --tensor-split`** — `ServerOptions.TensorSplit` (per-
+  device proportions; padded to `llama_max_devices()` internally).
+- [~] **`--numa`** — binding ships `LlamaBackend.InitializeNuma` +
+  `LlamaNumaStrategy`. Server-side wiring would be a 3-line
+  `Program.cs` call before model load. Skipped here because it's
+  process-wide state and trivial; queue separately.
+- [~] **`-ot, --override-tensor`**, **`--cpu-moe`** — both ride on
+  the `tensor_buft_overrides` field. The binding doesn't expose the
+  buffer-type API yet (`ggml_backend_dev_buffer_type`,
+  `ggml_backend_dev_host_buffer_type`); see follow-up.
 - [~] **`-mu, --model-url`** / **`-hf, --hf-repo`** — download manager.
   Significant design work (resumable, hash-verified, cache directory).
 - [!] **`--embd-gemma-default`, `--fim-qwen-*-default`, etc.** — CLI
@@ -364,9 +379,9 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 65 | shipped, tested |
+| `[x]` done | 70 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 4 | binding work first |
+| `[~]` needs binding | 5 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
 
@@ -401,9 +416,9 @@ All "binding already exposes" items are now wired. What remains:
 2. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
    probe) and remote-URL image fetch (needs a download manager with
    size caps + content-type sniffing).
-3. **Binding-blocked items** (`[~]`) — NUMA / direct-IO / device
-   pinning, model-URL fetch, control-vector. These wait on binding
-   work.
+3. **Binding-blocked items** (`[~]`) — `--numa` (trivial Program.cs
+   wiring; skipped only because it's process-wide), override-tensor +
+   cpu-moe (need the buffer-type API), model-URL fetch, control-vector.
 4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
    rejection-sampling) is the largest remaining feature.
 

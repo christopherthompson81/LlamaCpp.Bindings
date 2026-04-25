@@ -64,6 +64,40 @@ public sealed class ServerOptions
     /// </summary>
     public bool CheckTensors { get; set; } = false;
 
+    /// <summary>llama-server's <c>--direct-io</c> — bypass kernel page cache during model load.</summary>
+    public bool UseDirectIo { get; set; } = false;
+
+    /// <summary>
+    /// llama-server's <c>--no-host</c>. When true, llama.cpp skips host-
+    /// pinning model tensors for GPU access; saves shared memory at the
+    /// cost of slower CPU↔GPU transfers.
+    /// </summary>
+    public bool NoHost { get; set; } = false;
+
+    /// <summary>
+    /// llama-server's <c>--repack</c>. Allow tensor repacking via the
+    /// extra-bufts hook — boosts CPU inference on AMX-capable hardware.
+    /// Defaults to <c>true</c> (matches <c>llama_model_default_params</c>).
+    /// </summary>
+    public bool UseExtraBufts { get; set; } = true;
+
+    /// <summary>
+    /// Restrict model load to a specific list of compute-device names
+    /// (e.g. <c>["CUDA0", "CUDA1"]</c>) instead of using every registered
+    /// device. Names are resolved at startup against
+    /// <see cref="LlamaHardware.EnumerateDevices"/>; unknown names fail
+    /// fast with a list of available devices in the error message.
+    /// Empty / null = use every device (default).
+    /// </summary>
+    public List<string>? Devices { get; set; }
+
+    /// <summary>
+    /// llama-server's <c>--tensor-split</c>. Per-device offload proportion
+    /// when the model is split across multiple GPUs. Empty / null =
+    /// llama.cpp distributes evenly (default).
+    /// </summary>
+    public List<float>? TensorSplit { get; set; }
+
     /// <summary>
     /// Threads used for single-token decode (per-token work). <c>-1</c>
     /// = let llama.cpp pick (default). Most chat workloads with a

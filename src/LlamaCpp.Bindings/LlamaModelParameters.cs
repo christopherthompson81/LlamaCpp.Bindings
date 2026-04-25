@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using LlamaCpp.Bindings.Native;
 
 namespace LlamaCpp.Bindings;
@@ -38,17 +39,158 @@ public sealed class LlamaModelParameters
     /// <summary>Validate tensor data during load. Slow but catches corruption.</summary>
     public bool CheckTensors { get; set; } = false;
 
+    /// <summary>
+    /// Use direct I/O (<c>O_DIRECT</c>) when reading the GGUF — bypasses the
+    /// kernel page cache. Useful for cold loads on machines whose page cache
+    /// is needed for other workloads, but pays the cost of slower mmap.
+    /// </summary>
+    public bool UseDirectIo { get; set; } = false;
+
+    /// <summary>
+    /// When false (default), llama.cpp may pin model tensors into host
+    /// memory accessible from the GPU. <c>true</c> forces it to skip the
+    /// host-pinning step — saves shared memory at the cost of slower
+    /// CPU↔GPU transfers.
+    /// </summary>
+    public bool NoHost { get; set; } = false;
+
+    /// <summary>
+    /// Allow llama.cpp to use "extra buffer types" that some backends provide
+    /// for tensor repacking (e.g., AMX-friendly layouts on supported CPUs).
+    /// llama-server's <c>--repack</c> flag corresponds to this. Default
+    /// matches <c>llama_model_default_params()</c>.
+    /// </summary>
+    public bool UseExtraBufts { get; set; } = true;
+
+    /// <summary>
+    /// Restrict the model load to a specific set of compute devices (in
+    /// order). When non-null and non-empty, llama.cpp ignores its built-in
+    /// device discovery and uses only these devices. <c>null</c> or empty
+    /// = use every registered device (default).
+    /// </summary>
+    /// <remarks>
+    /// Devices come from <see cref="LlamaHardware.EnumerateDevices"/> /
+    /// <see cref="LlamaHardware.FindDeviceByName"/>. Their handles must
+    /// outlive the load call only — once <see cref="LlamaModel"/>'s ctor
+    /// returns, the array is freed.
+    /// </remarks>
+    public IReadOnlyList<LlamaComputeDevice>? Devices { get; set; }
+
+    /// <summary>
+    /// Per-device proportion of the model to offload (length must be
+    /// <c>llama_max_devices()</c> when non-null; the binding pads shorter
+    /// inputs with zeros and rejects longer ones). Pairs with
+    /// <see cref="LlamaSplitMode.Layer"/> / <see cref="LlamaSplitMode.Row"/>
+    /// to control which device gets which fraction.
+    /// </summary>
+    public IReadOnlyList<float>? TensorSplit { get; set; }
+
     internal llama_model_params ToNative()
     {
         var native = NativeMethods.llama_model_default_params();
-        native.n_gpu_layers = GpuLayerCount;
-        native.main_gpu = MainGpu;
-        native.split_mode = (llama_split_mode)SplitMode;
-        native.vocab_only = VocabOnly;
-        native.use_mmap = UseMmap;
-        native.use_mlock = UseMlock;
-        native.check_tensors = CheckTensors;
+        native.n_gpu_layers   = GpuLayerCount;
+        native.main_gpu       = MainGpu;
+        native.split_mode     = (llama_split_mode)SplitMode;
+        native.vocab_only     = VocabOnly;
+        native.use_mmap       = UseMmap;
+        native.use_mlock      = UseMlock;
+        native.check_tensors  = CheckTensors;
+        native.use_direct_io  = UseDirectIo;
+        native.no_host        = NoHost;
+        native.use_extra_bufts = UseExtraBufts;
         return native;
+    }
+
+    /// <summary>
+    /// Build the native struct with side allocations (devices + tensor_split
+    /// pointers) pinned for the lifetime of the returned handle. Caller
+    /// must dispose the handle <em>after</em> the native consumer
+    /// (e.g. <c>llama_model_load_from_file</c>) has returned.
+    /// </summary>
+    internal PinnedNative Pin()
+    {
+        var native = ToNative();
+        IntPtr devicesBuf = IntPtr.Zero;
+        IntPtr tensorSplitBuf = IntPtr.Zero;
+
+        try
+        {
+            if (Devices is { Count: > 0 } devs)
+            {
+                // NULL-terminated ggml_backend_dev_t array. One extra slot
+                // for the terminator; llama.cpp scans until it sees NULL.
+                devicesBuf = Marshal.AllocHGlobal((devs.Count + 1) * IntPtr.Size);
+                for (int i = 0; i < devs.Count; i++)
+                {
+                    Marshal.WriteIntPtr(devicesBuf, i * IntPtr.Size, devs[i].Handle);
+                }
+                Marshal.WriteIntPtr(devicesBuf, devs.Count * IntPtr.Size, IntPtr.Zero);
+                native.devices = devicesBuf;
+            }
+
+            if (TensorSplit is { Count: > 0 } split)
+            {
+                int max = (int)NativeMethods.llama_max_devices();
+                if (split.Count > max)
+                {
+                    throw new ArgumentException(
+                        $"TensorSplit has {split.Count} entries but llama_max_devices() reports {max}.",
+                        nameof(TensorSplit));
+                }
+                // Always allocate the full max-devices block; llama.cpp
+                // reads up to max regardless of what we supply.
+                int byteCount = max * sizeof(float);
+                tensorSplitBuf = Marshal.AllocHGlobal(byteCount);
+                unsafe
+                {
+                    var dst = (float*)tensorSplitBuf;
+                    for (int i = 0; i < max; i++)
+                    {
+                        dst[i] = i < split.Count ? split[i] : 0f;
+                    }
+                }
+                native.tensor_split = tensorSplitBuf;
+            }
+        }
+        catch
+        {
+            if (devicesBuf != IntPtr.Zero) Marshal.FreeHGlobal(devicesBuf);
+            if (tensorSplitBuf != IntPtr.Zero) Marshal.FreeHGlobal(tensorSplitBuf);
+            throw;
+        }
+
+        return new PinnedNative(native, devicesBuf, tensorSplitBuf);
+    }
+
+    /// <summary>
+    /// Disposable holder for a native <c>llama_model_params</c> together
+    /// with any unmanaged side allocations the params reference. Dispose
+    /// frees the side allocations; the native struct itself is a value type
+    /// and goes away with the consumer.
+    /// </summary>
+    internal sealed class PinnedNative : IDisposable
+    {
+        public llama_model_params Native;
+        private IntPtr _devicesBuf;
+        private IntPtr _tensorSplitBuf;
+        private bool _disposed;
+
+        public PinnedNative(llama_model_params native, IntPtr devicesBuf, IntPtr tensorSplitBuf)
+        {
+            Native = native;
+            _devicesBuf = devicesBuf;
+            _tensorSplitBuf = tensorSplitBuf;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (_devicesBuf != IntPtr.Zero) Marshal.FreeHGlobal(_devicesBuf);
+            if (_tensorSplitBuf != IntPtr.Zero) Marshal.FreeHGlobal(_tensorSplitBuf);
+            _devicesBuf = IntPtr.Zero;
+            _tensorSplitBuf = IntPtr.Zero;
+        }
     }
 
     /// <summary>Build a managed snapshot of the native defaults as a starting point.</summary>
@@ -58,13 +200,16 @@ public sealed class LlamaModelParameters
         var native = NativeMethods.llama_model_default_params();
         return new LlamaModelParameters
         {
-            GpuLayerCount = native.n_gpu_layers,
-            MainGpu       = native.main_gpu,
-            SplitMode     = (LlamaSplitMode)native.split_mode,
-            VocabOnly     = native.vocab_only,
-            UseMmap       = native.use_mmap,
-            UseMlock      = native.use_mlock,
-            CheckTensors  = native.check_tensors,
+            GpuLayerCount  = native.n_gpu_layers,
+            MainGpu        = native.main_gpu,
+            SplitMode      = (LlamaSplitMode)native.split_mode,
+            VocabOnly      = native.vocab_only,
+            UseMmap        = native.use_mmap,
+            UseMlock       = native.use_mlock,
+            CheckTensors   = native.check_tensors,
+            UseDirectIo    = native.use_direct_io,
+            NoHost         = native.no_host,
+            UseExtraBufts  = native.use_extra_bufts,
         };
     }
 }

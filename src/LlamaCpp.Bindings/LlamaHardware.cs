@@ -6,14 +6,19 @@ namespace LlamaCpp.Bindings;
 /// <summary>
 /// Compute device discovered by ggml. Provides name + free/total memory
 /// so higher layers (auto-configure heuristics, UI diagnostics) can size
-/// context and GPU-layer counts against actual hardware.
+/// context and GPU-layer counts against actual hardware. The
+/// <see cref="Handle"/> field carries the underlying
+/// <c>ggml_backend_dev_t</c> pointer so device-pinning consumers
+/// (<see cref="LlamaModelParameters.Devices"/>, override-tensor
+/// patterns) can pass it back into native APIs.
 /// </summary>
 public sealed record LlamaComputeDevice(
     string Name,
     string Description,
     LlamaComputeDeviceType Type,
     long FreeBytes,
-    long TotalBytes);
+    long TotalBytes,
+    IntPtr Handle);
 
 /// <summary>
 /// Kind of compute device. Mirrors <c>ggml_backend_dev_type</c>.
@@ -68,9 +73,29 @@ public static class LlamaHardware
                 Description: Marshal.PtrToStringUTF8(descPtr) ?? string.Empty,
                 Type: (LlamaComputeDeviceType)type,
                 FreeBytes: (long)freeB,
-                TotalBytes: (long)totalB));
+                TotalBytes: (long)totalB,
+                Handle: devPtr));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Look up a single device by its ggml-reported name (e.g. <c>"CUDA0"</c>,
+    /// <c>"CPU"</c>). Case-insensitive. Returns <c>null</c> when no device
+    /// matches — operators get a clearer error than a confusing native
+    /// failure deep in load.
+    /// </summary>
+    public static LlamaComputeDevice? FindDeviceByName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        foreach (var d in EnumerateDevices())
+        {
+            if (string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return d;
+            }
+        }
+        return null;
     }
 
     /// <summary>

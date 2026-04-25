@@ -51,14 +51,46 @@ public sealed class ModelHost : IDisposable
         _log.LogInformation("Loading model from {Path} (gpuLayers={Gpu}, ctx={Ctx}, slots={Slots})",
             _opts.ModelPath, _opts.GpuLayerCount, _opts.ContextSize, _opts.MaxSequenceCount);
 
+        // Resolve device names against the live ggml backend list.
+        // Failing fast with the available-device list is a much better
+        // operator experience than a silent CUDA0 → wrong-device fallback.
+        IReadOnlyList<LlamaComputeDevice>? pinnedDevices = null;
+        if (_opts.Devices is { Count: > 0 } deviceNames)
+        {
+            // EnumerateDevices auto-initialises the backend, but we
+            // already called Initialize above (line 40) — calling it
+            // here would be a no-op anyway.
+            var available = LlamaHardware.EnumerateDevices();
+            var picked = new List<LlamaComputeDevice>(deviceNames.Count);
+            foreach (var name in deviceNames)
+            {
+                var dev = available.FirstOrDefault(d =>
+                    string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (dev is null)
+                {
+                    var availList = string.Join(", ", available.Select(d => d.Name));
+                    throw new InvalidOperationException(
+                        $"LlamaServer:Devices entry '{name}' did not match any registered " +
+                        $"compute device. Available: [{availList}].");
+                }
+                picked.Add(dev);
+            }
+            pinnedDevices = picked;
+        }
+
         Model = new LlamaModel(_opts.ModelPath, new LlamaModelParameters
         {
-            GpuLayerCount = _opts.GpuLayerCount,
-            MainGpu       = _opts.MainGpu,
-            SplitMode     = _opts.SplitMode,
-            UseMmap       = _opts.UseMmap,
-            UseMlock      = _opts.UseMlock,
-            CheckTensors  = _opts.CheckTensors,
+            GpuLayerCount  = _opts.GpuLayerCount,
+            MainGpu        = _opts.MainGpu,
+            SplitMode      = _opts.SplitMode,
+            UseMmap        = _opts.UseMmap,
+            UseMlock       = _opts.UseMlock,
+            CheckTensors   = _opts.CheckTensors,
+            UseDirectIo    = _opts.UseDirectIo,
+            NoHost         = _opts.NoHost,
+            UseExtraBufts  = _opts.UseExtraBufts,
+            Devices        = pinnedDevices,
+            TensorSplit    = _opts.TensorSplit,
         });
 
         Context = new LlamaContext(Model, BuildContextParameters(

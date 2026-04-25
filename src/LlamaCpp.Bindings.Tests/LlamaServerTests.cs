@@ -2359,6 +2359,135 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// Device pinning + tensor-split + the load-time bool knobs (UseDirectIo,
+/// NoHost, UseExtraBufts). Picks the first available device by name and
+/// verifies the model still loads + serves chat. The bad-name test
+/// confirms operators get a clear "device not found" error rather than
+/// a confusing native failure.
+/// </summary>
+public class LlamaServerDevicePinningTests : IClassFixture<LlamaServerDevicePinningTests.PinFactory>
+{
+    private readonly PinFactory _factory;
+    public LlamaServerDevicePinningTests(PinFactory factory) => _factory = factory;
+
+    [Fact]
+    public void EnumerateDevices_Reports_At_Least_One_Device_With_Handle()
+    {
+        // Backend init happens lazily; this also acts as a smoke check
+        // that the binding is wired up before the server tests poke it.
+        LlamaBackend.Initialize();
+        var devices = LlamaHardware.EnumerateDevices();
+        Assert.NotEmpty(devices);
+        foreach (var d in devices)
+        {
+            Assert.NotEqual(IntPtr.Zero, d.Handle);
+            Assert.False(string.IsNullOrEmpty(d.Name));
+        }
+    }
+
+    [Fact]
+    public async Task Server_Boots_With_Pinned_Device_And_Serves_Chat()
+    {
+        if (!_factory.IsConfigured) return;
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public void Bad_Device_Name_Surfaces_During_Startup()
+    {
+        using var factory = new BadDeviceFactory();
+        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        // Whichever exception bubbles up, the operator should see the
+        // bad name plus the available list — that's the entire reason
+        // we fail eagerly in ModelHost rather than letting llama.cpp
+        // silently fall back.
+        var inner = ex;
+        while (inner is not null)
+        {
+            if (inner.Message.Contains("definitely-not-a-real-device", StringComparison.Ordinal))
+            {
+                return;
+            }
+            inner = inner.InnerException;
+        }
+        Assert.Fail($"Expected error referencing the bad device name, got: {ex}");
+    }
+
+    public sealed class PinFactory : WebApplicationFactory<Program>
+    {
+        public bool IsConfigured { get; private set; }
+        public string? ChosenDevice { get; private set; }
+
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            // Pick the first GPU if one's available; otherwise fall back
+            // to the CPU device so the test still exercises the wiring.
+            LlamaBackend.Initialize();
+            var devices = LlamaHardware.EnumerateDevices();
+            var chosen = devices.FirstOrDefault(d =>
+                d.Type is LlamaComputeDeviceType.Gpu or LlamaComputeDeviceType.IntegratedGpu)
+                ?? devices.FirstOrDefault(d => d.Type == LlamaComputeDeviceType.Cpu);
+            if (chosen is null)
+            {
+                IsConfigured = false;
+                return base.CreateHost(builder);
+            }
+            ChosenDevice = chosen.Name;
+            IsConfigured = true;
+
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]       = modelPath,
+                    ["LlamaServer:ContextSize"]     = "1024",
+                    ["LlamaServer:MaxSequenceCount"] = "1",
+                    ["LlamaServer:GpuLayerCount"]   = "-1",
+                    ["LlamaServer:OffloadKqv"]      = "true",
+                    ["LlamaServer:MaxOutputTokens"] = "16",
+                    ["LlamaServer:Devices:0"]       = chosen.Name,
+                    ["LlamaServer:UseDirectIo"]     = "false",
+                    ["LlamaServer:NoHost"]          = "false",
+                    ["LlamaServer:UseExtraBufts"]   = "true",
+                    ["LlamaServer:Urls"]            = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+
+    public sealed class BadDeviceFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]       = modelPath,
+                    ["LlamaServer:ContextSize"]     = "1024",
+                    ["LlamaServer:MaxSequenceCount"] = "1",
+                    ["LlamaServer:GpuLayerCount"]   = "-1",
+                    ["LlamaServer:Urls"]            = "",
+                    ["LlamaServer:Devices:0"]       = "definitely-not-a-real-device",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
 /// RoPE / YARN startup knobs. Boots the server with non-default values for
 /// every new field and verifies the model still serves chat — proves the
 /// ServerOptions → LlamaContextParameters → llama_context_params handoff

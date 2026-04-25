@@ -182,8 +182,12 @@ public sealed class LlamaModel : IDisposable
 
         LlamaBackend.EnsureInitialized();
 
-        var native = (parameters ?? LlamaModelParameters.Default()).ToNative();
-        var raw = NativeMethods.llama_model_load_from_file(path, native);
+        // Pin() bundles the native struct with any unmanaged side
+        // allocations (devices + tensor_split arrays) so they outlive the
+        // load call. The using block guarantees the buffers are freed
+        // even if load throws.
+        using var pinned = (parameters ?? LlamaModelParameters.Default()).Pin();
+        var raw = NativeMethods.llama_model_load_from_file(path, pinned.Native);
         if (raw == IntPtr.Zero)
         {
             throw new LlamaException(
