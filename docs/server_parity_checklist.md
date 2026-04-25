@@ -63,14 +63,18 @@ The OpenAI-compatible surface plus llama-server's native routes.
 - [x] **`GET /metrics`** — Prometheus scrape target shipped in §11.
   Time-to-first-token histograms remain a follow-up (tracked under
   [#18](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/18)).
-- [ ] **`GET /props`** — llama-server's "what model is loaded and how"
-  dump. We expose most of the same info via `/v1/models` + `/slots`;
-  question is whether to match the exact llama-server schema or ship our
-  own shape.
-- [~] **`POST /v1/completions`** — legacy (non-chat) OpenAI endpoint.
-  Semantically close to our `/completion` but with OpenAI-style response
-  shape. Low priority — callers that need a proper OpenAI-completions
-  client almost always already use `/v1/chat/completions`.
+- [!] **`GET /props`** — out of scope. The only consumer is llama.cpp's
+  bundled web UI, which we don't ship; OpenAI-compatible frontends
+  (Continue, Open WebUI, openai-python) never touch it. Matching the
+  exact schema would also force us to chase upstream's drift every
+  release. We surface what callers actually need via `/v1/models` and
+  `/slots` and leave it at that.
+- [!] **`POST /v1/completions`** — out of scope. The legacy non-chat
+  OpenAI endpoint is functionally redundant with our `/completion` (raw
+  prompt in, text out); the only thing missing is the OpenAI response
+  envelope, and callers that want OpenAI compatibility already speak
+  `/v1/chat/completions`. Adding a second endpoint with its own DTO
+  layer for marginal client coverage isn't worth the surface area.
 - [!] **Tool-adjacent built-ins** (`--tools`, agentic built-in search):
   llama-server ships server-side tools that are a deliberate scope creep
   for a local runtime. Our position: tool-calling schema support in chat
@@ -409,7 +413,7 @@ dependency) to deserve its own thread:
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 0 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
-| `[!]` won't | 7 | explicit non-goal |
+| `[!]` won't | 9 | explicit non-goal |
 
 ## Remaining `[ ]` TODO items
 
@@ -419,9 +423,6 @@ non-goal columns above.
 
 Deliberate skips (logged here for memory rather than re-discussion):
 
-- §1: `GET /props` — narrow audience (only the bundled llama.cpp web UI
-  reads it; OpenAI-compatible frontends ignore it). Re-evaluate if a
-  user actually needs it.
 - §4: `cache_prompt` opt-out — the SessionPool's prefix matching is
   cheap; per-request opt-out is a knob looking for a use case.
 - §7: `--mmproj-auto`, remote-URL image fetch — both are usability
@@ -434,19 +435,16 @@ observability, cancellation, extended sampling, multimodal, tool
 calling, logprobs, rerank) are all shipped. What's left is operator-
 ergonomic polish + binding-blocked features.
 
-All "binding already exposes" items are now wired. What remains:
+All "binding already exposes" items are now wired, and every
+binding-blocked row has shipped its binding work. What remains:
 
-1. **Small endpoint polish** (§1, §4, §10) — `GET /props`,
-   `cache_prompt` opt-out, adaptive_p / dynatemp / custom sampler
-   ordering. Each is a few lines of glue; together one PR.
-2. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
+1. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
    probe) and remote-URL image fetch (needs a download manager with
-   size caps + content-type sniffing).
-3. **Binding-blocked items** (`[~]`) — none. Every row that needed
-   binding work has shipped.
-4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
-   rejection-sampling) is the largest remaining feature.
+   size caps + content-type sniffing). Both usability rather than
+   parity.
+2. **Tracked GitHub issues** — see the table above. #14 (DeepMind
+   rejection-sampling for speculative) is the largest remaining
+   feature; #22 (SSL e2e test) is the smallest.
 
-Everything in the GitHub-issues table is queued behind those when its
-scope warrants the work. The biggest is #14 (speculative
-rejection-sampling); the smallest is #22 (SSL e2e test).
+Parity, in the sense of "any feature llama-server has that we don't
+deliberately decline," is essentially done.
