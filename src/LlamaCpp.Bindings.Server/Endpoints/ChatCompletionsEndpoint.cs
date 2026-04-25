@@ -28,6 +28,7 @@ public static class ChatCompletionsEndpoint
         IOptions<ServerOptions> options,
         ILoggerFactory loggerFactory,
         ServerMetrics metrics,
+        MmprojHost mmproj,
         CancellationToken cancellationToken)
     {
         var log = loggerFactory.CreateLogger("ChatCompletions");
@@ -49,10 +50,39 @@ public static class ChatCompletionsEndpoint
             return;
         }
 
+        // Flatten polymorphic content (string or array of parts) into plain
+        // text + a separate list of image bytes. This runs before template
+        // application so the Jinja renderer just sees strings. Multi-part
+        // input that includes images needs the mmproj path; we check that
+        // after extraction so malformed parts reject with 400 first.
+        string mediaMarker = mmproj.IsAvailable ? mmproj.Context!.DefaultMediaMarker : "<__media__>";
+        ChatContentExtractor.Result contentResult;
+        try
+        {
+            contentResult = ChatContentExtractor.FlattenAndExtract(req.Messages, mediaMarker);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
+        if (contentResult.HasImages && !mmproj.IsAvailable)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                error = "This server is not configured with a multimodal projector. " +
+                        "Set LlamaServer:MmprojPath to accept image_url content parts.",
+            }, cancellationToken);
+            return;
+        }
+
         string prompt;
         try
         {
-            var messages = req.Messages.Select(m => new ChatMessage(m.Role, m.Content)).ToArray();
+            var messages = req.Messages.Select(m => new ChatMessage(m.Role, m.Content?.Text ?? "")).ToArray();
             prompt = LlamaChatTemplate.Apply(template, messages, addAssistantPrefix: true);
         }
         catch (Exception ex)
@@ -125,6 +155,70 @@ public static class ChatCompletionsEndpoint
 
         var matcher = new StopMatcher(stops);
 
+        // Multimodal branch: image tokens go into the KV via the mtmd
+        // helper rather than the normal prompt-tokens path, so the pool's
+        // prefix-cache matching doesn't apply. We lease a slot with
+        // no-prompt (forcing zero cache reuse), clear its KV, run
+        // EvalPromptAsync to prefill image + text chunks, then stream
+        // from the context's current state.
+        if (contentResult.HasImages)
+        {
+            using var lease0 = await pool.LeaseAsync(Array.Empty<int>(), cancellationToken);
+            using var _0 = sampler;
+            lease0.InvalidateCache();
+            lease0.Session.ClearHistory();
+
+            var generator0 = new LlamaGenerator(lease0.Session, sampler);
+            http.Response.Headers["X-Cached-Tokens"] = "0";
+
+            var timer0 = new RequestTimer(promptTokensToDecode: 0, cachedTokens: 0);
+
+            string id0 = "chatcmpl-" + Guid.NewGuid().ToString("N");
+            long created0 = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+            var bitmaps = new List<MtmdBitmap>();
+            try
+            {
+                foreach (var bytes in contentResult.Images)
+                {
+                    bitmaps.Add(MtmdBitmap.FromBytes(mmproj.Context!, bytes));
+                }
+                await mmproj.Context!.EvalPromptAsync(
+                    lease0.Session.Context, prompt, bitmaps,
+                    nPast: 0,
+                    seqId: lease0.Session.SequenceId,
+                    nBatch: lease0.Session.Context.LogicalBatchSize,
+                    logitsLast: true,
+                    addSpecial: false,
+                    parseSpecial: true,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                foreach (var b in bitmaps) b.Dispose();
+                log.LogWarning(ex, "mmproj prefill failed");
+                http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                await http.Response.WriteAsJsonAsync(new { error = "multimodal prefill failed: " + ex.Message }, cancellationToken);
+                return;
+            }
+            try
+            {
+                if (req.Stream)
+                {
+                    await StreamSseFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, cancellationToken);
+                }
+                else
+                {
+                    await WriteSingleJsonFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, cancellationToken);
+                }
+            }
+            finally
+            {
+                foreach (var b in bitmaps) b.Dispose();
+            }
+            return;
+        }
+
         // Lease a slot (may queue). The lease carries FirstNewIndex = how
         // many of these tokens are already in KV from the last request.
         using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
@@ -155,6 +249,108 @@ public static class ChatCompletionsEndpoint
         {
             await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, cancellationToken);
         }
+    }
+
+    // ----- Multimodal path: sampling starts from logits already in place -----
+
+    private static async Task WriteSingleJsonFromCurrent(
+        HttpContext http, LlamaGenerator gen,
+        StopMatcher matcher, int maxTokens,
+        ModelHost host, string id, long created,
+        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+    {
+        var buf = new StringBuilder();
+        bool stoppedOnMatch = false;
+        await foreach (var piece in gen.StreamFromCurrentStateAsync(
+            maxTokens: maxTokens, cancellationToken: ct))
+        {
+            timer.MarkFirstToken();
+            timer.IncrementPredicted();
+            var (emit, stopped) = matcher.Offer(piece);
+            if (emit.Length > 0) buf.Append(emit);
+            if (stopped) { stoppedOnMatch = true; break; }
+        }
+        if (!stoppedOnMatch) buf.Append(matcher.Flush());
+        timer.Finish();
+        metrics.AddTokensGenerated(timer.PredictedTokens);
+
+        var response = new ChatCompletionsResponse
+        {
+            Id = id, Created = created, Model = host.ModelId,
+            Choices = new()
+            {
+                new() {
+                    Index = 0,
+                    Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
+                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
+                },
+            },
+            Timings = timer.Snapshot(),
+        };
+        http.Response.ContentType = "application/json";
+        await http.Response.WriteAsJsonAsync(response, cancellationToken: ct);
+    }
+
+    private static async Task StreamSseFromCurrent(
+        HttpContext http, LlamaGenerator gen,
+        StopMatcher matcher, int maxTokens,
+        ModelHost host, string id, long created,
+        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+    {
+        http.Response.ContentType = "text/event-stream";
+        http.Response.Headers.CacheControl = "no-cache";
+        var feature = http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>();
+        feature?.DisableBuffering();
+
+        await WriteChunk(http, new ChatCompletionsChunk
+        {
+            Id = id, Created = created, Model = host.ModelId,
+            Choices = new() { new() { Index = 0, Delta = new() { Role = "assistant" }, FinishReason = null } },
+        }, ct);
+
+        bool stoppedOnMatch = false;
+        await foreach (var piece in gen.StreamFromCurrentStateAsync(
+            maxTokens: maxTokens, cancellationToken: ct))
+        {
+            timer.MarkFirstToken();
+            timer.IncrementPredicted();
+            var (emit, stopped) = matcher.Offer(piece);
+            if (!string.IsNullOrEmpty(emit))
+            {
+                await WriteChunk(http, new ChatCompletionsChunk
+                {
+                    Id = id, Created = created, Model = host.ModelId,
+                    Choices = new() { new() { Index = 0, Delta = new() { Content = emit }, FinishReason = null } },
+                }, ct);
+            }
+            if (stopped) { stoppedOnMatch = true; break; }
+        }
+        if (!stoppedOnMatch)
+        {
+            var tail = matcher.Flush();
+            if (!string.IsNullOrEmpty(tail))
+            {
+                await WriteChunk(http, new ChatCompletionsChunk
+                {
+                    Id = id, Created = created, Model = host.ModelId,
+                    Choices = new() { new() { Index = 0, Delta = new() { Content = tail }, FinishReason = null } },
+                }, ct);
+            }
+        }
+        timer.Finish();
+        metrics.AddTokensGenerated(timer.PredictedTokens);
+
+        await WriteChunk(http, new ChatCompletionsChunk
+        {
+            Id = id, Created = created, Model = host.ModelId,
+            Choices = new()
+            {
+                new() { Index = 0, Delta = new(),
+                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason) },
+            },
+            Timings = timer.Snapshot(),
+        }, ct);
+        await http.Response.WriteAsync("data: [DONE]\n\n", ct);
     }
 
     // ----- Non-streaming: collect all pieces into one response body. -----

@@ -135,8 +135,10 @@ Features clients expect from the OpenAI chat-completions API.
   on the grammar path by compiling a schema from the requested tool
   definitions. The on-the-wire shape matters more than the implementation
   strategy.
-- [~] **Multi-part content blocks** (text + image-url parts) — requires
-  multimodal support on the server; tracked under §7.
+- [x] **Multi-part content blocks** (text + image-url parts) — wired
+  in §7. The text-only multipart path works regardless of mmproj
+  availability (it flattens to a plain string); image parts require
+  mmproj and otherwise reject with 400.
 - [!] **`n > 1`** — multiple completions per request. Low priority; any
   client can issue N concurrent requests to the same endpoint and get
   the same result with better use of the session pool.
@@ -157,7 +159,9 @@ Features clients expect from the OpenAI chat-completions API.
 - [ ] **`cache_prompt`** — currently always on (prompt cache is
   unconditional). llama-server lets clients opt out per request. Needs a
   bool field; when false, skip the LCP match and claim a fresh-state slot.
-- [~] **`image_data`** — multimodal side of `/completion`. §7.
+- [~] **`image_data`** — multimodal side of `/completion`. V1 ships
+  images through the chat endpoint only; the raw `/completion` path
+  has no template to splice a media marker into. Lower priority.
 
 ## 5. Embeddings (`/v1/embeddings`)
 
@@ -209,16 +213,22 @@ Features clients expect from the OpenAI chat-completions API.
 
 ## 7. Multimodal
 
-- [~] **`--mmproj FILE`** — binding has full `MtmdContext` support; the
-  server has no endpoint surface for it yet. Needs: mmproj path in
-  config, image upload in chat-completions request content (multi-part
-  `content: [{type: "image_url", image_url: {url}}]`), eval via
-  `MtmdContext.EvalPromptAsync` into the session's KV before the text
-  decode starts.
-- [~] **`--mmproj-offload`**, **`--image-min-tokens`**,
-  **`--image-max-tokens`** — context params; flow from request or config.
-- [~] **`--mmproj-auto`** — probe for sibling mmproj. Cheap once the
-  endpoint exists.
+- [x] **`--mmproj FILE`** — `ServerOptions.MmprojPath`. Optional
+  `MmprojHost` loads the projector on startup; chat completions
+  accept OpenAI multi-part content with `image_url` parts (data:
+  URLs only in V1; remote-URL fetch is a follow-up). The endpoint
+  detects image presence, leases a fresh pool slot with its cache
+  invalidated (image tokens in KV aren't recoverable from text),
+  runs `MtmdContext.EvalPromptAsync` to prefill, then streams via
+  `StreamFromCurrentStateAsync`.
+- [x] **`--mmproj-offload`**, **`--image-min-tokens`**,
+  **`--image-max-tokens`** — exposed as `MmprojOnCpu`,
+  `MmprojImageMinTokens`, `MmprojImageMaxTokens`.
+- [ ] **`--mmproj-auto`** — probe for a sibling mmproj file next to
+  the chat model. Cheap filename convention check; not yet wired.
+- [ ] **Remote-URL image fetch** — `image_url.url` fields with
+  `http(s)://` schemes currently 400. Needs a download manager with
+  size caps + content-type sniffing; follow-up to #19.
 
 ## 8. Speculative decoding
 
@@ -302,8 +312,8 @@ Features clients expect from the OpenAI chat-completions API.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 42 | shipped, tested |
-| `[ ]` TODO | 14 | binding already exposes; server-side wiring only |
+| `[x]` done | 46 | shipped, tested |
+| `[ ]` TODO | 12 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -314,12 +324,12 @@ Weighed by user-visible impact per unit of work, with the understanding
 that we've already hit the big items (multi-session, prompt caching,
 embeddings, auth, observability, cancellation, extended sampling).
 
-1. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
-   already does the hard part.
-2. **Tool calling / function calling** (§3) — high value for agent
+1. **Tool calling / function calling** (§3) — high value for agent
    workflows; tracked in [#21](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/21).
-3. **Logprobs / top_logprobs** (§3) — useful for evals; tracked in
+2. **Logprobs / top_logprobs** (§3) — useful for evals; tracked in
    [#20](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/20).
+3. **Remote-URL image fetch** (§7) — the multimodal follow-up; needs
+   a size-capped download manager. Tracked alongside #19.
 
 Everything under `[~]` is binding-side work of varying size. Speculative
 decoding (§8) and LoRA (§9) are the two most feature-complete on the

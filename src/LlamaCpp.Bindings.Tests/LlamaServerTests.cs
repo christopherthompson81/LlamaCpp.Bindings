@@ -72,7 +72,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.NotNull(body);
         Assert.Single(body!.Choices);
         Assert.Equal("assistant", body.Choices[0].Message.Role);
-        Assert.False(string.IsNullOrWhiteSpace(body.Choices[0].Message.Content),
+        Assert.False(string.IsNullOrWhiteSpace(body.Choices[0].Message.Content?.Text ?? ""),
             "assistant message content was empty");
     }
 
@@ -244,7 +244,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         r1.EnsureSuccessStatusCode();
         var body1 = await r1.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        var assistantReply = body1!.Choices[0].Message.Content;
+        var assistantReply = body1!.Choices[0].Message.Content?.Text ?? "";
         int turn1Cached = int.Parse(r1.Headers.GetValues("X-Cached-Tokens").First());
         // Turn 1's unique marker keeps the body miss-only; template
         // preamble (~3 tokens) is the only legitimate cache hit here.
@@ -334,7 +334,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         var b2 = await r2.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(b1!.Choices[0].Message.Content, b2!.Choices[0].Message.Content);
+        Assert.Equal(b1!.Choices[0].Message.Content?.Text ?? "", b2!.Choices[0].Message.Content?.Text ?? "");
         Assert.True(int.Parse(r2.Headers.GetValues("X-Cached-Tokens").First()) > 0,
             "Sanity: second request should have used the cache.");
     }
@@ -363,7 +363,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
             resp.EnsureSuccessStatusCode();
             var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
                 cancellationToken: TestContext.Current.CancellationToken);
-            return body!.Choices[0].Message.Content;
+            return body!.Choices[0].Message.Content?.Text ?? "";
         }
 
         var results = await Task.WhenAll(
@@ -463,7 +463,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         baseResp.EnsureSuccessStatusCode();
         var baseline = await baseResp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        var baseText = baseline!.Choices[0].Message.Content;
+        var baseText = baseline!.Choices[0].Message.Content?.Text ?? "";
         Assert.False(string.IsNullOrEmpty(baseText), "baseline produced empty output");
 
         // Tokenize the baseline output via the /completion endpoint's vocab
@@ -488,7 +488,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         var biased = await biasedResp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.NotEqual(baseText, biased!.Choices[0].Message.Content);
+        Assert.NotEqual(baseText, biased!.Choices[0].Message.Content?.Text ?? "");
     }
 
     // ----- Extended sampling knobs (min_p, typical_p, top_n_sigma, xtc, dry, mirostat, penalties) -----
@@ -516,7 +516,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content));
+        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content?.Text ?? ""));
     }
 
     [Fact]
@@ -567,7 +567,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content));
+        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content?.Text ?? ""));
     }
 
     [Fact]
@@ -610,7 +610,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content));
+        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content?.Text ?? ""));
     }
 
     private async Task<string> PostChat(
@@ -627,7 +627,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        return body!.Choices[0].Message.Content;
+        return body!.Choices[0].Message.Content?.Text ?? "";
     }
 
     // ----- stop sequences -----
@@ -648,7 +648,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        var text = body!.Choices[0].Message.Content;
+        var text = body!.Choices[0].Message.Content?.Text ?? "";
 
         // Whichever stop fires, none of the three should appear in the
         // returned text — the stop is always stripped.
@@ -691,7 +691,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(body);
-        var text = body!.Choices[0].Message.Content;
+        var text = body!.Choices[0].Message.Content?.Text ?? "";
         Assert.DoesNotContain(" C ", text);
         // The model should at minimum emit something before the stop fires;
         // empty output means the first token was already the stop (odd but
@@ -790,6 +790,85 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         // Either "stop" or "length" is a valid outcome here; we only
         // guard against 4xx/5xx and malformed responses.
         Assert.Contains(body!.StopReason, new[] { "stop", "length" });
+    }
+
+    // ----- Multimodal content part handling -----
+
+    [Fact]
+    public async Task Chat_Accepts_Array_Content_With_Only_Text_Parts()
+    {
+        // Text-only multipart content (no images) must still work even
+        // when MmprojHost isn't configured — it should flatten to a
+        // plain string and take the normal text-only path.
+        var client = _factory.CreateClient();
+        string marker = Guid.NewGuid().ToString("N");
+        string raw =
+            "{\"messages\":[{\"role\":\"user\",\"content\":[" +
+            "{\"type\":\"text\",\"text\":\"Hello, \"}," +
+            "{\"type\":\"text\",\"text\":\"world. " + marker + "\"}" +
+            "]}],\"max_tokens\":4}";
+        using var content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/v1/chat/completions", content, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content?.Text ?? ""));
+    }
+
+    [Fact]
+    public async Task Chat_Rejects_Image_Part_With_400_When_Mmproj_Not_Configured()
+    {
+        // Default fixture has no MmprojPath set. An image_url part should
+        // get a 400 before any generation happens — tells the caller the
+        // feature is disabled for this deployment.
+        var client = _factory.CreateClient();
+        const string TinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        string raw =
+            "{\"messages\":[{\"role\":\"user\",\"content\":[" +
+            "{\"type\":\"text\",\"text\":\"Describe.\"}," +
+            "{\"type\":\"image_url\",\"image_url\":{\"url\":\"" + TinyPng + "\"}}" +
+            "]}],\"max_tokens\":4}";
+        using var content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/v1/chat/completions", content, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Chat_Rejects_Unknown_Content_Part_Type_With_400()
+    {
+        var client = _factory.CreateClient();
+        var raw = """
+            {
+              "messages": [
+                {"role": "user", "content": [
+                   {"type": "video_url", "video_url": {"url": "http://x"}}
+                ]}
+              ],
+              "max_tokens": 2
+            }
+            """;
+        using var content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/v1/chat/completions", content, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Chat_Rejects_Non_Data_Url_Image_With_400()
+    {
+        var client = _factory.CreateClient();
+        var raw = """
+            {
+              "messages": [
+                {"role": "user", "content": [
+                   {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+                ]}
+              ],
+              "max_tokens": 2
+            }
+            """;
+        using var content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/v1/chat/completions", content, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
     // ----- Per-request timings + /metrics -----
@@ -985,7 +1064,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
 
-        var content = body!.Choices[0].Message.Content.Trim();
+        var content = body!.Choices[0].Message.Content?.Text ?? "".Trim();
         Assert.False(string.IsNullOrEmpty(content));
         // Must parse as JSON. An ungrammared model would wrap the object
         // in natural-language prose like "Here's your JSON: {...}" which
@@ -1032,7 +1111,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
 
-        var content = body!.Choices[0].Message.Content.Trim();
+        var content = body!.Choices[0].Message.Content?.Text ?? "".Trim();
         using var doc = JsonDocument.Parse(content);
         Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
         Assert.True(doc.RootElement.TryGetProperty("name", out var name));
@@ -1064,7 +1143,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        var content = body!.Choices[0].Message.Content.Trim();
+        var content = body!.Choices[0].Message.Content?.Text ?? "".Trim();
         Assert.Contains(content, new[] { "yes", "no", "maybe" });
     }
 
@@ -1086,7 +1165,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        var content = body!.Choices[0].Message.Content.Trim();
+        var content = body!.Choices[0].Message.Content?.Text ?? "".Trim();
         using var doc = JsonDocument.Parse(content);
         Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
     }
@@ -1146,7 +1225,7 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("yes", body!.Choices[0].Message.Content.Trim());
+        Assert.Equal("yes", body!.Choices[0].Message.Content?.Text ?? "".Trim());
     }
 
     // ----- /v1/embeddings: 501 when no embedding model is configured -----

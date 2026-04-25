@@ -221,6 +221,7 @@ public sealed class SessionLease : IDisposable
     private readonly int[] _promptTokens;
     private List<int>? _generated;
     private bool _disposed;
+    private bool _invalidate;
 
     public LlamaSession Session { get; }
 
@@ -261,13 +262,33 @@ public sealed class SessionLease : IDisposable
         (_generated ??= new List<int>()).Add(token);
     }
 
+    /// <summary>
+    /// Mark this slot's KV state as not-reusable by future prefix-cache
+    /// matches. Used by the multimodal branch of <c>/v1/chat/completions</c>:
+    /// image embeddings written into the slot's KV don't correspond to
+    /// tokenisable text, so a subsequent request with the same text
+    /// prefix would get garbage if it "reused" them.
+    /// On dispose, the slot's KV is cleared and its recorded token list
+    /// reset to empty.
+    /// </summary>
+    public void InvalidateCache() => _invalidate = true;
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
         int[] finalTokens;
-        if (_generated is null || _generated.Count == 0)
+        if (_invalidate)
+        {
+            // Multimodal / any path where KV contents diverge from the
+            // text prompt — blow the slot's KV away + zero the token
+            // log so no future request matches a prefix against it.
+            try { _slot.Session.ClearHistory(); }
+            catch { /* best-effort; disposed-mid-race is fine */ }
+            finalTokens = Array.Empty<int>();
+        }
+        else if (_generated is null || _generated.Count == 0)
         {
             finalTokens = _promptTokens;
         }

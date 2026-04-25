@@ -115,8 +115,95 @@ public sealed class ChatMessageDto
     [JsonPropertyName("role")]
     public string Role { get; set; } = "user";
 
+    /// <summary>
+    /// Polymorphic content: a plain string (the legacy and still-most-common
+    /// shape) or an array of <see cref="ContentPart"/> entries for
+    /// multimodal chat (text interleaved with images). The
+    /// <see cref="MessageContent"/> converter handles the shape detection
+    /// on the wire; C# code can assign a string directly thanks to the
+    /// implicit operator.
+    /// </summary>
     [JsonPropertyName("content")]
-    public string Content { get; set; } = "";
+    public MessageContent? Content { get; set; }
+}
+
+/// <summary>
+/// Request-side wrapper over OpenAI's polymorphic chat-content field.
+/// Exactly one of <see cref="Text"/> or <see cref="Parts"/> is set after
+/// deserialization. Implicit conversion from <see cref="string"/> keeps
+/// caller sites that write <c>Content = "hi"</c> working.
+/// </summary>
+[JsonConverter(typeof(MessageContentConverter))]
+public sealed class MessageContent
+{
+    /// <summary>Set when the wire content is a bare string.</summary>
+    public string? Text { get; set; }
+
+    /// <summary>Set when the wire content is an array of parts.</summary>
+    public List<ContentPart>? Parts { get; set; }
+
+    public static implicit operator MessageContent?(string? text) =>
+        text is null ? null : new() { Text = text };
+}
+
+/// <summary>
+/// One entry in a multimodal content array: either a text run or an
+/// image reference. OpenAI's shape: <c>{type: "text", text: "..."}</c>
+/// or <c>{type: "image_url", image_url: {url: "..."}}</c>. Audio /
+/// video parts aren't modelled here.
+/// </summary>
+public sealed class ContentPart
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "text";
+
+    [JsonPropertyName("text")]
+    public string? Text { get; set; }
+
+    [JsonPropertyName("image_url")]
+    public ImageUrl? ImageUrl { get; set; }
+}
+
+public sealed class ImageUrl
+{
+    [JsonPropertyName("url")]
+    public string Url { get; set; } = "";
+}
+
+internal sealed class MessageContentConverter : JsonConverter<MessageContent>
+{
+    public override MessageContent? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.Null:
+                return null;
+            case JsonTokenType.String:
+                return new MessageContent { Text = reader.GetString() };
+            case JsonTokenType.StartArray:
+                var parts = JsonSerializer.Deserialize<List<ContentPart>>(ref reader, options);
+                return new MessageContent { Parts = parts };
+            default:
+                throw new JsonException(
+                    $"chat message content must be a string or an array of content parts (got {reader.TokenType}).");
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, MessageContent value, JsonSerializerOptions options)
+    {
+        if (value.Text is not null)
+        {
+            writer.WriteStringValue(value.Text);
+        }
+        else if (value.Parts is not null)
+        {
+            JsonSerializer.Serialize(writer, value.Parts, options);
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
+    }
 }
 
 public sealed class ChatCompletionsResponse

@@ -92,6 +92,34 @@ public sealed class ServerOptions
     /// </summary>
     public int MaxOutputTokens { get; set; } = 2048;
 
+    // ----- Multimodal (optional mmproj) -----
+
+    /// <summary>
+    /// Path to a multimodal projector GGUF (<c>mmproj-*.gguf</c>) that
+    /// pairs with the main model. When set, <c>/v1/chat/completions</c>
+    /// accepts OpenAI multi-part content with <c>image_url</c> entries;
+    /// when unset, image parts in a request return HTTP 400.
+    /// </summary>
+    public string? MmprojPath { get; set; }
+
+    /// <summary>
+    /// Run mmproj encoder on CPU even when the main model is GPU-offloaded.
+    /// Some vision encoders (Gemma-3, Qwen2.5-VL) only have CPU paths in
+    /// llama.cpp at the moment; others benefit from shared GPU memory.
+    /// Null = llama.cpp picks the default for the model.
+    /// </summary>
+    public bool? MmprojOnCpu { get; set; }
+
+    /// <summary>
+    /// Floor / ceiling on how many tokens a single image occupies in
+    /// context. Different VLMs accept different ranges; leave null to
+    /// inherit the mmproj file's defaults.
+    /// </summary>
+    public int? MmprojImageMinTokens { get; set; }
+
+    /// <summary>Ceiling on how many tokens a single image occupies. See <see cref="MmprojImageMinTokens"/>.</summary>
+    public int? MmprojImageMaxTokens { get; set; }
+
     // ----- Embeddings (optional second model) -----
 
     /// <summary>

@@ -68,6 +68,7 @@ public class Program
         builder.Services.AddSingleton<ModelHost>();
         builder.Services.AddSingleton<SessionPool>();
         builder.Services.AddSingleton<EmbeddingHost>();
+        builder.Services.AddSingleton<MmprojHost>();
         builder.Services.AddSingleton<ServerMetrics>();
 
         // Structured HTTP request logging — {method} {path} {status}
@@ -96,6 +97,7 @@ public class Program
         // no embedding model path is configured, so this is free in the
         // default single-model deployment.
         _ = app.Services.GetRequiredService<EmbeddingHost>();
+        _ = app.Services.GetRequiredService<MmprojHost>();
 
         // HTTP request logging + per-endpoint request counter. Both sit
         // at the top of the pipeline so they see everything including
@@ -190,9 +192,10 @@ public class Program
             IOptions<ServerOptions> options,
             ILoggerFactory loggers,
             ServerMetrics metrics,
+            MmprojHost mmproj,
             CancellationToken ct) =>
         {
-            await ChatCompletionsEndpoint.Handle(ctx, req, host, pool, options, loggers, metrics, ct);
+            await ChatCompletionsEndpoint.Handle(ctx, req, host, pool, options, loggers, metrics, mmproj, ct);
         });
 
         app.MapPost("/completion", async (
