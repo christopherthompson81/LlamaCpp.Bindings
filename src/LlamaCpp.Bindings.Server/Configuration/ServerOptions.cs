@@ -68,6 +68,13 @@ public sealed class ServerOptions
     public bool UseDirectIo { get; set; } = false;
 
     /// <summary>
+    /// llama-server's <c>--numa</c>. Process-wide NUMA placement strategy for
+    /// CPU inference on multi-socket systems. Applied once at startup before
+    /// any model load. Has no effect on non-NUMA hardware.
+    /// </summary>
+    public LlamaNumaStrategy NumaStrategy { get; set; } = LlamaNumaStrategy.Disabled;
+
+    /// <summary>
     /// llama-server's <c>--no-host</c>. When true, llama.cpp skips host-
     /// pinning model tensors for GPU access; saves shared memory at the
     /// cost of slower CPU↔GPU transfers.

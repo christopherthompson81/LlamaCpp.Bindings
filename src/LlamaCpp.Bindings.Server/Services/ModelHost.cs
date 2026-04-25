@@ -48,6 +48,16 @@ public sealed class ModelHost : IDisposable
 
         LlamaBackend.Initialize();
 
+        // NUMA placement is process-wide; configure it before the first
+        // model load so allocator behaviour is consistent across every
+        // host (main + embedding + rerank + draft). No-op on non-NUMA
+        // hardware and when the strategy is Disabled (the default).
+        if (_opts.NumaStrategy != LlamaNumaStrategy.Disabled)
+        {
+            _log.LogInformation("Initialising NUMA strategy: {Strategy}", _opts.NumaStrategy);
+            LlamaBackend.InitializeNuma(_opts.NumaStrategy);
+        }
+
         _log.LogInformation("Loading model from {Path} (gpuLayers={Gpu}, ctx={Ctx}, slots={Slots})",
             _opts.ModelPath, _opts.GpuLayerCount, _opts.ContextSize, _opts.MaxSequenceCount);
 

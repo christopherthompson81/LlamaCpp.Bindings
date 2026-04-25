@@ -236,10 +236,11 @@ Features clients expect from the OpenAI chat-completions API.
   `ggml_backend_dev_t` so callers can pin a specific device list.
 - [x] **`-ts, --tensor-split`** — `ServerOptions.TensorSplit` (per-
   device proportions; padded to `llama_max_devices()` internally).
-- [~] **`--numa`** — binding ships `LlamaBackend.InitializeNuma` +
-  `LlamaNumaStrategy`. Server-side wiring would be a 3-line
-  `Program.cs` call before model load. Skipped here because it's
-  process-wide state and trivial; queue separately.
+- [x] **`--numa`** — `ServerOptions.NumaStrategy`. ModelHost calls
+  `LlamaBackend.InitializeNuma` after `Initialize()` but before any
+  model load, so NUMA placement is consistent across every loaded
+  model (main + embedding + rerank + draft). No-op on non-NUMA
+  hardware and at the default <c>Disabled</c>.
 - [x] **`-ot, --override-tensor`** —
   `ServerOptions.TensorBuftOverrides` (list of
   `{Pattern, Device, Host}`). Resolved at startup against
@@ -391,9 +392,9 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 72 | shipped, tested |
+| `[x]` done | 73 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 3 | binding work first |
+| `[~]` needs binding | 2 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 7 | explicit non-goal |
 
@@ -428,8 +429,10 @@ All "binding already exposes" items are now wired. What remains:
 2. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
    probe) and remote-URL image fetch (needs a download manager with
    size caps + content-type sniffing).
-3. **Binding-blocked items** (`[~]`) — `--numa` (trivial Program.cs
-   wiring; skipped only because it's process-wide) and control-vector.
+3. **Binding-blocked items** (`[~]`) — control-vector
+   (`llama_set_adapter_cvec` + a managed GGUF loader for the vector
+   data, since the public C API doesn't ship one) and control-vector
+   layer-range scaling.
 4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
    rejection-sampling) is the largest remaining feature.
 

@@ -2359,6 +2359,56 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// NUMA strategy wiring. Boots with <c>NumaStrategy=Distribute</c> and
+/// verifies chat still serves. NUMA init is process-wide and persists
+/// across fixtures; on a single-node system it's effectively a no-op,
+/// which is what we rely on to keep this from interfering with the rest
+/// of the suite.
+/// </summary>
+public class LlamaServerNumaTests : IClassFixture<LlamaServerNumaTests.NumaFactory>
+{
+    private readonly NumaFactory _factory;
+    public LlamaServerNumaTests(NumaFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Server_Boots_With_Numa_Distribute_And_Serves_Chat()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    public sealed class NumaFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]       = modelPath,
+                    ["LlamaServer:ContextSize"]     = "1024",
+                    ["LlamaServer:MaxSequenceCount"] = "1",
+                    ["LlamaServer:GpuLayerCount"]   = "-1",
+                    ["LlamaServer:OffloadKqv"]      = "true",
+                    ["LlamaServer:MaxOutputTokens"] = "16",
+                    ["LlamaServer:NumaStrategy"]    = "Distribute",
+                    ["LlamaServer:Urls"]            = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
 /// Tensor-buft overrides + the <c>CpuMoe</c> preset. The default test
 /// model isn't an MoE so the regex matches no tensors, but the load
 /// must still succeed — that's the smoke we care about. The bad-device
