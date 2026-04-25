@@ -91,11 +91,15 @@ The OpenAI-compatible surface plus llama-server's native routes.
 - [#29] **`POST /infill`** — code-completion fill-in-the-middle for
   Qwen-Coder / DeepSeek-Coder / similar. Tracked as GH #29; reuses
   the existing completion pipeline once the FIM prompt is formatted.
-- [!] **`POST /v1/messages`** (Anthropic) and
-  **`POST /v1/responses`** (OpenAI Responses) — both convert to chat-
-  completions internally upstream. Adding two more polymorphic-DTO
-  layers for what's effectively the same generation call isn't worth
-  the surface area; clients already use `/v1/chat/completions`.
+- [#33] **`POST /v1/messages`** (Anthropic) — re-promoted from "won't"
+  after honest review. The external schema doesn't fully overlap
+  with OpenAI (system field, content blocks, typed streaming events,
+  tool-use/tool-result block shape), so Anthropic-SDK clients can't
+  transparently speak our existing `/v1/chat/completions`. Tracked
+  in GH #33.
+- [!] **`POST /v1/responses`** (OpenAI Responses) — newer OpenAI
+  endpoint with low adoption today. Reasonable to wait until a real
+  client demand surfaces.
 - [!] **`GET /cors-proxy`** — experimental upstream feature for the
   bundled web UI's MCP support. Won't ship.
 - [!] **`POST /apply-template`** — render a chat template against a
@@ -192,11 +196,19 @@ Features clients expect from the OpenAI chat-completions API.
 - [#31] **`logprobs` as integer** — llama-server accepts both the
   OpenAI boolean form and an integer `n_probs` alias. Our DTO is
   boolean-only. Tracked as GH #31.
-- [!] **`return_progress`, `response_fields`, `n_indent`,
-  `n_cache_reuse`, `post_sampling_probs`, `backend_sampling`,
-  `return_tokens`** — niche per-request knobs surfaced by the code-
-  audit; declined as not worth the DTO surface unless a real client
-  asks. Each is independently trivial to add later if needed.
+- [#34] **`return_progress`** — re-promoted from "won't" after
+  honest review. Only signal a streaming client gets during prefill;
+  silent-streaming gap on long prompts is a real UX hole. Tracked in
+  GH #34.
+- [#35] **`return_tokens`** — re-promoted from "won't" after honest
+  review. Useful for KV-cache-aware clients (Continue.dev,
+  speculative-decoding wrappers) that benefit from token-level
+  identity across requests. Tracked in GH #35.
+- [!] **`response_fields`, `n_indent`, `n_cache_reuse`,
+  `post_sampling_probs`, `backend_sampling`** — niche per-request
+  knobs surfaced by the code-audit; declined as not worth the DTO
+  surface unless a real client asks. Each is independently trivial
+  to add later if needed.
 - [!] **Per-request `lora`, per-request `speculative.*`** — both ride
   on context-level state in the binding. Per-request adapter
   selection has known design surface (binding attaches at context,
@@ -476,6 +488,9 @@ dependency) to deserve its own thread:
 | 30 | Server: per-request t_max_predict_ms timeout | §3 |
 | 31 | Server: accept logprobs as integer (n_probs alias) | §3 |
 | 32 | Server: TEI response shape on /v1/rerank | §5 |
+| 33 | Server: POST /v1/messages (Anthropic Messages API compat) | §1 |
+| 34 | Server: return_progress for prefill-phase progress events | §3 |
+| 35 | Server: return_tokens for KV-cache-aware clients | §3 |
 
 ## Summary counts
 
@@ -484,8 +499,8 @@ dependency) to deserve its own thread:
 | `[x]` done | 84 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 0 | binding work first |
-| `[#NN]` tracked | 15 | dedicated issue |
-| `[!]` won't | 14 | explicit non-goal |
+| `[#NN]` tracked | 18 | dedicated issue |
+| `[!]` won't | 11 | explicit non-goal |
 
 ## Remaining `[ ]` TODO items
 
