@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
@@ -23,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\LlamaCpp.Bindings\LlamaCpp.Bindings.csproj" />
     <ProjectReference Include="..\LlamaCpp.Bindings.LlamaChat\LlamaCpp.Bindings.LlamaChat.csproj" />
+    <ProjectReference Include="..\LlamaCpp.Bindings.Server\LlamaCpp.Bindings.Server.csproj" />
   </ItemGroup>
 
   <ItemGroup>
