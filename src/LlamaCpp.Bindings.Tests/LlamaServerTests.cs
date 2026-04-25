@@ -2359,6 +2359,138 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// §8 speculative decoding wiring. Spins up a server with the 1.7B Qwen3 as
+/// main and the 0.6B as draft (a known-compatible pair from the binding's
+/// existing speculative tests) and asserts that requests with
+/// <c>speculative=true</c> still return well-formed chat responses.
+/// Skipped when the larger model can't be downloaded.
+/// </summary>
+public class LlamaServerSpeculativeTests : IClassFixture<LlamaServerSpeculativeTests.SpecFactory>
+{
+    private readonly SpecFactory _factory;
+    public LlamaServerSpeculativeTests(SpecFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Speculative_True_Round_Trips_Chat_Completion()
+    {
+        if (!_factory.IsConfigured)
+        {
+            return; // Skip: spec-main download unavailable.
+        }
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Say hi." } },
+            MaxTokens = 8,
+            Speculative = true,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.Single(body!.Choices);
+        Assert.Equal("assistant", body.Choices[0].Message.Role);
+        // X-Cached-Tokens=0 because speculative bypasses the SessionPool.
+        Assert.Equal("0", resp.Headers.GetValues("X-Cached-Tokens").Single());
+    }
+
+    [Fact]
+    public async Task Speculative_True_Streams_With_SSE()
+    {
+        if (!_factory.IsConfigured) return;
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "One word answer: yes." } },
+            MaxTokens = 8,
+            Speculative = true,
+            Stream = true,
+        };
+        using var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.Equal("text/event-stream",
+            resp.Content.Headers.ContentType?.MediaType);
+        var bodyText = await resp.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken);
+        Assert.Contains("data:", bodyText);
+        Assert.Contains("[DONE]", bodyText);
+    }
+
+    public sealed class SpecFactory : WebApplicationFactory<Program>
+    {
+        public bool IsConfigured { get; private set; }
+
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var draftPath = TestModelProvider.EnsureModelPath();
+            var mainPath = TestModelProvider.TryGetSpeculativeMainModelPath();
+            IsConfigured = !string.IsNullOrWhiteSpace(mainPath);
+            // When the spec-main model can't be fetched (offline), fall back
+            // to the smaller model on both sides — the LlamaSpeculativeGenerator
+            // rejects identical-vocab pairs only on object identity, not file
+            // identity, so the host loads but tests will short-circuit on
+            // IsConfigured=false. Safer than throwing during fixture init.
+            mainPath ??= draftPath;
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]              = mainPath,
+                    ["LlamaServer:ContextSize"]            = "1024",
+                    ["LlamaServer:MaxSequenceCount"]       = "1",
+                    ["LlamaServer:GpuLayerCount"]          = "-1",
+                    ["LlamaServer:OffloadKqv"]             = "true",
+                    ["LlamaServer:MaxOutputTokens"]        = "32",
+                    ["LlamaServer:DraftModelPath"]         = draftPath,
+                    ["LlamaServer:DraftContextSize"]       = "1024",
+                    ["LlamaServer:DraftLogicalBatchSize"]  = "512",
+                    ["LlamaServer:DraftPhysicalBatchSize"] = "512",
+                    ["LlamaServer:DraftGpuLayerCount"]     = "-1",
+                    ["LlamaServer:DraftLookahead"]         = "5",
+                    ["LlamaServer:Urls"]                   = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
+/// Verifies the speculative opt-in flag is silently ignored when the
+/// server has no draft model configured. Operators upgrading clients
+/// to send <c>speculative=true</c> shouldn't break against servers that
+/// can't satisfy the request — the request must just go through the
+/// normal generator.
+/// </summary>
+public class LlamaServerSpeculativeFallbackTests : IClassFixture<LlamaServerTests.Factory>
+{
+    private readonly LlamaServerTests.Factory _factory;
+    public LlamaServerSpeculativeFallbackTests(LlamaServerTests.Factory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Speculative_True_Without_Draft_Falls_Back_To_Normal_Path()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+            Speculative = true,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.Single(body!.Choices);
+    }
+}
+
+/// <summary>
 /// §6 model-loading knobs bundle. Boots the server with non-default values
 /// for every new field and verifies a chat completion still returns 200 —
 /// proves the wiring is in place without depending on a particular GPU

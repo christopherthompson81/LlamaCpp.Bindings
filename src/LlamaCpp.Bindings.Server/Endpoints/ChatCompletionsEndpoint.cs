@@ -29,6 +29,7 @@ public static class ChatCompletionsEndpoint
         ILoggerFactory loggerFactory,
         ServerMetrics metrics,
         MmprojHost mmproj,
+        DraftHost draft,
         CancellationToken cancellationToken)
     {
         var log = loggerFactory.CreateLogger("ChatCompletions");
@@ -47,7 +48,7 @@ public static class ChatCompletionsEndpoint
 
         try
         {
-            await HandleCore(http, req, host, pool, opts, log, metrics, mmproj, cancellationToken);
+            await HandleCore(http, req, host, pool, opts, log, metrics, mmproj, draft, cancellationToken);
         }
         catch (OperationCanceledException) when (
             timeoutCts is not null
@@ -83,6 +84,7 @@ public static class ChatCompletionsEndpoint
         ILogger log,
         ServerMetrics metrics,
         MmprojHost mmproj,
+        DraftHost draft,
         CancellationToken cancellationToken)
     {
         if (req.Messages.Count == 0)
@@ -265,6 +267,58 @@ public static class ChatCompletionsEndpoint
 
         var matcher = new StopMatcher(stops);
 
+        // Speculative branch: opt-in via `speculative=true` AND a draft host
+        // configured at startup. Falls back to the normal path when the
+        // request uses features the speculative generator doesn't carry
+        // (multimodal images, forced tool calls, per-token logprobs).
+        bool wantsSpeculative = req.Speculative == true
+            && draft.IsAvailable
+            && !contentResult.HasImages
+            && toolChoice.Kind != ToolChoiceKind.ForcedFunction
+            && req.Logprobs != true;
+        if (wantsSpeculative)
+        {
+            using var draftLease = await draft.LeaseAsync(cancellationToken);
+            using var _samplerSpec = sampler;
+
+            // Greedy draft sampler — V1 keeps it simple. The draft only needs
+            // to be a fast guesser; its picks are verified against the main's
+            // (sampler-applied) logits, so a probabilistic draft sampler
+            // doesn't add correctness, only acceptance-rate variance.
+            using var draftSampler = new LlamaSamplerBuilder().WithGreedy().Build();
+
+            using var specGen = new LlamaSpeculativeGenerator(
+                draftLease.MainContext, draftLease.DraftContext,
+                sampler, draftSampler,
+                draftLookahead: draftLease.DraftLookahead);
+
+            // Speculative bypasses the SessionPool, so X-Cached-Tokens is
+            // always 0 for these requests. Operators tracking cache-hit
+            // rate per-endpoint will see the difference in /metrics.
+            http.Response.Headers["X-Cached-Tokens"] = "0";
+
+            var specTimer = new RequestTimer(
+                promptTokensToDecode: promptTokens.Length, cachedTokens: 0);
+            metrics.AddPromptTokensIngested(promptTokens.Length);
+
+            string specId = "chatcmpl-" + Guid.NewGuid().ToString("N");
+            long specCreated = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+            if (req.Stream)
+            {
+                await StreamSseSpeculative(
+                    http, specGen, promptTokens, matcher, maxTokens,
+                    host, specId, specCreated, specTimer, metrics, cancellationToken);
+            }
+            else
+            {
+                await WriteSingleJsonSpeculative(
+                    http, specGen, promptTokens, matcher, maxTokens,
+                    host, specId, specCreated, specTimer, metrics, cancellationToken);
+            }
+            return;
+        }
+
         // Multimodal branch: image tokens go into the KV via the mtmd
         // helper rather than the normal prompt-tokens path, so the pool's
         // prefix-cache matching doesn't apply. We lease a slot with
@@ -370,6 +424,113 @@ public static class ChatCompletionsEndpoint
         {
             await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, toolChoice, wantLogprobs, topN, cancellationToken);
         }
+    }
+
+    // ----- Speculative path: draft + main, no SessionPool, no prefix cache -----
+
+    private static async Task WriteSingleJsonSpeculative(
+        HttpContext http, LlamaSpeculativeGenerator gen,
+        int[] promptTokens, StopMatcher matcher, int maxTokens,
+        ModelHost host, string id, long created,
+        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+    {
+        var buf = new StringBuilder();
+        bool stoppedOnMatch = false;
+        int predicted = 0;
+        await foreach (var piece in gen.GenerateAsync(
+            promptTokens, maxTokens: maxTokens, cancellationToken: ct))
+        {
+            timer.MarkFirstToken();
+            predicted++;
+            timer.IncrementPredicted();
+            var (emit, stopped) = matcher.Offer(piece);
+            if (emit.Length > 0) buf.Append(emit);
+            if (stopped) { stoppedOnMatch = true; break; }
+        }
+        if (!stoppedOnMatch) buf.Append(matcher.Flush());
+        timer.Finish();
+        metrics.AddTokensGenerated(predicted);
+
+        var response = new ChatCompletionsResponse
+        {
+            Id = id, Created = created, Model = host.ModelId,
+            Choices = new()
+            {
+                new ChatChoice
+                {
+                    Index = 0,
+                    Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
+                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
+                },
+            },
+            Timings = timer.Snapshot(),
+        };
+        http.Response.ContentType = "application/json";
+        await http.Response.WriteAsJsonAsync(response, cancellationToken: ct);
+    }
+
+    private static async Task StreamSseSpeculative(
+        HttpContext http, LlamaSpeculativeGenerator gen,
+        int[] promptTokens, StopMatcher matcher, int maxTokens,
+        ModelHost host, string id, long created,
+        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+    {
+        http.Response.ContentType = "text/event-stream";
+        http.Response.Headers.CacheControl = "no-cache";
+        var feature = http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>();
+        feature?.DisableBuffering();
+
+        await WriteChunk(http, new ChatCompletionsChunk
+        {
+            Id = id, Created = created, Model = host.ModelId,
+            Choices = new() { new() { Index = 0, Delta = new() { Role = "assistant" }, FinishReason = null } },
+        }, ct);
+
+        bool stoppedOnMatch = false;
+        int predicted = 0;
+        await foreach (var piece in gen.GenerateAsync(
+            promptTokens, maxTokens: maxTokens, cancellationToken: ct))
+        {
+            timer.MarkFirstToken();
+            predicted++;
+            timer.IncrementPredicted();
+            var (emit, stopped) = matcher.Offer(piece);
+            if (!string.IsNullOrEmpty(emit))
+            {
+                await WriteChunk(http, new ChatCompletionsChunk
+                {
+                    Id = id, Created = created, Model = host.ModelId,
+                    Choices = new() { new() { Index = 0, Delta = new() { Content = emit }, FinishReason = null } },
+                }, ct);
+            }
+            if (stopped) { stoppedOnMatch = true; break; }
+        }
+        if (!stoppedOnMatch)
+        {
+            var tail = matcher.Flush();
+            if (!string.IsNullOrEmpty(tail))
+            {
+                await WriteChunk(http, new ChatCompletionsChunk
+                {
+                    Id = id, Created = created, Model = host.ModelId,
+                    Choices = new() { new() { Index = 0, Delta = new() { Content = tail }, FinishReason = null } },
+                }, ct);
+            }
+        }
+        timer.Finish();
+        metrics.AddTokensGenerated(predicted);
+
+        await WriteChunk(http, new ChatCompletionsChunk
+        {
+            Id = id, Created = created, Model = host.ModelId,
+            Choices = new()
+            {
+                new() { Index = 0, Delta = new(),
+                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason) },
+            },
+            Timings = timer.Snapshot(),
+        }, ct);
+        await http.Response.WriteAsync("data: [DONE]\n\n", ct);
     }
 
     // ----- Multimodal path: sampling starts from logits already in place -----

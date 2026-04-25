@@ -79,6 +79,7 @@ public class Program
         builder.Services.AddSingleton<EmbeddingHost>();
         builder.Services.AddSingleton<RerankHost>();
         builder.Services.AddSingleton<MmprojHost>();
+        builder.Services.AddSingleton<DraftHost>();
         builder.Services.AddSingleton<ServerMetrics>();
 
         // Structured HTTP request logging — {method} {path} {status}
@@ -109,6 +110,7 @@ public class Program
         _ = app.Services.GetRequiredService<EmbeddingHost>();
         _ = app.Services.GetRequiredService<RerankHost>();
         _ = app.Services.GetRequiredService<MmprojHost>();
+        _ = app.Services.GetRequiredService<DraftHost>();
 
         // HTTP request logging + per-endpoint request counter. Both sit
         // at the top of the pipeline so they see everything including
@@ -204,9 +206,10 @@ public class Program
             ILoggerFactory loggers,
             ServerMetrics metrics,
             MmprojHost mmproj,
+            DraftHost draft,
             CancellationToken ct) =>
         {
-            await ChatCompletionsEndpoint.Handle(ctx, req, host, pool, options, loggers, metrics, mmproj, ct);
+            await ChatCompletionsEndpoint.Handle(ctx, req, host, pool, options, loggers, metrics, mmproj, draft, ct);
         });
 
         app.MapPost("/completion", async (

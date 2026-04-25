@@ -146,6 +146,17 @@ public sealed class ChatCompletionsRequest
     /// </summary>
     [JsonPropertyName("top_logprobs")]
     public int? TopLogprobs { get; set; }
+
+    /// <summary>
+    /// Opt in to two-model speculative decoding for this request.
+    /// Requires the server to have been started with
+    /// <c>LlamaServer:DraftModelPath</c> set; ignored otherwise. Falls
+    /// back to the standard generator path when the request also uses
+    /// images, forced tool calls, or per-token logprobs (none of which
+    /// the speculative path supports in V1).
+    /// </summary>
+    [JsonPropertyName("speculative")]
+    public bool? Speculative { get; set; }
 }
 
 public sealed class ChatMessageDto

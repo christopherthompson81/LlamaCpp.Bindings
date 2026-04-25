@@ -260,6 +260,48 @@ public sealed class ServerOptions
     public int RerankGpuLayerCount { get; set; } = -1;
     public string? RerankModelAlias { get; set; }
 
+    // ----- Speculative decoding (optional draft model) -----
+
+    /// <summary>
+    /// Path to a small "draft" GGUF whose tokens propose ahead for the main
+    /// model. When set, the server loads the draft model + a dedicated
+    /// speculative main context and exposes per-request opt-in via the
+    /// chat-completions <c>speculative</c> field. Unset = endpoint ignores
+    /// any <c>speculative</c> flag and runs through the normal generator.
+    /// </summary>
+    /// <remarks>
+    /// <para>The draft must share the main model's tokenizer family (same
+    /// SPM/BPE, same special-token ids) — the binding's
+    /// <c>LlamaSpeculativeGenerator</c> rejects mismatched pairs at
+    /// construction time. Pair a large main with a small fast draft
+    /// (e.g. Qwen3-14B + Qwen3-0.6B); a mismatched draft is slower than
+    /// plain decoding because every rejection still costs one draft
+    /// decode plus a wasted main batch slot.</para>
+    /// <para>Speculative requests serialize through a dedicated semaphore —
+    /// concurrency is capped at 1 — and don't share state with the
+    /// non-speculative session pool, so they don't get prefix caching.</para>
+    /// </remarks>
+    public string? DraftModelPath { get; set; }
+
+    /// <summary>Context length for the draft model. Larger eats VRAM.</summary>
+    public int DraftContextSize { get; set; } = 2048;
+
+    /// <summary>Logical batch size for the draft model.</summary>
+    public int DraftLogicalBatchSize { get; set; } = 512;
+
+    /// <summary>Physical batch size for the draft model.</summary>
+    public int DraftPhysicalBatchSize { get; set; } = 512;
+
+    /// <summary>GPU offload for the draft model. <c>-1</c> = all, <c>0</c> = CPU.</summary>
+    public int DraftGpuLayerCount { get; set; } = -1;
+
+    /// <summary>
+    /// Number of tokens the draft proposes per speculation round. 5 is
+    /// llama.cpp's default and tends to be a sweet spot. Higher values pay
+    /// more on rejections; lower values leave throughput on the table.
+    /// </summary>
+    public int DraftLookahead { get; set; } = 5;
+
     // ----- Authentication -----
 
     /// <summary>

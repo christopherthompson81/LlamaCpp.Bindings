@@ -249,12 +249,17 @@ Features clients expect from the OpenAI chat-completions API.
 
 ## 8. Speculative decoding
 
-- [~] **`-md, --model-draft`** — binding ships
-  `LlamaSpeculativeGenerator` (closed in GH #4). The server side hasn't
-  wired it in: `ModelHost` would need an optional draft model +
-  generator selection in the chat-completions endpoint, plus per-request
-  opt-in (`speculative: true`?) so greedy-sensitive callers can disable
-  it.
+- [x] **`-md, --model-draft`** — `ServerOptions.DraftModelPath` (with
+  `DraftContextSize`, `DraftLogicalBatchSize`, `DraftPhysicalBatchSize`,
+  `DraftGpuLayerCount`, `DraftLookahead`). Optional `DraftHost`
+  loads the draft model + a dedicated speculative main context on
+  startup; chat completions accept a per-request `speculative: true`
+  flag that routes through `LlamaSpeculativeGenerator`. Falls back to
+  the standard path when a request also uses images, forced tool
+  calls, or per-token logprobs (none of which the speculative path
+  carries in V1). Speculative requests serialize through a dedicated
+  semaphore (concurrency = 1) and bypass the SessionPool — no prefix
+  caching for these requests.
 - [#14] **Full DeepMind rejection-sampling variant** — tracked in
   GH #14. Current path is greedy verification.
 
@@ -340,9 +345,9 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 59 | shipped, tested |
+| `[x]` done | 60 | shipped, tested |
 | `[ ]` TODO | 3 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 7 | binding work first |
+| `[~]` needs binding | 6 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
 
@@ -362,11 +367,7 @@ observability, cancellation, extended sampling, multimodal, tool
 calling, logprobs, rerank) are all shipped. What's left is operator-
 ergonomic polish + binding-blocked features.
 
-1. **Speculative decoding wiring** (§8) — `LlamaSpeculativeGenerator`
-   exists; needs a draft-model load path + per-request opt-in on
-   chat completions. Real perf gain (2–3× on greedy chat). Bigger
-   PR.
-2. **LoRA adapters at startup** (§9) — `ServerOptions.LoraAdapters`
+1. **LoRA adapters at startup** (§9) — `ServerOptions.LoraAdapters`
    list, attach during `ModelHost` ctor. Per-request adapter
    selection is harder (binding attaches to context, not session) and
    stays deferred.
