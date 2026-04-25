@@ -172,7 +172,26 @@ public sealed record LocalServerConfig
     public int DraftGpuLayerCount { get; init; } = -1;
     public int DraftLookahead { get; init; } = 5;
 
-    public string BaseUrl => HttpsCertificatePath.Length > 0
-        ? $"https://{BindAddress}:{Port}"
-        : $"http://{BindAddress}:{Port}";
+    /// <summary>
+    /// URL for clients on the same machine to reach the server. Identical to
+    /// the user-configured bind URL, except wildcard bind addresses
+    /// (<c>0.0.0.0</c>, <c>::</c>) are swapped to loopback — Kestrel binds
+    /// "any interface" but a local HTTP client can't connect to the wildcard
+    /// address itself; loopback is reachable since "any interface" includes it.
+    /// LAN clients use the host's own LAN IP, which we don't know here.
+    /// </summary>
+    public string BaseUrl
+    {
+        get
+        {
+            var host = BindAddress switch
+            {
+                "0.0.0.0" or "*" => "127.0.0.1",
+                "::" or "[::]"   => "[::1]",
+                _                => BindAddress,
+            };
+            var scheme = HttpsCertificatePath.Length > 0 ? "https" : "http";
+            return $"{scheme}://{host}:{Port}";
+        }
+    }
 }
