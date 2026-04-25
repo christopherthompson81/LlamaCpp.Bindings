@@ -73,6 +73,16 @@ public sealed class LlamaContextParameters
     /// <see cref="KvCacheTypeK"/> for caveats.</summary>
     public LlamaKvCacheType KvCacheTypeV { get; set; } = LlamaKvCacheType.F16;
 
+    /// <summary>
+    /// Pooling strategy for embedding / rerank workloads.
+    /// <see cref="LlamaPoolingType.Unspecified"/> (the native default)
+    /// lets llama.cpp pick from the model's metadata; some models
+    /// (BGE-reranker, certain rerankers without a baked-in pooling
+    /// type) need an explicit <see cref="LlamaPoolingType.Rank"/> for
+    /// <c>llama_get_embeddings_seq</c> to return the rank-head score.
+    /// </summary>
+    public LlamaPoolingType PoolingType { get; set; } = LlamaPoolingType.Unspecified;
+
     internal llama_context_params ToNative()
     {
         var native = NativeMethods.llama_context_default_params();
@@ -89,6 +99,7 @@ public sealed class LlamaContextParameters
         native.no_perf = !MeasurePerformance;
         native.type_k = (ggml_type)(int)KvCacheTypeK;
         native.type_v = (ggml_type)(int)KvCacheTypeV;
+        native.pooling_type = (llama_pooling_type)(int)PoolingType;
         return native;
     }
 

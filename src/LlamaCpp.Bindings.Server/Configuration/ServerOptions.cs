@@ -147,6 +147,22 @@ public sealed class ServerOptions
     /// <summary>Alias reported via <c>/v1/embeddings</c> responses. Falls back to the file stem.</summary>
     public string? EmbeddingModelAlias { get; set; }
 
+    // ----- Rerank (optional third model) -----
+
+    /// <summary>
+    /// Path to a reranker GGUF (bge-reranker, jina-reranker, etc.) for
+    /// the <c>/v1/rerank</c> endpoint. Reranker models output a single
+    /// relevance score per (query, document) pair via a rank pooling
+    /// head — not interchangeable with an embedding model. When unset,
+    /// <c>/v1/rerank</c> returns 501.
+    /// </summary>
+    public string? RerankModelPath { get; set; }
+
+    public int RerankContextSize { get; set; } = 2048;
+    public int RerankBatchSize { get; set; } = 512;
+    public int RerankGpuLayerCount { get; set; } = -1;
+    public string? RerankModelAlias { get; set; }
+
     // ----- Authentication -----
 
     /// <summary>

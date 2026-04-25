@@ -51,10 +51,15 @@ The OpenAI-compatible surface plus llama-server's native routes.
 - [x] **`POST /v1/embeddings`** — OpenAI-compatible. Requires a second
   (embedding) model configured via `EmbeddingModelPath`. Returns 501 when
   unconfigured so clients can tell "feature off" from "endpoint missing."
-- [ ] **`POST /v1/rerank`** — reranker endpoint for models like
-  bge-reranker / jina-rerank. Binding already surfaces `LlamaPoolingType.Rank`;
-  this is an `EmbeddingHost`-shaped sibling with a different response
-  shape (one score per query × document pair).
+- [x] **`POST /v1/rerank`** — Cohere/Jina-style reranker endpoint
+  for models like bge-reranker. Loads a third optional model via
+  `RerankHost` (parallel to `EmbeddingHost`); request takes a
+  query + array of documents + optional `top_n`, returns indices
+  sorted by `relevance_score` descending. Used `LlamaContextParameters.PoolingType
+  = Rank` (newly exposed binding-side knob — BGE rerankers don't
+  always advertise rank pooling in metadata) and the explicit
+  `RunEncoder` path because BGE-reranker is XLMRoberta encoder-only,
+  not the encoder-decoder branch `EncodeForEmbedding` falls through.
 - [x] **`GET /metrics`** — Prometheus scrape target shipped in §11.
   Time-to-first-token histograms remain a follow-up (tracked under
   [#18](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/18)).
@@ -184,8 +189,7 @@ Features clients expect from the OpenAI chat-completions API.
   is sequential through a `SemaphoreSlim`.
 - [#17] **`dimensions` truncation** — tracked in GH #17. OpenAI-style
   Matryoshka truncation + L2 renormalise.
-- [ ] **`/v1/rerank`** — listed under §1 endpoints; shares most of this
-  section's infrastructure.
+- [x] **`/v1/rerank`** — shipped (§1).
 
 ## 6. Model loading
 
@@ -323,8 +327,8 @@ Features clients expect from the OpenAI chat-completions API.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 48 | shipped, tested |
-| `[ ]` TODO | 10 | binding already exposes; server-side wiring only |
+| `[x]` done | 50 | shipped, tested |
+| `[ ]` TODO | 8  | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -344,9 +348,6 @@ embeddings, auth, observability, cancellation, extended sampling).
 3. **`tool_choice="required"` (any-tool)** (§3) — needs a GBNF union
    across every tool's parameters schema. Tracked in
    [#26](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/26).
-4. **`/v1/rerank` endpoint** (§1) — embedding-host-shaped sibling
-   for reranker models; binding already supports the rank pooling
-   type.
 
 Everything under `[~]` is binding-side work of varying size. Speculative
 decoding (§8) and LoRA (§9) are the two most feature-complete on the

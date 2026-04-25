@@ -68,6 +68,7 @@ public class Program
         builder.Services.AddSingleton<ModelHost>();
         builder.Services.AddSingleton<SessionPool>();
         builder.Services.AddSingleton<EmbeddingHost>();
+        builder.Services.AddSingleton<RerankHost>();
         builder.Services.AddSingleton<MmprojHost>();
         builder.Services.AddSingleton<ServerMetrics>();
 
@@ -97,6 +98,7 @@ public class Program
         // no embedding model path is configured, so this is free in the
         // default single-model deployment.
         _ = app.Services.GetRequiredService<EmbeddingHost>();
+        _ = app.Services.GetRequiredService<RerankHost>();
         _ = app.Services.GetRequiredService<MmprojHost>();
 
         // HTTP request logging + per-endpoint request counter. Both sit
@@ -217,6 +219,15 @@ public class Program
             CancellationToken ct) =>
         {
             await EmbeddingsEndpoint.Handle(ctx, req, embeddings, ct);
+        });
+
+        app.MapPost("/v1/rerank", async (
+            HttpContext ctx,
+            RerankRequest req,
+            RerankHost rerank,
+            CancellationToken ct) =>
+        {
+            await RerankEndpoint.Handle(ctx, req, rerank, ct);
         });
     }
 }

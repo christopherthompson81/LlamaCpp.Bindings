@@ -1583,6 +1583,38 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.Equal("yes", body!.Choices[0].Message.Content?.Text ?? "".Trim());
     }
 
+    // ----- /v1/rerank: 501 when no rerank model is configured -----
+
+    [Fact]
+    public async Task V1Rerank_Returns_501_When_Not_Configured()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.PostAsJsonAsync("/v1/rerank", new RerankRequest
+        {
+            Query = "what is the capital of France?",
+            Documents = new() { "Paris is the capital of France.", "Bananas are yellow." },
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.NotImplemented, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task V1Rerank_Empty_Query_Returns_501_Or_400()
+    {
+        // Without rerank configured, the 501 fires first. With rerank
+        // configured the empty-query 400 fires. Either is acceptable —
+        // we're guarding against 500/200/etc.
+        var client = _factory.CreateClient();
+        var resp = await client.PostAsJsonAsync("/v1/rerank", new RerankRequest
+        {
+            Query = "",
+            Documents = new() { "doc1" },
+        }, TestContext.Current.CancellationToken);
+        Assert.True(
+            resp.StatusCode == System.Net.HttpStatusCode.NotImplemented ||
+            resp.StatusCode == System.Net.HttpStatusCode.BadRequest,
+            $"unexpected status {resp.StatusCode}");
+    }
+
     // ----- /v1/embeddings: 501 when no embedding model is configured -----
 
     [Fact]
@@ -2028,6 +2060,187 @@ public class LlamaEmbeddingsTests : IClassFixture<LlamaEmbeddingsTests.EmbedFact
                     settings["LlamaServer:EmbeddingContextSize"]   = "512";
                     settings["LlamaServer:EmbeddingBatchSize"]     = "512";
                     settings["LlamaServer:EmbeddingGpuLayerCount"] = "0";
+                }
+                cfg.AddInMemoryCollection(settings);
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
+/// End-to-end tests for <c>/v1/rerank</c>. Auto-fetches a small BGE
+/// reranker (~418 MB) on first run; tests skip gracefully when the
+/// download fails.
+/// </summary>
+public class LlamaRerankTests : IClassFixture<LlamaRerankTests.RerankFactory>
+{
+    private readonly RerankFactory _factory;
+    public LlamaRerankTests(RerankFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Rerank_Returns_Sorted_Scored_Results()
+    {
+        if (!_factory.RerankModelAvailable)
+        {
+            Assert.Skip("bge-reranker GGUF unavailable; set LLAMACPP_TEST_RERANK_MODEL or allow auto-download.");
+        }
+
+        var client = _factory.CreateClient();
+        var req = new RerankRequest
+        {
+            Query = "What is the capital of France?",
+            Documents = new()
+            {
+                "Paris is the capital and largest city of France.",
+                "Bananas are a yellow tropical fruit grown in many countries.",
+                "France is a country in Western Europe.",
+                "The Eiffel Tower is located in Paris, France.",
+            },
+        };
+        var resp = await client.PostAsJsonAsync("/v1/rerank", req, TestContext.Current.CancellationToken);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.Fail($"rerank returned {resp.StatusCode}: {errBody}");
+        }
+        var body = await resp.Content.ReadFromJsonAsync<RerankResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        Assert.Equal(4, body!.Results.Count);
+
+        // Each input must appear exactly once across the results.
+        var indices = body.Results.Select(r => r.Index).ToHashSet();
+        Assert.Equal(4, indices.Count);
+        Assert.All(body.Results, r => Assert.InRange(r.Index, 0, 3));
+
+        // Scores must be sorted descending.
+        for (int i = 1; i < body.Results.Count; i++)
+        {
+            Assert.True(body.Results[i - 1].RelevanceScore >= body.Results[i].RelevanceScore,
+                $"results not sorted: {body.Results[i - 1].RelevanceScore} < {body.Results[i].RelevanceScore}");
+        }
+
+        // Semantic check: "Paris is the capital of France" should
+        // outrank "Bananas are yellow" — if it doesn't, the loaded
+        // model probably isn't actually a reranker.
+        int parisRank = body.Results.FindIndex(r => r.Index == 0);
+        int bananaRank = body.Results.FindIndex(r => r.Index == 1);
+        Assert.True(parisRank < bananaRank,
+            $"Paris doc ranked {parisRank}, banana doc ranked {bananaRank} — expected Paris ahead.");
+    }
+
+    [Fact]
+    public async Task Rerank_TopN_Truncates_Results()
+    {
+        if (!_factory.RerankModelAvailable)
+        {
+            Assert.Skip("bge-reranker GGUF unavailable.");
+        }
+
+        var client = _factory.CreateClient();
+        var req = new RerankRequest
+        {
+            Query = "weather in Paris",
+            Documents = new()
+            {
+                "Paris weather is mild in summer.",
+                "Bananas grow on trees.",
+                "London weather is rainy.",
+                "Pizza is a food.",
+            },
+            TopN = 2,
+        };
+        var resp = await client.PostAsJsonAsync("/v1/rerank", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<RerankResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, body!.Results.Count);
+        // Top-2 is sorted descending by score.
+        Assert.True(body.Results[0].RelevanceScore >= body.Results[1].RelevanceScore);
+    }
+
+    [Fact]
+    public async Task Rerank_ReturnDocuments_Echoes_Source_Text()
+    {
+        if (!_factory.RerankModelAvailable)
+        {
+            Assert.Skip("bge-reranker GGUF unavailable.");
+        }
+
+        var client = _factory.CreateClient();
+        var req = new RerankRequest
+        {
+            Query = "fruit",
+            Documents = new() { "apples", "cars" },
+            ReturnDocuments = true,
+        };
+        var resp = await client.PostAsJsonAsync("/v1/rerank", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<RerankResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.All(body!.Results, r => Assert.False(string.IsNullOrEmpty(r.Document)));
+        // Each result's Document text must match the original input at
+        // its Index position.
+        foreach (var r in body.Results)
+        {
+            Assert.Equal(req.Documents[r.Index], r.Document);
+        }
+    }
+
+    [Fact]
+    public async Task Rerank_Empty_Documents_Returns_400()
+    {
+        if (!_factory.RerankModelAvailable)
+        {
+            Assert.Skip("bge-reranker GGUF unavailable.");
+        }
+
+        var client = _factory.CreateClient();
+        var resp = await client.PostAsJsonAsync("/v1/rerank", new RerankRequest
+        {
+            Query = "anything",
+            Documents = new(),
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    public sealed class RerankFactory : WebApplicationFactory<Program>
+    {
+        public bool RerankModelAvailable { get; }
+
+        public RerankFactory()
+        {
+            var path = TestModelProvider.TryGetRerankModelPath();
+            RerankModelAvailable = !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+        }
+
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var chatPath   = TestModelProvider.EnsureModelPath();
+            var rerankPath = TestModelProvider.TryGetRerankModelPath();
+
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                var settings = new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]         = chatPath,
+                    ["LlamaServer:ContextSize"]       = "512",
+                    ["LlamaServer:MaxSequenceCount"]  = "1",
+                    ["LlamaServer:GpuLayerCount"]     = "0",
+                    ["LlamaServer:OffloadKqv"]        = "false",
+                    ["LlamaServer:MaxOutputTokens"]   = "8",
+                    ["LlamaServer:Urls"]              = "",
+                };
+                if (!string.IsNullOrWhiteSpace(rerankPath))
+                {
+                    settings["LlamaServer:RerankModelPath"]      = rerankPath;
+                    settings["LlamaServer:RerankContextSize"]    = "512";
+                    settings["LlamaServer:RerankBatchSize"]      = "512";
+                    settings["LlamaServer:RerankGpuLayerCount"]  = "-1";
                 }
                 cfg.AddInMemoryCollection(settings);
             });

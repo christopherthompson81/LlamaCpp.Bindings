@@ -43,6 +43,14 @@ internal static class TestModelProvider
     private const string EmbedDefaultName = "nomic-embed-text-v1.5.Q4_K_M.gguf";
     private const string EmbedDownloadUrl = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf";
 
+    // Reranker model for /v1/rerank tests. bge-reranker-v2-m3 is the
+    // de-facto multilingual reranker; gpustack ships GGUF builds. Q4_K_M
+    // is ~418 MB. Reranker model architecture is XLMRoberta-with-rank-head,
+    // not exchangeable with the embedding or chat models above.
+    private const string RerankEnvVar      = "LLAMACPP_TEST_RERANK_MODEL";
+    private const string RerankDefaultName = "bge-reranker-v2-m3-Q4_K_M.gguf";
+    private const string RerankDownloadUrl = "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-Q4_K_M.gguf";
+
     private static readonly Lazy<string> _path =
         new(Resolve, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -54,6 +62,9 @@ internal static class TestModelProvider
 
     private static readonly Lazy<string?> _embedPath =
         new(ResolveEmbed, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private static readonly Lazy<string?> _rerankPath =
+        new(ResolveRerank, LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static string EnsureModelPath() => _path.Value;
 
@@ -83,6 +94,13 @@ internal static class TestModelProvider
     /// download fails — tests should skip rather than fail in that case.
     /// </summary>
     public static string? TryGetEmbeddingModelPath() => _embedPath.Value;
+
+    /// <summary>
+    /// Returns a path to a reranker GGUF (bge-reranker-v2-m3 by default).
+    /// Auto-fetched on first use, ~418 MB. Returns null on download
+    /// failure — tests should skip rather than fail.
+    /// </summary>
+    public static string? TryGetRerankModelPath() => _rerankPath.Value;
 
     private static string Resolve()
     {
@@ -212,6 +230,38 @@ internal static class TestModelProvider
             catch (Exception ex)
             {
                 Console.WriteLine($"[TestModelProvider] Embedding-model download failed: {ex.Message}");
+                return null;
+            }
+        }
+        return dest;
+    }
+
+    private static string? ResolveRerank()
+    {
+        var env = Environment.GetEnvironmentVariable(RerankEnvVar);
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            if (!File.Exists(env))
+                throw new FileNotFoundException(
+                    $"{RerankEnvVar}='{env}' but the file does not exist.", env);
+            return env;
+        }
+
+        var cacheDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".cache", "llama-test-models");
+        Directory.CreateDirectory(cacheDir);
+
+        var dest = Path.Combine(cacheDir, RerankDefaultName);
+        if (!File.Exists(dest))
+        {
+            try
+            {
+                Download(RerankDownloadUrl, dest);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TestModelProvider] Rerank-model download failed: {ex.Message}");
                 return null;
             }
         }
