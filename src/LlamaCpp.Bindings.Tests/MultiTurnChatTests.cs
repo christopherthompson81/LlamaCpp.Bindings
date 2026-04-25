@@ -172,7 +172,7 @@ public class MultiTurnChatTests
     }
 
     [Fact]
-    public async Task Prefix_Reuse_Produces_Same_Output_As_Full_Rebuild()
+    public async Task Prefix_Reuse_Produces_Same_Output_As_Full_Rebuild_Cpu()
     {
         // Correctness contract for ChatSession prefix-cache reuse: given
         // identical prompt tokens and identical sampler seed, running
@@ -180,8 +180,33 @@ public class MultiTurnChatTests
         // same stream as GenerateAsync with firstNewIndex=N when the KV
         // already contains the first N tokens. This is the invariant that
         // lets ChatSession skip re-decoding the common prefix each turn.
+        //
+        // This assertion is CPU-only because llama.cpp's CUDA backend does
+        // not honour it today: the "attention over N new tokens with cached
+        // K/V" kernel is a different codepath from "attention over N+M
+        // tokens in one batch", and the two produce last-position logits
+        // that differ by up to ~4e-1 — enough to flip argmax picks within
+        // a few greedy steps. Empirical breakdown is captured in
+        // docs/prefix_reuse_investigation.md. The CPU backend uses a single
+        // kernel family for both paths and produces bit-identical results,
+        // so the invariant does hold there. We spin up a dedicated CPU
+        // context for this test rather than reuse the GPU fixture.
+        var path = TestModelProvider.EnsureModelPath();
+        using var model = new LlamaModel(path, new LlamaModelParameters
+        {
+            GpuLayerCount = 0,
+            UseMmap = true,
+        });
+        using var ctx = new LlamaContext(model, new LlamaContextParameters
+        {
+            ContextSize = 512,
+            LogicalBatchSize = 512,
+            PhysicalBatchSize = 512,
+            MaxSequenceCount = 1,
+            OffloadKQV = false,
+        });
 
-        var vocab = _fx.Model.Vocab;
+        var vocab = model.Vocab;
         var tokens = vocab.Tokenize(
             "The rain in Spain falls mainly on the plain, and the hills are alive.",
             addSpecial: false, parseSpecial: false);
@@ -189,12 +214,12 @@ public class MultiTurnChatTests
         int maxGen = 8;
 
         // Pass A: full rebuild, greedy sampling with fixed seed.
-        _fx.Context.ClearKvCache();
+        ctx.ClearKvCache();
         var outputA = new StringBuilder();
         using (var samplerA = new LlamaSamplerBuilder()
             .WithTemperature(0.0f).WithDistribution(seed: 7).Build())
         {
-            var genA = new LlamaGenerator(_fx.Context, samplerA);
+            var genA = new LlamaGenerator(ctx, samplerA);
             await foreach (var p in genA.GenerateAsync(tokens, maxTokens: maxGen,
                                                         firstNewIndex: 0,
                                                         cancellationToken: TestContext.Current.CancellationToken)) outputA.Append(p);
@@ -208,17 +233,17 @@ public class MultiTurnChatTests
         var firstHalf = new int[half];
         Array.Copy(tokens, firstHalf, half);
 
-        _fx.Context.ClearKvCache();
+        ctx.ClearKvCache();
         using (var throwaway = new LlamaSamplerBuilder()
             .WithTemperature(0.0f).WithDistribution(seed: 9999).Build())
         {
-            var genThrow = new LlamaGenerator(_fx.Context, throwaway);
+            var genThrow = new LlamaGenerator(ctx, throwaway);
             await foreach (var _ in genThrow.GenerateAsync(firstHalf, maxTokens: 1,
                                                             firstNewIndex: 0,
                                                             cancellationToken: TestContext.Current.CancellationToken)) { }
         }
         // Strip the throwaway's generated token so KV is exactly [0..half-1].
-        var trimmed = _fx.Context.RemoveSequenceRange(0, fromPosition: half, toPosition: -1);
+        var trimmed = ctx.RemoveSequenceRange(0, fromPosition: half, toPosition: -1);
         if (!trimmed)
         {
             // Backend refused partial removal — test doesn't apply. (Compact
@@ -232,13 +257,71 @@ public class MultiTurnChatTests
         using (var samplerB = new LlamaSamplerBuilder()
             .WithTemperature(0.0f).WithDistribution(seed: 7).Build())
         {
-            var genB = new LlamaGenerator(_fx.Context, samplerB);
+            var genB = new LlamaGenerator(ctx, samplerB);
             await foreach (var p in genB.GenerateAsync(tokens, maxTokens: maxGen,
                                                         firstNewIndex: half,
                                                         cancellationToken: TestContext.Current.CancellationToken)) outputB.Append(p);
         }
 
         Assert.Equal(outputA.ToString(), outputB.ToString());
+    }
+
+    [Fact]
+    public async Task Prefix_Reuse_Path_Runs_Coherently_On_Gpu()
+    {
+        // GPU smoke test for the same prefix-reuse code path. We cannot
+        // assert byte equality against plain decode here (see the CPU
+        // companion test for why), but we DO want to catch the shapes of
+        // regressions this path is prone to: wrong positions on the
+        // re-decode batch, the sampler never priming, the trim returning
+        // false on a backend we thought supported it. The bar is
+        // "terminates, produces non-empty output, KV position counter
+        // matches what we expect."
+
+        var vocab = _fx.Model.Vocab;
+        var tokens = vocab.Tokenize(
+            "The rain in Spain falls mainly on the plain, and the hills are alive.",
+            addSpecial: false, parseSpecial: false);
+        int half = tokens.Length / 2;
+        int maxGen = 8;
+
+        _fx.Context.ClearKvCache();
+        using (var throwaway = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 9999).Build())
+        {
+            var genThrow = new LlamaGenerator(_fx.Context, throwaway);
+            var first = tokens.Take(half).ToArray();
+            await foreach (var _ in genThrow.GenerateAsync(first, maxTokens: 1,
+                                                            firstNewIndex: 0,
+                                                            cancellationToken: TestContext.Current.CancellationToken)) { }
+        }
+        var trimmed = _fx.Context.RemoveSequenceRange(0, fromPosition: half, toPosition: -1);
+        if (!trimmed)
+        {
+            Assert.True(true, "backend refused partial trim — nothing to smoke-test");
+            return;
+        }
+
+        // KV should now hold exactly [0..half-1].
+        Assert.Equal(half - 1, _fx.Context.SequencePositionRange(0).Maximum);
+
+        var output = new StringBuilder();
+        using (var sampler = new LlamaSamplerBuilder()
+            .WithTemperature(0.0f).WithDistribution(seed: 7).Build())
+        {
+            var gen = new LlamaGenerator(_fx.Context, sampler);
+            await foreach (var p in gen.GenerateAsync(tokens, maxTokens: maxGen,
+                                                       firstNewIndex: half,
+                                                       cancellationToken: TestContext.Current.CancellationToken)) output.Append(p);
+        }
+
+        Assert.False(string.IsNullOrEmpty(output.ToString()),
+            "Prefix-reuse path produced nothing — likely firstNewIndex was not honoured.");
+        // Position counter should reflect the full prompt plus emitted tokens.
+        var finalMax = _fx.Context.SequencePositionRange(0).Maximum;
+        Assert.NotNull(finalMax);
+        Assert.True(finalMax >= tokens.Length - 1,
+            $"KV position did not advance through the full prompt; max={finalMax}, expected >= {tokens.Length - 1}.");
     }
 
     [Fact]
