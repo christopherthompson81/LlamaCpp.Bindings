@@ -402,3 +402,140 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         }
     }
 }
+
+/// <summary>
+/// API-key auth tests. Uses a dedicated factory with two configured keys
+/// (inline + file) so every auth path has coverage.
+/// </summary>
+public class LlamaServerAuthTests : IClassFixture<LlamaServerAuthTests.AuthFactory>
+{
+    private readonly AuthFactory _factory;
+    public LlamaServerAuthTests(AuthFactory factory) => _factory = factory;
+
+    private const string GoodKey   = "test-key-inline-12345";
+    private const string GoodKey2  = "test-key-from-file-abcde";
+    private const string WrongKey  = "definitely-not-the-key-xyz";
+
+    [Fact]
+    public async Task Health_Is_Always_Open_Even_With_Keys_Configured()
+    {
+        // Liveness probes must not need credentials — container orchestrators
+        // can't be expected to ship API keys into every probe config.
+        var client = _factory.CreateClient();
+        var resp = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Protected_Endpoint_Returns_401_Without_Key()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.GetAsync("/v1/models", TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Protected_Endpoint_Returns_401_With_Wrong_Key()
+    {
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/v1/models");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", WrongKey);
+        var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Bearer_Token_With_Inline_Key_Is_Accepted()
+    {
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/v1/models");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", GoodKey);
+        var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Bearer_Token_With_File_Key_Is_Accepted()
+    {
+        // The AuthFactory writes GoodKey2 into a temporary file and points
+        // ApiKeyFile at it. This verifies the file-loading path actually
+        // merges its entries into the accepted set.
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/v1/models");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", GoodKey2);
+        var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task XApiKey_Header_Is_Accepted_As_Fallback()
+    {
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/v1/models");
+        req.Headers.Add("X-Api-Key", GoodKey);
+        var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Chat_Completions_Requires_Auth()
+    {
+        // Spot-check that auth gates the hot path, not just /v1/models.
+        var client = _factory.CreateClient();
+        var body = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "hi" } },
+            MaxTokens = 2,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", body, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
+
+    public sealed class AuthFactory : WebApplicationFactory<Program>, IDisposable
+    {
+        private readonly string _keyFile;
+
+        public AuthFactory()
+        {
+            _keyFile = Path.Combine(Path.GetTempPath(), $"llama-server-auth-{Guid.NewGuid():N}.keys");
+            File.WriteAllLines(_keyFile, new[]
+            {
+                "# comment line — ignored",
+                "",
+                GoodKey2,
+            });
+        }
+
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]         = modelPath,
+                    ["LlamaServer:ContextSize"]       = "512",
+                    ["LlamaServer:MaxSequenceCount"]  = "1",
+                    ["LlamaServer:GpuLayerCount"]     = "0", // CPU — keeps the second model light
+                    ["LlamaServer:OffloadKqv"]        = "false",
+                    ["LlamaServer:MaxOutputTokens"]   = "16",
+                    ["LlamaServer:Urls"]              = "",
+                    ["LlamaServer:ApiKeys:0"]         = GoodKey,
+                    ["LlamaServer:ApiKeyFile"]        = _keyFile,
+                });
+            });
+            return base.CreateHost(builder);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            try
+            {
+                if (File.Exists(_keyFile)) File.Delete(_keyFile);
+            }
+            catch { /* best-effort cleanup */ }
+            base.Dispose(disposing);
+        }
+    }
+}

@@ -27,13 +27,15 @@ public class Program
             .Bind(builder.Configuration.GetSection(ServerOptions.Section))
             .ValidateOnStart();
 
-        var serverOpts = builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>()
-                         ?? new ServerOptions();
-
-        // Kestrel URLs — take the value from options so CLI overrides apply.
-        if (!string.IsNullOrWhiteSpace(serverOpts.Urls))
+        // Kestrel URLs are the one config value we need BEFORE Build (UseUrls
+        // is a WebHost call). Read it straight from Configuration so it's
+        // consistent with appsettings.json / CLI overrides. Everything else
+        // reads after Build so test-time config hooks
+        // (WebApplicationFactory.ConfigureAppConfiguration) actually apply.
+        var urls = builder.Configuration[$"{ServerOptions.Section}:Urls"];
+        if (!string.IsNullOrWhiteSpace(urls))
         {
-            builder.WebHost.UseUrls(serverOpts.Urls);
+            builder.WebHost.UseUrls(urls);
         }
 
         builder.Services.AddSingleton<ModelHost>();
@@ -41,10 +43,21 @@ public class Program
 
         var app = builder.Build();
 
+        // Resolve the finalised options via IOptions — this picks up every
+        // configuration source, including test-injected in-memory overrides.
+        var serverOpts = app.Services.GetRequiredService<IOptions<ServerOptions>>().Value;
+
         // Eager-construct the model so any load failure surfaces at startup
         // rather than on the first request.
         var host = app.Services.GetRequiredService<ModelHost>();
         _ = app.Services.GetRequiredService<SessionPool>();
+
+        // Resolve API keys once at startup from the inline list + optional
+        // file. Any failure (missing file) throws here rather than on the
+        // first request.
+        var authLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ApiKeyAuth");
+        var validKeys = ApiKeyAuth.LoadKeys(serverOpts.ApiKeys, serverOpts.ApiKeyFile, authLogger);
+        app.UseApiKeyAuth(validKeys);
 
         MapEndpoints(app);
 

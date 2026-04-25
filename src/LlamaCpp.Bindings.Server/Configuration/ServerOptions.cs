@@ -57,4 +57,22 @@ public sealed class ServerOptions
     /// <c>max_tokens</c>.
     /// </summary>
     public int MaxOutputTokens { get; set; } = 2048;
+
+    // ----- Authentication -----
+
+    /// <summary>
+    /// API keys accepted on all endpoints except <c>/health</c>. Empty =
+    /// auth disabled (localhost dev default). Clients present keys as
+    /// <c>Authorization: Bearer &lt;key&gt;</c> (OpenAI-style) or
+    /// <c>X-Api-Key: &lt;key&gt;</c>.
+    /// </summary>
+    public List<string> ApiKeys { get; set; } = new();
+
+    /// <summary>
+    /// Optional path to a text file containing one API key per line.
+    /// Lines may be blank or start with <c>#</c> (comments). Keys loaded
+    /// from this file are merged with <see cref="ApiKeys"/>; either
+    /// source is sufficient. Matches llama-server's <c>--api-key-file</c>.
+    /// </summary>
+    public string? ApiKeyFile { get; set; }
 }
