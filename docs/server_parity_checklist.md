@@ -250,8 +250,14 @@ Features clients expect from the OpenAI chat-completions API.
   a preset that appends llama.cpp's canonical regex
   `\.ffn_(up\|down\|gate\|gate_up)_(ch\|)exps` mapped to the CPU
   device's primary buft.
-- [~] **`-mu, --model-url`** / **`-hf, --hf-repo`** — download manager.
-  Significant design work (resumable, hash-verified, cache directory).
+- [!] **`-mu, --model-url`** / **`-hf, --hf-repo`** — out of scope.
+  Treated as a client concern: getting a GGUF onto disk is a separate
+  problem from serving it, and operators have well-understood tools
+  (huggingface-cli, wget, rclone, container-image bakes) that already
+  do this better than an ad-hoc in-server downloader. The server's
+  surface stays "load this path" — fewer moving pieces, no resume /
+  hash / cache-directory state to maintain inside the inference
+  process.
 - [!] **`--embd-gemma-default`, `--fim-qwen-*-default`, etc.** — CLI
   shortcut presets. Our config system replaces these.
 
@@ -387,9 +393,9 @@ dependency) to deserve its own thread:
 |---|---|---|
 | `[x]` done | 72 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 4 | binding work first |
+| `[~]` needs binding | 3 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
-| `[!]` won't | 6 | explicit non-goal |
+| `[!]` won't | 7 | explicit non-goal |
 
 ## Remaining `[ ]` TODO items
 
@@ -423,8 +429,7 @@ All "binding already exposes" items are now wired. What remains:
    probe) and remote-URL image fetch (needs a download manager with
    size caps + content-type sniffing).
 3. **Binding-blocked items** (`[~]`) — `--numa` (trivial Program.cs
-   wiring; skipped only because it's process-wide), model-URL fetch,
-   control-vector.
+   wiring; skipped only because it's process-wide) and control-vector.
 4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
    rejection-sampling) is the largest remaining feature.
 
