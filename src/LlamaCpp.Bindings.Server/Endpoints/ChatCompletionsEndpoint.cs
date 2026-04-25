@@ -173,8 +173,10 @@ public static class ChatCompletionsEndpoint
             var toolsForTemplate = toolChoice.Kind == ToolChoiceKind.None
                 ? null
                 : ToolDefsToTemplate(req.Tools);
+            var templateKwargs = ConvertTemplateKwargs(req.ChatTemplateKwargs);
             prompt = LlamaChatTemplate.Apply(
-                template, messages, addAssistantPrefix: true, tools: toolsForTemplate);
+                template, messages, addAssistantPrefix: true,
+                tools: toolsForTemplate, templateKwargs: templateKwargs);
         }
         catch (Exception ex)
         {
@@ -871,6 +873,34 @@ public static class ChatCompletionsEndpoint
                 ["type"] = "function",
                 ["function"] = fn,
             });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Coerce <see cref="JsonElement"/> values from the request's
+    /// <c>chat_template_kwargs</c> into the .NET primitives the Jinja engine
+    /// can branch on (bool / number / string). Objects and arrays pass through
+    /// as the JsonElement itself — templates that walk them treat it as a tree.
+    /// </summary>
+    private static IReadOnlyDictionary<string, object?>? ConvertTemplateKwargs(
+        Dictionary<string, System.Text.Json.JsonElement>? kwargs)
+    {
+        if (kwargs is null || kwargs.Count == 0) return null;
+        var result = new Dictionary<string, object?>(kwargs.Count);
+        foreach (var kv in kwargs)
+        {
+            result[kv.Key] = kv.Value.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.True => true,
+                System.Text.Json.JsonValueKind.False => false,
+                System.Text.Json.JsonValueKind.String => kv.Value.GetString(),
+                System.Text.Json.JsonValueKind.Number => kv.Value.TryGetInt64(out var l)
+                    ? (object)l
+                    : kv.Value.GetDouble(),
+                System.Text.Json.JsonValueKind.Null => null,
+                _ => kv.Value,
+            };
         }
         return result;
     }

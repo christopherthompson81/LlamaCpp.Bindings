@@ -88,7 +88,8 @@ public static class LlamaChatTemplate
         string template,
         IReadOnlyList<ChatMessage> messages,
         bool addAssistantPrefix = true,
-        IReadOnlyList<object?>? tools = null)
+        IReadOnlyList<object?>? tools = null,
+        IReadOnlyDictionary<string, object?>? templateKwargs = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(template);
         ArgumentNullException.ThrowIfNull(messages);
@@ -105,7 +106,7 @@ public static class LlamaChatTemplate
         // haven't covered yet (e.g. exotic macros / inheritance).
         try
         {
-            return ApplyWithJinja(template, messages, addAssistantPrefix, tools);
+            return ApplyWithJinja(template, messages, addAssistantPrefix, tools, templateKwargs);
         }
         catch (JinjaException)
         {
@@ -164,7 +165,8 @@ public static class LlamaChatTemplate
         string template,
         IReadOnlyList<ChatMessage> messages,
         bool addAssistantPrefix,
-        IReadOnlyList<object?>? tools = null)
+        IReadOnlyList<object?>? tools = null,
+        IReadOnlyDictionary<string, object?>? templateKwargs = null)
     {
         var compiled = _jinjaCache.GetOrAdd(template, JinjaTemplate.Parse);
 
@@ -188,6 +190,16 @@ public static class LlamaChatTemplate
             ["tools"] = tools is { Count: > 0 } ? (object?)tools : null,
             ["add_vision_id"] = false,
         };
+
+        // Caller-supplied kwargs (e.g. enable_thinking=false) override the
+        // defaults — matches llama.cpp server's chat_template_kwargs semantics.
+        if (templateKwargs is not null)
+        {
+            foreach (var kv in templateKwargs)
+            {
+                ctx[kv.Key] = kv.Value;
+            }
+        }
 
         return compiled.Render(ctx);
     }

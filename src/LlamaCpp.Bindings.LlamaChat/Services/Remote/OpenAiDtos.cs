@@ -47,6 +47,15 @@ public sealed class ChatCompletionsRequest
     [JsonPropertyName("repeat_last_n")]    public int? RepeatLastN { get; set; }
 
     [JsonPropertyName("cache_prompt")]     public bool? CachePrompt { get; set; }
+
+    /// <summary>
+    /// Free-form kwargs forwarded into the server's chat-template Jinja
+    /// context. Mirrors llama.cpp server's <c>chat_template_kwargs</c>;
+    /// common usage is <c>{"enable_thinking": false}</c> to suppress
+    /// reasoning preambles for short utility calls (title gen).
+    /// </summary>
+    [JsonPropertyName("chat_template_kwargs")]
+    public Dictionary<string, object?>? ChatTemplateKwargs { get; set; }
 }
 
 public sealed class OpenAiChatMessage

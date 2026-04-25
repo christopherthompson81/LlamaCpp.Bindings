@@ -69,18 +69,29 @@ public sealed class RemoteChatSession : IChatSession
                 },
                 new() { Role = "user", Content = MessageContent.FromText(userMessage) },
             },
-            MaxTokens = 32,
+            MaxTokens = 256,
             Temperature = 0.3f,
             TopP = 0.9f,
             TopK = 40,
             CachePrompt = false,
+            // Suppress reasoning preambles on title gen — Qwen3 / DeepSeek-R1
+            // templates pre-open <think>, and a 32-token budget gets eaten by
+            // reasoning before any title is produced. enable_thinking=false
+            // makes the template emit <think></think> immediately so the
+            // model generates content directly. Servers that don't honour
+            // chat_template_kwargs ignore this; StripThinkBlock + the larger
+            // MaxTokens cover the fallback.
+            ChatTemplateKwargs = new Dictionary<string, object?>
+            {
+                ["enable_thinking"] = false,
+            },
         };
 
         try
         {
             var resp = await _client.CreateChatCompletionAsync(req, cancellationToken).ConfigureAwait(false);
-            var content = resp.Choices.Count > 0 ? resp.Choices[0].Message.Content?.Text : null;
-            return CleanTitle(content);
+            var raw = resp.Choices.Count > 0 ? resp.Choices[0].Message.Content?.Text : null;
+            return CleanTitle(StripThinkBlock(raw));
         }
         catch (OperationCanceledException)
         {
@@ -90,6 +101,22 @@ public sealed class RemoteChatSession : IChatSession
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Strips any <c>&lt;think&gt;...&lt;/think&gt;</c> reasoning block that a thinking
+    /// model (DeepSeek-R1, Qwen3, etc.) prepends to the visible reply. The
+    /// server applies the chat template and returns the full generated text
+    /// including reasoning, so we post-process here — mirroring the local
+    /// path's <c>&lt;think&gt;&lt;/think&gt;</c> pre-close trick which isn't available
+    /// remotely.
+    /// </summary>
+    private static string? StripThinkBlock(string? raw)
+    {
+        if (raw is null) return null;
+        const string closeTag = "</think>";
+        var closeIdx = raw.LastIndexOf(closeTag, StringComparison.OrdinalIgnoreCase);
+        return closeIdx >= 0 ? raw[(closeIdx + closeTag.Length)..].TrimStart() : raw;
     }
 
     private static string? CleanTitle(string? raw)
@@ -113,20 +140,16 @@ public sealed class RemoteChatSession : IChatSession
     {
         var req = BuildRequest(transcript, sampler, generation);
 
-        // The reasoning extractor needs to know whether the chat template
-        // pre-opened a <think> block. Locally we read the rendered prompt and
-        // pass `startInReasoning` directly; remotely the server does the
-        // template, so we sniff the first content bytes to decide:
-        //   - First non-whitespace token is `<think>` → model is opening its
-        //     own block (start in Content; the open tag flips us to Reasoning).
-        //   - Anything else → template pre-opened, we're already inside a
-        //     reasoning block (start in Reasoning; wait for `</think>`).
-        // Until the decision is made, content bytes are buffered in
-        // `pendingHead`. The decision needs at most 7 chars (length of
-        // "<think>") + leading whitespace before it commits.
-        ReasoningExtractor? extractor = null;
-        bool extractorDecided = !generation.ExtractReasoning;
-        var pendingHead = generation.ExtractReasoning ? new StringBuilder() : null;
+        // The server applies the chat template, so we never see the rendered
+        // assistant prefix. ReasoningExtractor (startInReasoning: false) handles
+        // both cases transparently:
+        //   - Model-opened <think>: arrives in the delta as "<think>..." → standard
+        //     open-tag flip to Reasoning.
+        //   - Template-pre-opened <think>: the open tag was in the assistant prefix
+        //     and never appears in the delta; the close tag "</think>" arrives mid-
+        //     stream. Content mode now detects this and retroactively routes
+        //     the pre-close text to the Reasoning channel.
+        var extractor = generation.ExtractReasoning ? new ReasoningExtractor() : null;
         var asrExtractor = generation.ExtractAsrTranscript ? new AsrTextExtractor() : null;
 
         var sw = Stopwatch.StartNew();
@@ -159,44 +182,17 @@ public sealed class RemoteChatSession : IChatSession
             {
                 completionTokens++;
 
-                // Defer extractor creation until the first chunks have given
-                // us enough context to decide which mode to start in.
-                string? toExtract = deltaContent;
-                if (!extractorDecided)
-                {
-                    pendingHead!.Append(deltaContent);
-                    var head = pendingHead.ToString();
-                    var trimmed = head.AsSpan().TrimStart();
-                    // Decision is made once we have either >= 7 visible chars,
-                    // or we can already prove the head doesn't begin with
-                    // "<think>" (a non-"<" char appeared past the whitespace).
-                    bool canDecide =
-                        trimmed.Length >= 7 ||
-                        (trimmed.Length > 0 && trimmed[0] != '<');
-                    if (!canDecide) continue; // wait for more bytes
-
-                    bool modelOpensThink =
-                        trimmed.StartsWith("<think>".AsSpan(), StringComparison.Ordinal);
-                    extractor = new ReasoningExtractor(startInReasoning: !modelOpensThink);
-                    toExtract = head;
-                    pendingHead = null;
-                    extractorDecided = true;
-                }
-
-                // Push through reasoning then ASR extractors, mirroring the
-                // local path so the UI sees identical event shapes regardless
-                // of which backend produced the tokens.
                 string contentSlice;
                 string? reasoningSlice;
                 if (extractor is not null)
                 {
-                    var re = extractor.Push(toExtract);
+                    var re = extractor.Push(deltaContent);
                     contentSlice = re.Content;
                     reasoningSlice = re.Reasoning.Length > 0 ? re.Reasoning : null;
                 }
                 else
                 {
-                    contentSlice = toExtract;
+                    contentSlice = deltaContent;
                     reasoningSlice = null;
                 }
                 if (reasoningSlice is not null) yield return new StreamEvent.Reasoning(reasoningSlice);
@@ -233,20 +229,6 @@ public sealed class RemoteChatSession : IChatSession
                     _ => LlamaStopReason.EndOfGeneration,
                 };
             }
-        }
-
-        // Stream ended before the extractor-mode heuristic could commit (very
-        // short reply: fewer than 7 visible chars, all consistent with a
-        // partial "<think>" prefix). Treat the buffered head as content —
-        // safer than dropping it.
-        if (!extractorDecided && pendingHead is { Length: > 0 })
-        {
-            extractor = new ReasoningExtractor(startInReasoning: false);
-            var re = extractor.Push(pendingHead.ToString());
-            if (re.Reasoning.Length > 0) yield return new StreamEvent.Reasoning(re.Reasoning);
-            if (re.Content.Length > 0) yield return new StreamEvent.Content(re.Content);
-            pendingHead = null;
-            extractorDecided = true;
         }
 
         // Flush extractor tails into the stream.

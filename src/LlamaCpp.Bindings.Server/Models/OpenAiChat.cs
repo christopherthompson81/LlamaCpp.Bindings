@@ -157,6 +157,17 @@ public sealed class ChatCompletionsRequest
     public JsonElement? ToolChoice { get; set; }
 
     /// <summary>
+    /// Free-form kwargs forwarded into the chat template's Jinja context.
+    /// Mirrors llama.cpp server's <c>chat_template_kwargs</c>. Common keys:
+    /// <c>enable_thinking</c> (Qwen3 / DeepSeek-R1 thinking-mode toggle),
+    /// <c>preserve_thinking</c>. Values are passed through as-is, so e.g.
+    /// <c>{"enable_thinking": false}</c> reaches the template as the literal
+    /// <c>false</c>.
+    /// </summary>
+    [JsonPropertyName("chat_template_kwargs")]
+    public Dictionary<string, JsonElement>? ChatTemplateKwargs { get; set; }
+
+    /// <summary>
     /// When <c>true</c>, each choice's response carries a <c>logprobs</c>
     /// object listing per-token log-probabilities. Default <c>false</c>
     /// (no overhead).

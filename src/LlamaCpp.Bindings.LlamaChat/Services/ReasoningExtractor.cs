@@ -9,8 +9,24 @@ namespace LlamaCpp.Bindings.LlamaChat.Services;
 /// delimiters. Feed arbitrarily-sized pieces to <see cref="Push"/> and it
 /// buffers just enough to straddle a potentially split open or close tag.
 ///
-/// Hardcoded to <c>&lt;think&gt;</c>/<c>&lt;/think&gt;</c> in v1. Per-template tag
-/// configuration is tracked in <c>docs/webui_parity_investigation.md</c>.
+/// Two entry modes:
+/// <list type="bullet">
+///   <item>
+///     <c>startInReasoning = false</c> (default) — used by the remote path and
+///     any case where the template state isn't known ahead of time. Content mode
+///     detects both <c>&lt;think&gt;</c> (model-opened block) and <c>&lt;/think&gt;</c>
+///     (server-pre-opened block whose open tag was in the assistant prefix and
+///     never appeared in the delta stream). The latter routes text before
+///     <c>&lt;/think&gt;</c> retroactively to the Reasoning channel, then
+///     continues in Content mode.
+///   </item>
+///   <item>
+///     <c>startInReasoning = true</c> — used by the local path when the
+///     rendered prompt is known to end with an open <c>&lt;think&gt;</c> tag
+///     (Qwen3, DeepSeek-R1 etc.). The stream arrives already inside the
+///     reasoning block; wait for <c>&lt;/think&gt;</c> before routing to Content.
+///   </item>
+/// </list>
 /// </summary>
 internal sealed class ReasoningExtractor
 {
@@ -24,23 +40,15 @@ internal sealed class ReasoningExtractor
 
     public readonly record struct Emission(string Content, string Reasoning);
 
-    /// <summary>
-    /// Construct an extractor that starts in the given mode. Pass
-    /// <paramref name="startInReasoning"/> = true for models whose chat
-    /// template ends the assistant-turn prefix with an *open* <c>&lt;think&gt;</c>
-    /// block (Qwen3 family, DeepSeek R1, etc.) — the stream arrives already
-    /// inside the reasoning block, and we need to wait for <c>&lt;/think&gt;</c>
-    /// before routing bytes to the visible content channel.
-    /// </summary>
     public ReasoningExtractor(bool startInReasoning = false) =>
         _mode = startInReasoning ? Mode.Reasoning : Mode.Content;
 
     /// <summary>
     /// Push a piece of streamed text. Returns what should be appended to the
     /// visible content and to the reasoning channel respectively. Either may
-    /// be empty. A trailing byte range that could still grow into an open or
-    /// close tag is held back and will appear in a later <see cref="Push"/>
-    /// or the final <see cref="Flush"/>.
+    /// be empty. A trailing byte range that could still grow into a tag is
+    /// held back and will appear in a later <see cref="Push"/> or
+    /// <see cref="Flush"/>.
     /// </summary>
     public Emission Push(string piece)
     {
@@ -50,30 +58,69 @@ internal sealed class ReasoningExtractor
 
         while (_pending.Length > 0)
         {
-            var target = _mode == Mode.Content ? OpenTag : CloseTag;
             var buf = _pending.ToString();
 
-            var idx = buf.IndexOf(target, StringComparison.Ordinal);
-            if (idx >= 0)
+            if (_mode == Mode.Content)
             {
-                (_mode == Mode.Content ? content : reasoning).Append(buf, 0, idx);
-                _pending.Clear();
-                _pending.Append(buf, idx + target.Length, buf.Length - (idx + target.Length));
-                _mode = _mode == Mode.Content ? Mode.Reasoning : Mode.Content;
-                continue;
-            }
+                var openIdx = buf.IndexOf(OpenTag, StringComparison.Ordinal);
+                var closeIdx = buf.IndexOf(CloseTag, StringComparison.Ordinal);
 
-            // No complete tag. Emit every byte that cannot be part of a future
-            // tag completion. That is: everything except the longest suffix of
-            // buf that is a proper prefix of target.
-            var holdBack = LongestProperPrefixSuffix(buf, target);
-            var emitLen = buf.Length - holdBack;
-            if (emitLen > 0)
-            {
-                (_mode == Mode.Content ? content : reasoning).Append(buf, 0, emitLen);
-                _pending.Remove(0, emitLen);
+                if (openIdx >= 0 && (closeIdx < 0 || openIdx <= closeIdx))
+                {
+                    // Standard model-opened block: emit content before tag, switch to Reasoning.
+                    content.Append(buf, 0, openIdx);
+                    _pending.Clear();
+                    _pending.Append(buf, openIdx + OpenTag.Length, buf.Length - (openIdx + OpenTag.Length));
+                    _mode = Mode.Reasoning;
+                }
+                else if (closeIdx >= 0)
+                {
+                    // Server pre-opened a <think> block in the assistant prefix — the open
+                    // tag never appeared in the delta. Text before </think> is reasoning;
+                    // stay in Content mode afterward.
+                    reasoning.Append(buf, 0, closeIdx);
+                    _pending.Clear();
+                    _pending.Append(buf, closeIdx + CloseTag.Length, buf.Length - (closeIdx + CloseTag.Length));
+                    // _mode stays Content
+                }
+                else
+                {
+                    // Neither complete tag yet. Hold back the longest buffer suffix that
+                    // could still complete either tag — the max of both candidates.
+                    var holdBack = Math.Max(
+                        LongestProperPrefixSuffix(buf, OpenTag),
+                        LongestProperPrefixSuffix(buf, CloseTag));
+                    var emitLen = buf.Length - holdBack;
+                    if (emitLen > 0)
+                    {
+                        content.Append(buf, 0, emitLen);
+                        _pending.Remove(0, emitLen);
+                    }
+                    break;
+                }
             }
-            break;
+            else // Mode.Reasoning
+            {
+                var idx = buf.IndexOf(CloseTag, StringComparison.Ordinal);
+                if (idx >= 0)
+                {
+                    reasoning.Append(buf, 0, idx);
+                    _pending.Clear();
+                    _pending.Append(buf, idx + CloseTag.Length, buf.Length - (idx + CloseTag.Length));
+                    _mode = Mode.Content;
+                }
+                else
+                {
+                    var holdBack = LongestProperPrefixSuffix(buf, CloseTag);
+                    var emitLen = buf.Length - holdBack;
+                    if (emitLen > 0)
+                    {
+                        reasoning.Append(buf, 0, emitLen);
+                        _pending.Remove(0, emitLen);
+                    }
+                    break;
+                }
+            }
         }
 
         return new Emission(content.ToString(), reasoning.ToString());
