@@ -112,8 +112,15 @@
                     Command="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).AutoConfigureCommand}"
                     ToolTip.Tip="Probe this model and hardware, then populate the settings below.">
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Path Classes="icon sm" Data="{StaticResource IconSparkles}" />
-                    <TextBlock Text="Automagic" VerticalAlignment="Center" />
+                    <Path Classes="icon sm" Data="{StaticResource IconSparkles}"
+                          IsVisible="{Binding !$parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).IsAutoConfiguring}" />
+                    <ProgressBar IsIndeterminate="True" Width="14" Height="3"
+                                 VerticalAlignment="Center"
+                                 IsVisible="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).IsAutoConfiguring}" />
+                    <TextBlock Text="Automagic" VerticalAlignment="Center"
+                               IsVisible="{Binding !$parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).IsAutoConfiguring}" />
+                    <TextBlock Text="Probing…" VerticalAlignment="Center"
+                               IsVisible="{Binding $parent[v:SettingsWindow].((vm:SettingsWindowViewModel)DataContext).IsAutoConfiguring}" />
                 </StackPanel>
             </Button>
         </Grid>

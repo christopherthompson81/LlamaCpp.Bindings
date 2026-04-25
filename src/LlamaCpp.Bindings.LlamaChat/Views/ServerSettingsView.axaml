@@ -102,26 +102,51 @@
                 <Border Classes="card">
                     <StackPanel Spacing="10">
                         <TextBlock Text="Inference" Classes="section" />
-                        <Grid ColumnDefinitions="160,*" RowSpacing="10"
-                              RowDefinitions="Auto,Auto,Auto,Auto,Auto">
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Context size"
+                        <Grid ColumnDefinitions="160,*,Auto" RowSpacing="10"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Auto-configure"
+                                       VerticalAlignment="Center"
+                                       ToolTip.Tip="Probe the GGUF + local hardware and recommend context size, GPU layers, KV cache type, and a higher MaxOutputTokens." />
+                            <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted xs"
+                                       TextWrapping="Wrap" VerticalAlignment="Center"
+                                       Text="Requires a valid Model path. Overwrites the inference + load fields below; tweak before Save." />
+                            <Button Grid.Row="0" Grid.Column="2" Margin="4,0,0,0"
+                                    Command="{Binding AutoConfigureCommand}"
+                                    ToolTip.Tip="Probe this model and hardware, then populate the settings below.">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Path Classes="icon sm" Data="{StaticResource IconSparkles}"
+                                          IsVisible="{Binding !IsAutoConfiguring}" />
+                                    <ProgressBar IsIndeterminate="True" Width="14" Height="3"
+                                                 VerticalAlignment="Center"
+                                                 IsVisible="{Binding IsAutoConfiguring}" />
+                                    <TextBlock Text="Automagic" VerticalAlignment="Center"
+                                               IsVisible="{Binding !IsAutoConfiguring}" />
+                                    <TextBlock Text="Probing…" VerticalAlignment="Center"
+                                               IsVisible="{Binding IsAutoConfiguring}" />
+                                </StackPanel>
+                            </Button>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Context size"
                                        VerticalAlignment="Center" />
-                            <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="512" Maximum="262144"
+                            <NumericUpDown Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="512" Maximum="262144"
                                            Value="{Binding ContextSize, Mode=TwoWay}" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="GPU layers (-1 = all)"
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="GPU layers (-1 = all)"
                                        VerticalAlignment="Center" />
-                            <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="-1" Maximum="999"
+                            <NumericUpDown Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="-1" Maximum="999"
                                            Value="{Binding GpuLayerCount, Mode=TwoWay}" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Parallel sequences"
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Parallel sequences"
                                        VerticalAlignment="Center" />
-                            <NumericUpDown Grid.Row="2" Grid.Column="1" Minimum="1" Maximum="64"
+                            <NumericUpDown Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="1" Maximum="64"
                                            Value="{Binding MaxSequenceCount, Mode=TwoWay}" />
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Flash attention"
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Flash attention"
                                        VerticalAlignment="Center" />
-                            <ComboBox Grid.Row="3" Grid.Column="1"
+                            <ComboBox Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2"
                                       SelectedItem="{Binding FlashAttention, Mode=TwoWay}">
                                 <ComboBox.Items>
                                     <lcp:LlamaFlashAttention>Auto</lcp:LlamaFlashAttention>
@@ -130,9 +155,10 @@
                                 </ComboBox.Items>
                             </ComboBox>
 
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Startup timeout (s)"
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Startup timeout (s)"
                                        VerticalAlignment="Center" />
-                            <NumericUpDown Grid.Row="4" Grid.Column="1" Minimum="1" Maximum="600"
+                            <NumericUpDown Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="1" Maximum="600"
                                            Value="{Binding StartupTimeoutSeconds, Mode=TwoWay}" />
                         </Grid>
                     </StackPanel>

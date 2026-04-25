@@ -15,10 +15,20 @@ public partial class SettingsWindowViewModel : ObservableObject
     public ServerSettingsViewModel ServerSettings { get; } = new();
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(DeleteProfileCommand), nameof(DuplicateProfileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(DeleteProfileCommand), nameof(DuplicateProfileCommand), nameof(AutoConfigureCommand))]
     private ProfileEditorViewModel? _selectedProfile;
 
     [ObservableProperty] private string _status = string.Empty;
+
+    /// <summary>
+    /// Drives the spinner + disabled state on the Automagic button while the
+    /// service is probing the model + hardware. The probe loads the model
+    /// twice (metadata pass + full-offload pass) so it can take several
+    /// seconds — without visible progress users hit the button repeatedly.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(AutoConfigureCommand))]
+    private bool _isAutoConfiguring;
 
     public SettingsWindowViewModel(
         ObservableCollection<ProfileEditorViewModel> profiles,
@@ -117,7 +127,7 @@ public partial class SettingsWindowViewModel : ObservableObject
         Status = "Reset sampling to defaults.";
     }
 
-    [RelayCommand(CanExecute = nameof(HasSelection))]
+    [RelayCommand(CanExecute = nameof(CanAutoConfigure))]
     private async Task AutoConfigureAsync()
     {
         if (SelectedProfile is null) return;
@@ -128,6 +138,7 @@ public partial class SettingsWindowViewModel : ObservableObject
             return;
         }
 
+        IsAutoConfiguring = true;
         Status = "Auto-configuring — probing model and hardware…";
         try
         {
@@ -141,7 +152,12 @@ public partial class SettingsWindowViewModel : ObservableObject
         {
             Status = $"Auto-configure failed: {ex.Message}";
         }
+        finally
+        {
+            IsAutoConfiguring = false;
+        }
     }
 
     private bool HasSelection() => SelectedProfile is not null;
+    private bool CanAutoConfigure() => HasSelection() && !IsAutoConfiguring;
 }

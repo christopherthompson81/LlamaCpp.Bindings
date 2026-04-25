@@ -30,6 +30,15 @@ public partial class ServerSettingsViewModel : ObservableObject
     [ObservableProperty] private int _startupTimeoutSeconds = 30;
     [ObservableProperty] private string _status = "";
 
+    /// <summary>
+    /// Drives the spinner + disabled state on the Server settings Automagic
+    /// button while the probe is in flight. Same shape as the profile-editor
+    /// flow; flag goes true → spinner + "Probing…" → resolves true → false.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(AutoConfigureCommand))]
+    private bool _isAutoConfiguring;
+
     // ----- Model -----
     [ObservableProperty] private string _modelPath = "";
     [ObservableProperty] private string _modelAlias = "";
@@ -402,6 +411,66 @@ public partial class ServerSettingsViewModel : ObservableObject
     private void GenerateApiKey()
     {
         ApiKey = Guid.NewGuid().ToString("N");
+    }
+
+    /// <summary>
+    /// Probe the GGUF + local hardware (same path the profile editor uses)
+    /// and overwrite the server's load + inference fields with the
+    /// recommendation. Bumps <see cref="MaxOutputTokens"/> from the server's
+    /// 2048 default to whatever the planner returned (16K), since reasoning
+    /// models routinely emit more than 2048 tokens for a single answer.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanAutoConfigure))]
+    private async Task AutoConfigureAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ModelPath) || !System.IO.File.Exists(ModelPath))
+        {
+            Status = "Auto-configure: set a valid Model path first.";
+            return;
+        }
+
+        IsAutoConfiguring = true;
+        Status = "Auto-configuring — probing model and hardware…";
+        try
+        {
+            var result = await Task.Run(() => AutoConfigureService.Configure(ModelPath));
+            ApplyAutoConfigure(result);
+            Status = "Auto-configure applied. " + result.Explanation;
+        }
+        catch (Exception ex)
+        {
+            Status = $"Auto-configure failed: {ex.Message}";
+        }
+        finally
+        {
+            IsAutoConfiguring = false;
+        }
+    }
+
+    private bool CanAutoConfigure() => !IsAutoConfiguring;
+
+    /// <summary>
+    /// Map an <see cref="AutoConfigureResult"/> onto this VM's fields. Mirrors
+    /// <c>ProfileEditorViewModel.ApplyAutoConfigure</c> but targets the server-
+    /// side knobs (<c>OffloadKqv</c>, <c>MaxOutputTokens</c>, etc.). Sampler
+    /// settings are intentionally NOT applied — the server doesn't carry a
+    /// sampler config; sampling happens per-request driven by the client.
+    /// </summary>
+    private void ApplyAutoConfigure(AutoConfigureResult result)
+    {
+        var load = result.Load;
+        if (!string.IsNullOrEmpty(load.ModelPath)) ModelPath = load.ModelPath;
+        ContextSize       = (int)load.ContextSize;
+        GpuLayerCount     = load.GpuLayerCount;
+        LogicalBatchSize  = (int)load.LogicalBatchSize;
+        PhysicalBatchSize = (int)load.PhysicalBatchSize;
+        UseMmap           = load.UseMmap;
+        UseMlock          = load.UseMlock;
+        OffloadKqv        = load.OffloadKQV;
+        FlashAttention    = load.FlashAttention;
+        KvCacheTypeK      = load.KvCacheTypeK;
+        KvCacheTypeV      = load.KvCacheTypeV;
+        MaxOutputTokens   = result.Generation.MaxTokens;
     }
 
     [RelayCommand]
