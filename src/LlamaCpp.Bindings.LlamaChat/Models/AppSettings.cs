@@ -55,4 +55,35 @@ public sealed record AppSettings
     /// Matches webui's "Strip thinking from message history".
     /// </summary>
     public bool StripThinkingFromHistory { get; init; } = true;
+
+    /// <summary>
+    /// Restored on next launch. Null on first launch (OS chooses default
+    /// placement / size). <see cref="WindowX"/>/<see cref="WindowY"/> are
+    /// absolute virtual-desktop coordinates and serve as the fallback when
+    /// the previous monitor can't be matched by name.
+    /// </summary>
+    public double? WindowX { get; init; }
+    public double? WindowY { get; init; }
+    public double? WindowWidth { get; init; }
+    public double? WindowHeight { get; init; }
+    public bool WindowMaximized { get; init; }
+
+    /// <summary>
+    /// <see cref="Avalonia.Platform.Screen.DisplayName"/> of the monitor the
+    /// window was on, plus the position relative to that screen's top-left.
+    /// On next launch, if a screen with the same display name is still
+    /// connected the window is placed on it at the same relative offset —
+    /// this survives multi-monitor rearrangement or a single-monitor disconnect
+    /// that would otherwise leave the window stranded off-screen.
+    /// </summary>
+    public string? WindowScreenName { get; init; }
+    public double? WindowScreenRelativeX { get; init; }
+    public double? WindowScreenRelativeY { get; init; }
+
+    /// <summary>
+    /// Name of the profile that was selected the last time the app exited.
+    /// Reselected on next launch when present in the profile list; falls
+    /// back to the first profile if the named one is gone.
+    /// </summary>
+    public string? LastProfileName { get; init; }
 }

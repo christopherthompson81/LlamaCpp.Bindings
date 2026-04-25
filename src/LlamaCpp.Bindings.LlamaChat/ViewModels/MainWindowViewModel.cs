@@ -208,7 +208,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         Profiles = new ObservableCollection<ProfileEditorViewModel>(
             ProfileStore.Load().Select(p => new ProfileEditorViewModel(p)));
-        SelectedProfile = Profiles.FirstOrDefault();
+        // Reselect the profile that was active last session; fall back to the
+        // first one when the named profile has been deleted or renamed.
+        SelectedProfile =
+            (AppSettings.LastProfileName is { Length: > 0 } name
+                ? Profiles.FirstOrDefault(p => p.Name == name)
+                : null)
+            ?? Profiles.FirstOrDefault();
 
         foreach (var c in ConversationStore.Load())
         {
@@ -316,6 +322,21 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     partial void OnSearchTextChanged(string value) => RebuildFilteredConversations();
+
+    /// <summary>
+    /// Persist the active profile name immediately so a crash or hard kill
+    /// still restores the user's last selection. Cheap — one small JSON
+    /// rewrite — and the file is the same one the Settings dialog already
+    /// rewrites on close.
+    /// </summary>
+    partial void OnSelectedProfileChanged(ProfileEditorViewModel? value)
+    {
+        if (AppSettings is null) return;
+        var newName = value?.Name;
+        if (AppSettings.LastProfileName == newName) return;
+        AppSettings.LastProfileName = newName;
+        try { AppSettingsStore.Save(AppSettings.ToModel()); } catch { }
+    }
 
     partial void OnSelectedConversationChanged(ConversationViewModel? oldValue, ConversationViewModel? newValue)
     {
