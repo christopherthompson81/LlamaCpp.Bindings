@@ -702,4 +702,16 @@
         </Style.Animations>
     </Style>
 
+    <!-- ================================================================
+         ScrollBar gutter
+         Fluent's ScrollBar overlays content. Push it away so it doesn't
+         butt up against text/diagrams when visible.
+         ================================================================ -->
+    <Style Selector="ScrollBar:vertical">
+        <Setter Property="Margin" Value="4,0,0,0" />
+    </Style>
+    <Style Selector="ScrollBar:horizontal">
+        <Setter Property="Margin" Value="0,4,0,0" />
+    </Style>
+
 </Styles>
