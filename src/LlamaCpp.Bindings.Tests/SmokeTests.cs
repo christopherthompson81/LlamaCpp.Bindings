@@ -25,12 +25,27 @@ public class SmokeTests
     [Fact]
     public void NativeLibraryDirectory_Is_Found_And_Contains_Cpu_Plugins()
     {
+        // llama.cpp's Linux release layout has shifted over time:
+        //   - older builds (≤ b88xx early) shipped per-arch plugins as
+        //     libggml-cpu-<arch>.so (haswell / sandybridge / skylakex / …);
+        //   - current builds (b8893+) ship a single monolithic libggml-cpu.so
+        //     and let CPU feature-detection happen inside that one binary.
+        // Either layout loads correctly through NativeLibraryResolver — the
+        // per-arch probe just no-ops when there's nothing to enumerate. The
+        // test accepts both so it doesn't fire on every llama.cpp bump that
+        // only changes packaging.
         var dir = LlamaCpp.Bindings.Native.NativeLibraryResolver.NativeLibraryDirectory();
         Assert.NotNull(dir);
         Assert.True(Directory.Exists(dir), $"Expected native dir to exist: {dir}");
-        var cpuPlugins = Directory.GetFiles(dir, "libggml-cpu-*.so");
-        Assert.True(cpuPlugins.Length > 0,
-            $"Expected libggml-cpu-*.so files in {dir}, found: {string.Join(", ", Directory.GetFiles(dir, "*.so*").Select(Path.GetFileName))}");
+
+        var perArch    = Directory.GetFiles(dir, "libggml-cpu-*.so");
+        var monolithic = Directory.GetFiles(dir, "libggml-cpu.so")
+            .Concat(Directory.GetFiles(dir, "libggml-cpu.so.*"))
+            .ToArray();
+
+        Assert.True(perArch.Length > 0 || monolithic.Length > 0,
+            $"Expected either per-arch libggml-cpu-*.so or a monolithic libggml-cpu.so in {dir}, " +
+            $"found: {string.Join(", ", Directory.GetFiles(dir, "*.so*").Select(Path.GetFileName))}");
     }
 
     [Fact]
