@@ -1,9 +1,4 @@
-using System;
 using System.Collections.Concurrent;
-using System.IO;
-using Avalonia;
-using Avalonia.Controls;
-using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using CSharpMath.SkiaSharp;
 using SkiaSharp;
@@ -14,16 +9,20 @@ namespace LlamaCpp.Bindings.LlamaChat.Services;
 /// Renders a LaTeX math string to an Avalonia <see cref="Bitmap"/> via
 /// CSharpMath.SkiaSharp. The path is LaTeX → <see cref="MathPainter"/> →
 /// PNG stream → <see cref="Bitmap"/>. Bitmaps are cached on
-/// (latex, displayStyle, fontSize, foregroundArgb).
+/// (latex, displayStyle, fontSize).
 ///
-/// Theme-flip behaviour: the foreground colour is baked into the bitmap at
-/// render time. Messages re-render on the next streaming tick / conversation
-/// switch; a theme-flip while a fully static message is on screen leaves
-/// stale-coloured glyphs until the containing bubble next re-renders.
+/// The bitmap is always rendered in pure white — callers tint it at draw
+/// time by using the bitmap as an Avalonia <c>OpacityMask</c> over a
+/// <c>DynamicResource Foreground</c> brush. That keeps math glyphs in
+/// lockstep with the current theme without re-rendering, and avoids a
+/// startup race where the theme variant hadn't yet resolved when a
+/// stored conversation was first laid out — under the previous "bake
+/// the color into the bitmap" approach the cached PNG would freeze
+/// at the fallback color (visibly black on dark backgrounds).
 /// </summary>
 public static class MathRenderer
 {
-    private record struct CacheKey(string LaTeX, bool Display, float FontSize, uint Argb);
+    private record struct CacheKey(string LaTeX, bool Display, float FontSize);
     private static readonly ConcurrentDictionary<CacheKey, Bitmap?> Cache = new();
 
     /// <summary>
@@ -33,15 +32,15 @@ public static class MathRenderer
     public const float InlineFontSize = 16f;
     public const float DisplayFontSize = 20f;
 
-    public static Bitmap? Render(string latex, bool display, Color foreground, float? fontSizeOverride = null)
+    public static Bitmap? Render(string latex, bool display, float? fontSizeOverride = null)
     {
         if (string.IsNullOrWhiteSpace(latex)) return null;
         var size = fontSizeOverride ?? (display ? DisplayFontSize : InlineFontSize);
-        var key = new CacheKey(latex, display, size, foreground.ToUInt32());
-        return Cache.GetOrAdd(key, static k => RenderUncached(k.LaTeX, k.Display, k.FontSize, k.Argb));
+        var key = new CacheKey(latex, display, size);
+        return Cache.GetOrAdd(key, static k => RenderUncached(k.LaTeX, k.Display, k.FontSize));
     }
 
-    private static Bitmap? RenderUncached(string latex, bool display, float fontSize, uint argb)
+    private static Bitmap? RenderUncached(string latex, bool display, float fontSize)
     {
         try
         {
@@ -49,7 +48,10 @@ public static class MathRenderer
             {
                 LaTeX = latex,
                 FontSize = fontSize,
-                TextColor = new SKColor(argb),
+                // Pure white with full alpha — callers use the bitmap's alpha
+                // channel as an opacity mask and supply the actual foreground
+                // through the theme's DynamicResource.
+                TextColor = SKColors.White,
             };
             // MathPainter defaults to display style; toggle off for inline.
             if (!display)
@@ -67,18 +69,5 @@ public static class MathRenderer
             // Invalid LaTeX, unknown command, etc. — caller renders as fallback text.
             return null;
         }
-    }
-
-    /// <summary>Resolve the current theme's <c>Foreground</c> brush to a concrete Color.</summary>
-    public static Color ResolveThemeForeground()
-    {
-        var app = Application.Current;
-        if (app is not null
-            && app.Resources.TryGetResource("Foreground", app.ActualThemeVariant, out var obj)
-            && obj is ISolidColorBrush brush)
-        {
-            return brush.Color;
-        }
-        return Colors.Black;
     }
 }

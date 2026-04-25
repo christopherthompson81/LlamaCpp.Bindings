@@ -215,8 +215,7 @@ public static class MarkdownRenderer
     private static Control RenderMathBlock(MathBlock mb)
     {
         var latex = ExtractBlockText(mb);
-        var fg = MathRenderer.ResolveThemeForeground();
-        var bmp = MathRenderer.Render(latex, display: true, fg);
+        var bmp = MathRenderer.Render(latex, display: true);
         if (bmp is null)
         {
             // Invalid LaTeX — show raw source in a muted monospace block so
@@ -224,13 +223,33 @@ public static class MarkdownRenderer
             return BuildCodeBlock(latex, language: "math", showActions: false);
         }
 
-        return new Image
+        return BuildMathTintedSurface(bmp, new Thickness(0, 6, 0, 6), HorizontalAlignment.Center);
+    }
+
+    /// <summary>
+    /// Wraps a math bitmap (rendered by <see cref="MathRenderer"/> in pure
+    /// white) in a <see cref="Border"/> whose <c>Background</c> tracks the
+    /// theme's <c>Foreground</c> resource and whose <c>OpacityMask</c> is
+    /// the bitmap. The composition is "fill with current foreground colour,
+    /// keep only the pixels where the math glyphs are opaque" — so the math
+    /// always matches the current theme without re-rendering, and a race
+    /// where the variant resolves after the bitmap was rendered is harmless.
+    /// </summary>
+    private static Border BuildMathTintedSurface(
+        Avalonia.Media.Imaging.Bitmap bmp,
+        Thickness margin,
+        HorizontalAlignment hAlign)
+    {
+        var border = new Border
         {
-            Source = bmp,
-            Stretch = Avalonia.Media.Stretch.None,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 6, 0, 6),
+            Width = bmp.Size.Width,
+            Height = bmp.Size.Height,
+            OpacityMask = new ImageBrush(bmp) { Stretch = Avalonia.Media.Stretch.None },
+            HorizontalAlignment = hAlign,
+            Margin = margin,
         };
+        border[!Border.BackgroundProperty] = new DynamicResourceExtension("Foreground");
+        return border;
     }
 
     private static string ExtractBlockText(LeafBlock block)
@@ -499,8 +518,7 @@ public static class MarkdownRenderer
             case MathInline math:
             {
                 var latex = math.Content.ToString();
-                var fg = MathRenderer.ResolveThemeForeground();
-                var bmp = MathRenderer.Render(latex, display: false, fg);
+                var bmp = MathRenderer.Render(latex, display: false);
                 if (bmp is null)
                 {
                     // Fallback: render the raw latex in code style so the user
@@ -511,12 +529,8 @@ public static class MarkdownRenderer
                 }
                 else
                 {
-                    var img = new Image
-                    {
-                        Source = bmp,
-                        Stretch = Avalonia.Media.Stretch.None,
-                    };
-                    dst.Add(new InlineUIContainer(img) { BaselineAlignment = BaselineAlignment.Center });
+                    var surface = BuildMathTintedSurface(bmp, default, HorizontalAlignment.Stretch);
+                    dst.Add(new InlineUIContainer(surface) { BaselineAlignment = BaselineAlignment.Center });
                 }
                 break;
             }
