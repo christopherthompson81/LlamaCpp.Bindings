@@ -24,7 +24,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     public ObservableCollection<ProfileEditorViewModel> Profiles { get; }
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LoadCommand))]
+    [NotifyCanExecuteChangedFor(nameof(LoadCommand), nameof(SendCommand))]
+    [NotifyPropertyChangedFor(nameof(CanSend))]
     private ProfileEditorViewModel? _selectedProfile;
 
     private ProfileEditorViewModel? _activeLoadedProfile;
@@ -157,12 +158,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     public bool IsModelLoaded => Session is not null;
 
     public bool CanSend =>
-        IsModelLoaded
-        && !IsGenerating
+        !IsGenerating
         && !IsBusy
         && !IsRecording
         && !string.IsNullOrWhiteSpace(UserInput)
-        && SelectedConversation is not null;
+        && SelectedConversation is not null
+        && SelectedProfile is not null;
 
     public bool CanCancel => IsGenerating;
 
@@ -278,7 +279,18 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 existing.ModelId = e.ModelId;
             }
             try { ProfileStore.Save(Profiles.Select(p => p.ToProfile())); } catch { }
-            if (e.AutoSelect) SelectedProfile = existing;
+            if (e.AutoSelect)
+            {
+                SelectedProfile = existing;
+                // No session → load it now so the profile is immediately active.
+                // If a session is already loaded with a different profile, leave it
+                // alone — user can manually swap and EnsureLoadedAsync will pick this
+                // profile up on their next send.
+                if (Session is null)
+                {
+                    _ = LoadAsync();
+                }
+            }
             ToastService.Success("Local server", $"Profile \"{e.ProfileName}\" updated.");
         });
     }
@@ -349,6 +361,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     {
         if (SelectedProfile is null) return;
         var profile = SelectedProfile;
+
+        // Loading a profile that targets our in-app local server is meaningless
+        // unless the server is up — start it first.
+        if (!await EnsureLocalServerRunningAsync(profile)) return;
 
         if (profile.Kind == ProfileKind.Local)
         {
@@ -425,6 +441,115 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     private bool CanLoad() => !IsBusy && Session is null && SelectedProfile is not null;
+
+    /// <summary>
+    /// True when the given remote profile points at the in-app local server
+    /// (whatever URL it's configured to bind to). Used to decide whether
+    /// loading the profile should first start the child server process.
+    /// Comparison is on bind address + port, not on profile name, so the
+    /// user can rename the auto-managed profile without breaking detection.
+    /// </summary>
+    private static bool IsLocalServerProfile(ProfileEditorViewModel profile)
+    {
+        if (profile.Kind != ProfileKind.Remote) return false;
+        var profileUrl = profile.BaseUrl?.TrimEnd('/');
+        var localUrl = ServerLaunchService.Instance.CurrentConfig.BaseUrl.TrimEnd('/');
+        return !string.IsNullOrEmpty(profileUrl) &&
+               string.Equals(profileUrl, localUrl, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// If <paramref name="profile"/> targets the in-app local server and the
+    /// server isn't running yet, start it and wait for /health. No-op for any
+    /// other profile kind, or when the server is already running.
+    /// Returns true on success (server is running or wasn't needed).
+    /// </summary>
+    private async Task<bool> EnsureLocalServerRunningAsync(ProfileEditorViewModel profile)
+    {
+        if (!IsLocalServerProfile(profile)) return true;
+        var svc = ServerLaunchService.Instance;
+        if (svc.State == ServerLaunchState.Running) return true;
+
+        StatusText = "Starting local server…";
+        IsBusy = true;
+        try
+        {
+            await svc.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Error("Local server", ex.Message);
+            return false;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        if (svc.State != ServerLaunchState.Running)
+        {
+            ToastService.Error("Local server", svc.Error ?? "Server failed to start.");
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Make sure a session exists before a generation runs. If the selected
+    /// profile points at the in-app local server, ensures the server is up.
+    /// If the profile has never produced a clean EOG generation, asks the user
+    /// to confirm before loading (avoids silently re-triggering a crash).
+    /// Returns true once a session is loaded, false if the user declined or
+    /// loading failed.
+    /// </summary>
+    private async Task<bool> EnsureLoadedAsync()
+    {
+        if (Session is not null) return true;
+        if (SelectedProfile is null)
+        {
+            StatusText = "No profile selected.";
+            return false;
+        }
+
+        var profile = SelectedProfile;
+        if (!await EnsureLocalServerRunningAsync(profile)) return false;
+
+        // Local profiles can crash on load (bad GGUF, OOM, mismatched mmproj).
+        // Confirm if the most recent run didn't end cleanly. Remote profiles
+        // are cheap to "load" (HTTP client init), so always silent.
+        var requiresConfirm = profile.Kind == ProfileKind.Local && !profile.LastRunCleanEog;
+        if (requiresConfirm)
+        {
+            var choice = await DialogService.ConfirmAsync(
+                "Load profile",
+                $"'{profile.Name}' hasn't completed a clean generation yet. Loading may crash if the profile is misconfigured. Load anyway?",
+                new[]
+                {
+                    ("cancel", "Cancel", false, false),
+                    ("load",   "Load",   true,  false),
+                });
+            if (choice != "load") return false;
+        }
+
+        await LoadAsync();
+        return Session is not null;
+    }
+
+    /// <summary>
+    /// Persist the EOG outcome of a generation to the active profile.
+    /// EndOfGeneration and GrammarSatisfied count as "clean" (the model
+    /// would have produced EOG; grammar just stopped sampling early).
+    /// MaxTokens / Cancelled / errors flip the flag to false.
+    /// </summary>
+    private void UpdateProfileLastRunEog(LlamaCpp.Bindings.LlamaStopReason reason)
+    {
+        if (_activeLoadedProfile is null) return;
+        var clean = reason == LlamaCpp.Bindings.LlamaStopReason.EndOfGeneration
+                 || reason == LlamaCpp.Bindings.LlamaStopReason.GrammarSatisfied;
+        if (_activeLoadedProfile.LastRunCleanEog == clean) return;
+        _activeLoadedProfile.LastRunCleanEog = clean;
+        try { ProfileStore.Save(Profiles.Select(p => p.ToProfile())); } catch { }
+    }
 
     [RelayCommand(CanExecute = nameof(CanUnload))]
     private void Unload()
@@ -543,7 +668,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private async Task SendAsync()
     {
         StreamTraceLog.Log("SendAsync:enter");
-        if (Session is null || SelectedConversation is null || _activeLoadedProfile is null) return;
+        if (SelectedConversation is null) return;
         var text = UserInput.Trim();
         if (text.Length == 0) return;
 
@@ -554,6 +679,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             UserInput = string.Empty;
             return;
         }
+
+        // Eagerly load the selected profile (and start the local server if
+        // it's the auto-managed one) so users don't have to click Load first.
+        if (!await EnsureLoadedAsync()) return;
+        if (Session is null || _activeLoadedProfile is null) return;
 
         UserInput = string.Empty;
 
@@ -1021,6 +1151,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                                 ? doneData.CompletionTokens / doneData.GenerationTime.TotalSeconds : 0;
                             assistant.StatsSummary = $"{doneData.CompletionTokens} tok · {tps:F1} tok/s";
                             StatusText = $"Done — {assistant.StatsSummary}";
+                            UpdateProfileLastRunEog(doneData.StopReason);
                             StreamTraceLog.Log("Done:UI-handler-done");
                         }, DispatcherPriority.Background);
                         StreamTraceLog.Log("Done:after-InvokeAsync");
@@ -1040,6 +1171,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 SetContinueAnchor(assistant);
                 StatusText = "Cancelled.";
                 if (string.IsNullOrEmpty(assistant.Content)) assistant.Content = "(cancelled)";
+                UpdateProfileLastRunEog(LlamaCpp.Bindings.LlamaStopReason.Cancelled);
             }, DispatcherPriority.Background);
         }
         catch (Exception ex)
@@ -1058,6 +1190,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 {
                     assistant.Content = $"(error: {ex.GetType().Name}: {ex.Message})";
                 }
+                UpdateProfileLastRunEog(LlamaCpp.Bindings.LlamaStopReason.None);
             }, DispatcherPriority.Background);
         }
         finally
@@ -1272,7 +1405,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private async Task RegenerateMessageAsync(MessageViewModel? msg)
     {
         StreamTraceLog.Log("RegenerateMessageAsync:enter");
-        if (msg is null || Session is null || SelectedConversation is null) return;
+        if (msg is null || SelectedConversation is null) return;
+        if (!await EnsureLoadedAsync()) return;
+        if (Session is null) return;
         var conv = SelectedConversation;
 
         // Determine the parent-user turn the new assistant reply should
@@ -1346,9 +1481,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task ContinueMessageAsync(MessageViewModel? msg)
     {
-        if (msg is null || Session is null || _activeLoadedProfile is null) return;
-        if (SelectedConversation is null) return;
+        if (msg is null || SelectedConversation is null) return;
         if (!msg.IsAssistant) return;
+        if (!await EnsureLoadedAsync()) return;
+        if (Session is null || _activeLoadedProfile is null) return;
         // Continuation requires server-side KV state we only have for local
         // sessions. Remote profiles get a friendly notice instead of an exception.
         if (Session is not LocalChatSession)

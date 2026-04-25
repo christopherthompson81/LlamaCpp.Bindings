@@ -66,4 +66,13 @@ public sealed record ModelProfile
 
     public SamplerSettings Sampler { get; init; } = new();
     public GenerationSettings Generation { get; init; } = new();
+
+    /// <summary>
+    /// Whether the most recent generation under this profile ended with the
+    /// model's natural EOG token (or a grammar stop that only permits EOG —
+    /// also a clean termination). Drives the "auto-load on Send" trust
+    /// check: profiles with no clean run yet trigger a confirmation dialog
+    /// before silent auto-load. Set after every generation completes.
+    /// </summary>
+    public bool LastRunCleanEog { get; init; } = false;
 }

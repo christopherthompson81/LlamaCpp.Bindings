@@ -93,11 +93,20 @@ public partial class ProfileEditorViewModel : ObservableObject
 
     public ProfileEditorViewModel() { }
 
+    /// <summary>
+    /// Whether the most recent generation under this profile ended with EOG.
+    /// Not bound to UI — set by <c>MainWindowViewModel</c> after each
+    /// generation, persisted via <c>ProfileStore.Save</c>. Drives the
+    /// trust check that gates auto-load on Send.
+    /// </summary>
+    public bool LastRunCleanEog { get; set; }
+
     public ProfileEditorViewModel(ModelProfile profile)
     {
         Name = profile.Name;
         Kind = profile.Kind;
         SystemPrompt = profile.SystemPrompt;
+        LastRunCleanEog = profile.LastRunCleanEog;
         BaseUrl = profile.Remote.BaseUrl;
         ApiKey = profile.Remote.ApiKey ?? string.Empty;
         ModelId = profile.Remote.ModelId;
@@ -153,6 +162,7 @@ public partial class ProfileEditorViewModel : ObservableObject
         Remote = SnapshotRemote(),
         Sampler = SamplerPanel.SnapshotSampler(),
         Generation = SamplerPanel.SnapshotGeneration(),
+        LastRunCleanEog = LastRunCleanEog,
     };
 
     /// <summary>

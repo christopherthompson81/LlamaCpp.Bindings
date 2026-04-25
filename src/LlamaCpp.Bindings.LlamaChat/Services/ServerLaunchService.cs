@@ -173,7 +173,7 @@ public sealed partial class ServerLaunchService : ObservableObject, IDisposable
         string modelId = "";
         try
         {
-            using var client = new OpenAiChatClient(baseUrl, cfg.ApiKey);
+            using var client = new OpenAiChatClient(baseUrl, string.IsNullOrEmpty(cfg.ApiKey) ? null : cfg.ApiKey);
             var ids = await client.ListModelsAsync(_runCts.Token).ConfigureAwait(false);
             modelId = ids.FirstOrDefault() ?? "";
         }
@@ -192,7 +192,7 @@ public sealed partial class ServerLaunchService : ObservableObject, IDisposable
             {
                 ProfileName = "Local server",
                 BaseUrl = baseUrl,
-                ApiKey = cfg.ApiKey,
+                ApiKey = string.IsNullOrEmpty(cfg.ApiKey) ? null : cfg.ApiKey,
                 ModelId = modelId,
                 AutoSelect = cfg.AutoSelectProfileOnLaunch,
             });
@@ -279,16 +279,131 @@ public sealed partial class ServerLaunchService : ObservableObject, IDisposable
 
         if (isDll) psi.ArgumentList.Add(exe);
 
-        psi.ArgumentList.Add($"--LlamaServer:ModelPath={cfg.ModelPath}");
-        psi.ArgumentList.Add($"--LlamaServer:Urls=http://{cfg.BindAddress}:{cfg.Port}");
-        psi.ArgumentList.Add($"--LlamaServer:ContextSize={cfg.ContextSize}");
-        psi.ArgumentList.Add($"--LlamaServer:GpuLayerCount={cfg.GpuLayerCount}");
-        psi.ArgumentList.Add($"--LlamaServer:MaxSequenceCount={cfg.MaxSequenceCount}");
-        psi.ArgumentList.Add($"--LlamaServer:FlashAttention={cfg.FlashAttention}");
-        if (!string.IsNullOrEmpty(cfg.ApiKey))
+        void Add(string key, object value) =>
+            psi.ArgumentList.Add($"--LlamaServer:{key}={value}");
+        void AddIfSet(string key, string value)
         {
-            psi.ArgumentList.Add($"--LlamaServer:ApiKeys:0={cfg.ApiKey}");
+            if (!string.IsNullOrEmpty(value)) Add(key, value);
         }
+        void AddList(string key, IReadOnlyList<string> values)
+        {
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (!string.IsNullOrWhiteSpace(values[i])) Add($"{key}:{i}", values[i]);
+            }
+        }
+
+        // Model
+        Add("ModelPath", cfg.ModelPath);
+        AddIfSet("ModelAlias", cfg.ModelAlias);
+
+        // HTTP
+        var scheme = cfg.HttpsCertificatePath.Length > 0 ? "https" : "http";
+        Add("Urls", $"{scheme}://{cfg.BindAddress}:{cfg.Port}");
+        AddIfSet("HttpsCertificatePath", cfg.HttpsCertificatePath);
+        AddIfSet("HttpsCertificatePassword", cfg.HttpsCertificatePassword);
+
+        // Context / batching
+        Add("ContextSize", cfg.ContextSize);
+        Add("LogicalBatchSize", cfg.LogicalBatchSize);
+        Add("PhysicalBatchSize", cfg.PhysicalBatchSize);
+        Add("MaxSequenceCount", cfg.MaxSequenceCount);
+
+        // GPU
+        Add("GpuLayerCount", cfg.GpuLayerCount);
+        Add("OffloadKqv", cfg.OffloadKqv);
+        Add("MainGpu", cfg.MainGpu);
+        Add("SplitMode", cfg.SplitMode);
+        Add("NoHost", cfg.NoHost);
+        Add("UseExtraBufts", cfg.UseExtraBufts);
+        Add("CpuMoe", cfg.CpuMoe);
+        Add("CheckTensors", cfg.CheckTensors);
+        Add("UseDirectIo", cfg.UseDirectIo);
+        AddList("Devices", cfg.Devices);
+        for (var i = 0; i < cfg.TensorSplit.Count; i++)
+            Add($"TensorSplit:{i}", cfg.TensorSplit[i].ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        // CPU / threading
+        Add("ThreadCount", cfg.ThreadCount);
+        Add("BatchThreadCount", cfg.BatchThreadCount);
+        Add("NumaStrategy", cfg.NumaStrategy);
+
+        // KV cache
+        Add("FlashAttention", cfg.FlashAttention);
+        Add("KvCacheTypeK", cfg.KvCacheTypeK);
+        Add("KvCacheTypeV", cfg.KvCacheTypeV);
+        Add("UseFullSwaCache", cfg.UseFullSwaCache);
+
+        // File I/O
+        Add("UseMmap", cfg.UseMmap);
+        Add("UseMlock", cfg.UseMlock);
+
+        // CORS
+        AddList("CorsAllowedOrigins", cfg.CorsAllowedOrigins);
+        Add("CorsAllowCredentials", cfg.CorsAllowCredentials);
+
+        // Auth
+        if (!string.IsNullOrEmpty(cfg.ApiKey)) Add("ApiKeys:0", cfg.ApiKey);
+        AddIfSet("ApiKeyFile", cfg.ApiKeyFile);
+
+        // Limits
+        Add("MaxOutputTokens", cfg.MaxOutputTokens);
+        Add("MaxPromptTokens", cfg.MaxPromptTokens);
+        Add("RequestTimeoutSeconds", cfg.RequestTimeoutSeconds);
+        Add("ShutdownDrainSeconds", cfg.ShutdownDrainSeconds);
+
+        // Endpoints
+        Add("ExposeMetricsEndpoint", cfg.ExposeMetricsEndpoint);
+        Add("ExposeSlotsEndpoint", cfg.ExposeSlotsEndpoint);
+
+        // RoPE / YARN
+        Add("RopeScalingType", cfg.RopeScalingType);
+        Add("RopeFreqBase", cfg.RopeFreqBase.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Add("RopeFreqScale", cfg.RopeFreqScale.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Add("YarnExtFactor", cfg.YarnExtFactor.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Add("YarnAttnFactor", cfg.YarnAttnFactor.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Add("YarnBetaFast", cfg.YarnBetaFast.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Add("YarnBetaSlow", cfg.YarnBetaSlow.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Add("YarnOriginalContext", cfg.YarnOriginalContext);
+
+        // Multimodal
+        AddIfSet("MmprojPath", cfg.MmprojPath);
+        Add("MmprojAuto", cfg.MmprojAuto);
+        if (cfg.MmprojOnCpu) Add("MmprojOnCpu", true);
+        if (cfg.MmprojImageMinTokens > 0) Add("MmprojImageMinTokens", cfg.MmprojImageMinTokens);
+        if (cfg.MmprojImageMaxTokens > 0) Add("MmprojImageMaxTokens", cfg.MmprojImageMaxTokens);
+
+        // Embeddings
+        if (!string.IsNullOrEmpty(cfg.EmbeddingModelPath))
+        {
+            Add("EmbeddingModelPath", cfg.EmbeddingModelPath);
+            Add("EmbeddingContextSize", cfg.EmbeddingContextSize);
+            Add("EmbeddingBatchSize", cfg.EmbeddingBatchSize);
+            Add("EmbeddingGpuLayerCount", cfg.EmbeddingGpuLayerCount);
+            AddIfSet("EmbeddingModelAlias", cfg.EmbeddingModelAlias);
+        }
+
+        // Rerank
+        if (!string.IsNullOrEmpty(cfg.RerankModelPath))
+        {
+            Add("RerankModelPath", cfg.RerankModelPath);
+            Add("RerankContextSize", cfg.RerankContextSize);
+            Add("RerankBatchSize", cfg.RerankBatchSize);
+            Add("RerankGpuLayerCount", cfg.RerankGpuLayerCount);
+            AddIfSet("RerankModelAlias", cfg.RerankModelAlias);
+        }
+
+        // Speculative decoding (draft model)
+        if (!string.IsNullOrEmpty(cfg.DraftModelPath))
+        {
+            Add("DraftModelPath", cfg.DraftModelPath);
+            Add("DraftContextSize", cfg.DraftContextSize);
+            Add("DraftLogicalBatchSize", cfg.DraftLogicalBatchSize);
+            Add("DraftPhysicalBatchSize", cfg.DraftPhysicalBatchSize);
+            Add("DraftGpuLayerCount", cfg.DraftGpuLayerCount);
+            Add("DraftLookahead", cfg.DraftLookahead);
+        }
+
         foreach (var arg in cfg.ExtraArgs)
         {
             if (!string.IsNullOrWhiteSpace(arg)) psi.ArgumentList.Add(arg);

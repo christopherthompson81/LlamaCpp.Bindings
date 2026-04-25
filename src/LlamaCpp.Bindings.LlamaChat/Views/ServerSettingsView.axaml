@@ -31,13 +31,19 @@
                                    TextWrapping="Wrap"
                                    IsVisible="{Binding Service.Error,
                                        Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <StackPanel Orientation="Horizontal" Spacing="6">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                             <Button Content="Start" Command="{Binding StartCommand}" />
                             <Button Content="Stop" Classes="outline" Command="{Binding StopCommand}" />
                             <Button Content="Restart" Classes="outline" Command="{Binding RestartCommand}" />
                             <Button Content="Copy URL" Classes="sm outline"
                                     Command="{Binding CopyBaseUrlCommand}"
                                     IsVisible="{Binding IsRunning}" />
+                            <ProgressBar IsIndeterminate="True" Width="80" Height="4"
+                                         Margin="6,0,0,0" VerticalAlignment="Center"
+                                         IsVisible="{Binding IsStarting}" />
+                            <TextBlock Text="Starting…" Classes="xs muted"
+                                       VerticalAlignment="Center"
+                                       IsVisible="{Binding IsStarting}" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -46,14 +52,21 @@
                 <Border Classes="card">
                     <StackPanel Spacing="10">
                         <TextBlock Text="Model" Classes="section" />
-                        <Grid ColumnDefinitions="130,*,Auto">
-                            <TextBlock Grid.Column="0" Text="Model path"
+                        <Grid ColumnDefinitions="130,*,Auto" RowSpacing="10"
+                              RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Model path"
                                        VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1"
+                            <TextBox Grid.Row="0" Grid.Column="1"
                                      PlaceholderText="/path/to/model.gguf"
                                      Text="{Binding ModelPath, Mode=TwoWay}" />
-                            <Button Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
+                            <Button Grid.Row="0" Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
                                     Command="{Binding BrowseModelPathCommand}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Alias"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                     PlaceholderText="(empty = file stem)"
+                                     Text="{Binding ModelAlias, Mode=TwoWay}" />
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -62,7 +75,7 @@
                 <Border Classes="card">
                     <StackPanel Spacing="10">
                         <TextBlock Text="Network" Classes="section" />
-                        <Grid ColumnDefinitions="130,*,80,110" RowSpacing="10"
+                        <Grid ColumnDefinitions="130,*,60,140" RowSpacing="10"
                               RowDefinitions="Auto,Auto">
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="Bind address"
                                        VerticalAlignment="Center" />
@@ -138,8 +151,468 @@
                     </StackPanel>
                 </Border>
 
+                <!-- ===== Context & batching ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Context &amp; batching">
+                    <Grid ColumnDefinitions="180,*" RowSpacing="10"
+                          RowDefinitions="Auto,Auto" Margin="0,8,0,0">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Logical batch size"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="1" Maximum="65536"
+                                       Value="{Binding LogicalBatchSize, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Physical batch size"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="1" Maximum="65536"
+                                       Value="{Binding PhysicalBatchSize, Mode=TwoWay}" />
+                    </Grid>
+                </Expander>
+
+                <!-- ===== GPU ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="GPU">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <Grid ColumnDefinitions="180,*" RowSpacing="10"
+                              RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Main GPU index"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="32"
+                                           Value="{Binding MainGpu, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Split mode"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="1" Grid.Column="1"
+                                      SelectedItem="{Binding SplitMode, Mode=TwoWay}">
+                                <ComboBox.Items>
+                                    <lcp:LlamaSplitMode>None</lcp:LlamaSplitMode>
+                                    <lcp:LlamaSplitMode>Layer</lcp:LlamaSplitMode>
+                                    <lcp:LlamaSplitMode>Row</lcp:LlamaSplitMode>
+                                </ComboBox.Items>
+                            </ComboBox>
+                        </Grid>
+
+                        <ToggleButton Classes="switch" Content="Offload KQV"
+                                      IsChecked="{Binding OffloadKqv}" />
+                        <ToggleButton Classes="switch" Content="No host (skip host-pinning)"
+                                      IsChecked="{Binding NoHost}" />
+                        <ToggleButton Classes="switch" Content="Allow extra-bufts (CPU AMX repack)"
+                                      IsChecked="{Binding UseExtraBufts}" />
+                        <ToggleButton Classes="switch" Content="CPU MoE (route MoE FFN tensors to CPU)"
+                                      IsChecked="{Binding CpuMoe}" />
+                        <ToggleButton Classes="switch" Content="Verify tensor data on load"
+                                      IsChecked="{Binding CheckTensors}" />
+                        <ToggleButton Classes="switch" Content="Direct I/O (bypass page cache)"
+                                      IsChecked="{Binding UseDirectIo}" />
+
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Devices" Classes="sm" FontWeight="SemiBold" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="One device name per line (e.g. CUDA0). Empty = use all registered devices." />
+                            <TextBox AcceptsReturn="True" MinHeight="48" MaxHeight="120"
+                                     Text="{Binding Devices, Mode=TwoWay}" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Tensor split" Classes="sm" FontWeight="SemiBold" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="One float per line, per device (e.g. 0.5 / 0.5). Empty = even split." />
+                            <TextBox AcceptsReturn="True" MinHeight="48" MaxHeight="120"
+                                     Text="{Binding TensorSplit, Mode=TwoWay}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== CPU & threading ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="CPU &amp; threading">
+                    <Grid ColumnDefinitions="180,*" RowSpacing="10"
+                          RowDefinitions="Auto,Auto,Auto" Margin="0,8,0,0">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Decode threads (-1 = auto)"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="-1" Maximum="512"
+                                       Value="{Binding ThreadCount, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Batch threads (-1 = match)"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="-1" Maximum="512"
+                                       Value="{Binding BatchThreadCount, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="NUMA strategy"
+                                   VerticalAlignment="Center" />
+                        <ComboBox Grid.Row="2" Grid.Column="1"
+                                  SelectedItem="{Binding NumaStrategy, Mode=TwoWay}">
+                            <ComboBox.Items>
+                                <lcp:LlamaNumaStrategy>Disabled</lcp:LlamaNumaStrategy>
+                                <lcp:LlamaNumaStrategy>Distribute</lcp:LlamaNumaStrategy>
+                                <lcp:LlamaNumaStrategy>Isolate</lcp:LlamaNumaStrategy>
+                                <lcp:LlamaNumaStrategy>Numactl</lcp:LlamaNumaStrategy>
+                                <lcp:LlamaNumaStrategy>Mirror</lcp:LlamaNumaStrategy>
+                            </ComboBox.Items>
+                        </ComboBox>
+                    </Grid>
+                </Expander>
+
+                <!-- ===== KV cache ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="KV cache">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <Grid ColumnDefinitions="180,*" RowSpacing="10"
+                              RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="K element type"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      SelectedItem="{Binding KvCacheTypeK, Mode=TwoWay}">
+                                <ComboBox.Items>
+                                    <lcp:LlamaKvCacheType>F32</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>F16</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>BF16</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q8_0</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q5_0</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q5_1</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q4_0</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q4_1</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>IQ4_NL</lcp:LlamaKvCacheType>
+                                </ComboBox.Items>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="V element type"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="1" Grid.Column="1"
+                                      SelectedItem="{Binding KvCacheTypeV, Mode=TwoWay}">
+                                <ComboBox.Items>
+                                    <lcp:LlamaKvCacheType>F32</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>F16</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>BF16</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q8_0</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q5_0</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q5_1</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q4_0</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>Q4_1</lcp:LlamaKvCacheType>
+                                    <lcp:LlamaKvCacheType>IQ4_NL</lcp:LlamaKvCacheType>
+                                </ComboBox.Items>
+                            </ComboBox>
+                        </Grid>
+                        <ToggleButton Classes="switch" Content="Full SWA cache (allow KV edits across turns)"
+                                      IsChecked="{Binding UseFullSwaCache}" />
+                        <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                   Text="Quantized KV cache (Q8_0 and below) requires Flash Attention." />
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== File I/O ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="File I/O">
+                    <StackPanel Spacing="6" Margin="0,8,0,0">
+                        <ToggleButton Classes="switch" Content="Use mmap"
+                                      IsChecked="{Binding UseMmap}" />
+                        <ToggleButton Classes="switch" Content="Lock model in RAM (mlock)"
+                                      IsChecked="{Binding UseMlock}" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== HTTPS ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="HTTPS">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                   Text="Set a PKCS#12 certificate file to switch the bind URL to https. Leave blank for plain HTTP." />
+                        <Grid ColumnDefinitions="180,*" RowSpacing="10"
+                              RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Certificate path"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding HttpsCertificatePath, Mode=TwoWay}"
+                                     PlaceholderText="/path/to/cert.pfx" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Password"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="1" Grid.Column="1"
+                                     PasswordChar="•"
+                                     Text="{Binding HttpsCertificatePassword, Mode=TwoWay}" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== CORS ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="CORS">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Allowed origins" Classes="sm" FontWeight="SemiBold" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="One origin per line. Empty = CORS disabled. * = any origin." />
+                            <TextBox AcceptsReturn="True" MinHeight="48" MaxHeight="120"
+                                     Text="{Binding CorsAllowedOrigins, Mode=TwoWay}" />
+                        </StackPanel>
+                        <ToggleButton Classes="switch" Content="Allow credentials"
+                                      IsChecked="{Binding CorsAllowCredentials}" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== Auth ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Auth">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                   Text="API key is set in the Network section above. Add a key file here to load additional keys (one per line, # for comments)." />
+                        <Grid ColumnDefinitions="180,*">
+                            <TextBlock Grid.Column="0" Text="Key file"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding ApiKeyFile, Mode=TwoWay}"
+                                     PlaceholderText="/path/to/api-keys.txt" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== Limits ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Limits">
+                    <Grid ColumnDefinitions="200,*" RowSpacing="10"
+                          RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,8,0,0">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Max output tokens"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="1" Maximum="262144"
+                                       Value="{Binding MaxOutputTokens, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Max prompt tokens (0 = derive)"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="262144"
+                                       Value="{Binding MaxPromptTokens, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Request timeout (s, 0 = none)"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="2" Grid.Column="1" Minimum="0" Maximum="86400"
+                                       Value="{Binding RequestTimeoutSeconds, Mode=TwoWay}" />
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Shutdown drain (s)"
+                                   VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Row="3" Grid.Column="1" Minimum="0" Maximum="3600"
+                                       Value="{Binding ShutdownDrainSeconds, Mode=TwoWay}" />
+                    </Grid>
+                </Expander>
+
+                <!-- ===== Endpoints ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Endpoints">
+                    <StackPanel Spacing="6" Margin="0,8,0,0">
+                        <ToggleButton Classes="switch" Content="Expose /metrics"
+                                      IsChecked="{Binding ExposeMetricsEndpoint}" />
+                        <ToggleButton Classes="switch" Content="Expose /slots"
+                                      IsChecked="{Binding ExposeSlotsEndpoint}" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== RoPE / YARN ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="RoPE / YARN">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                   Text="Override the model's RoPE / YARN parameters. Leave defaults to inherit from the GGUF metadata." />
+                        <Grid ColumnDefinitions="200,*" RowSpacing="10"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="RoPE scaling type"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      SelectedItem="{Binding RopeScalingType, Mode=TwoWay}">
+                                <ComboBox.Items>
+                                    <lcp:LlamaRopeScalingType>Unspecified</lcp:LlamaRopeScalingType>
+                                    <lcp:LlamaRopeScalingType>None</lcp:LlamaRopeScalingType>
+                                    <lcp:LlamaRopeScalingType>Linear</lcp:LlamaRopeScalingType>
+                                    <lcp:LlamaRopeScalingType>Yarn</lcp:LlamaRopeScalingType>
+                                    <lcp:LlamaRopeScalingType>Longrope</lcp:LlamaRopeScalingType>
+                                </ComboBox.Items>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="RoPE freq base (0 = inherit)"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RopeFreqBase, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="RoPE freq scale (0 = inherit)"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding RopeFreqScale, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="YARN ext factor (-1 = inherit)"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding YarnExtFactor, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="YARN attn factor"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding YarnAttnFactor, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="YARN beta fast"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding YarnBetaFast, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="YARN beta slow"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding YarnBetaSlow, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="7" Grid.Column="0" Text="YARN orig context (0 = inherit)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="7" Grid.Column="1" Minimum="0" Maximum="1048576"
+                                           Value="{Binding YarnOriginalContext, Mode=TwoWay}" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== Multimodal ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Multimodal (mmproj)">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <Grid ColumnDefinitions="200,*,Auto" RowSpacing="10"
+                              RowDefinitions="Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="mmproj path"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding MmprojPath, Mode=TwoWay}"
+                                     PlaceholderText="/path/to/mmproj-*.gguf" />
+                            <Button Grid.Row="0" Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
+                                    Command="{Binding BrowseMmprojPathCommand}" />
+                        </Grid>
+
+                        <ToggleButton Classes="switch" Content="Auto-discover sibling mmproj-*.gguf"
+                                      IsChecked="{Binding MmprojAuto}" />
+                        <ToggleButton Classes="switch" Content="Force mmproj encoder on CPU"
+                                      IsChecked="{Binding MmprojOnCpu}" />
+
+                        <Grid ColumnDefinitions="200,*" RowSpacing="10"
+                              RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Image min tokens (0 = inherit)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="65536"
+                                           Value="{Binding MmprojImageMinTokens, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Image max tokens (0 = inherit)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="65536"
+                                           Value="{Binding MmprojImageMaxTokens, Mode=TwoWay}" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== Embeddings ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Embeddings model">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                   Text="Set a path to enable /v1/embeddings. Use a dedicated embedding GGUF (BGE, nomic-embed) — chat models won't produce useful vectors." />
+                        <Grid ColumnDefinitions="200,*,Auto" RowSpacing="10"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Model path"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding EmbeddingModelPath, Mode=TwoWay}"
+                                     PlaceholderText="/path/to/embed.gguf" />
+                            <Button Grid.Row="0" Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
+                                    Command="{Binding BrowseEmbeddingModelPathCommand}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Alias"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                     Text="{Binding EmbeddingModelAlias, Mode=TwoWay}"
+                                     PlaceholderText="(empty = file stem)" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Context size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="64" Maximum="65536"
+                                           Value="{Binding EmbeddingContextSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Batch size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="1" Maximum="65536"
+                                           Value="{Binding EmbeddingBatchSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="GPU layers (-1 = all)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="-1" Maximum="999"
+                                           Value="{Binding EmbeddingGpuLayerCount, Mode=TwoWay}" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== Rerank ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Rerank model">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                   Text="Set a path to enable /v1/rerank. Reranker models output (query, document) relevance scores — not interchangeable with embedding models." />
+                        <Grid ColumnDefinitions="200,*,Auto" RowSpacing="10"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Model path"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding RerankModelPath, Mode=TwoWay}"
+                                     PlaceholderText="/path/to/reranker.gguf" />
+                            <Button Grid.Row="0" Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
+                                    Command="{Binding BrowseRerankModelPathCommand}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Alias"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                     Text="{Binding RerankModelAlias, Mode=TwoWay}"
+                                     PlaceholderText="(empty = file stem)" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Context size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="64" Maximum="65536"
+                                           Value="{Binding RerankContextSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Batch size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="1" Maximum="65536"
+                                           Value="{Binding RerankBatchSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="GPU layers (-1 = all)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="-1" Maximum="999"
+                                           Value="{Binding RerankGpuLayerCount, Mode=TwoWay}" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== Speculative decoding ===== -->
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Speculative decoding (draft model)">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                   Text="Pair a small draft GGUF with the main model to propose tokens ahead. Draft must share the main model's tokenizer family. Speculative requests serialize through a single semaphore." />
+                        <Grid ColumnDefinitions="200,*,Auto" RowSpacing="10"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Draft model path"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding DraftModelPath, Mode=TwoWay}"
+                                     PlaceholderText="/path/to/small-draft.gguf" />
+                            <Button Grid.Row="0" Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
+                                    Command="{Binding BrowseDraftModelPathCommand}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Context size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="64" Maximum="65536"
+                                           Value="{Binding DraftContextSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Logical batch size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="1" Maximum="65536"
+                                           Value="{Binding DraftLogicalBatchSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Physical batch size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="1" Maximum="65536"
+                                           Value="{Binding DraftPhysicalBatchSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="GPU layers (-1 = all)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="-1" Maximum="999"
+                                           Value="{Binding DraftGpuLayerCount, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Lookahead tokens"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Minimum="1" Maximum="32"
+                                           Value="{Binding DraftLookahead, Mode=TwoWay}" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
                 <!-- ===== Advanced ===== -->
-                <Expander Header="Advanced">
+                <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Advanced">
                     <StackPanel Spacing="14" Margin="0,8,0,0">
 
                         <StackPanel Spacing="6">
@@ -158,7 +631,7 @@
                         <StackPanel Spacing="6">
                             <TextBlock Text="Extra args" Classes="section" />
                             <TextBlock Classes="xs muted" TextWrapping="Wrap"
-                                       Text="Appended verbatim to the server command line. Use the --LlamaServer:Key=Value form for any ServerOptions field not exposed above." />
+                                       Text="Appended verbatim to the server command line. Use the --LlamaServer:Key=Value form for any ServerOptions field not exposed above (LoraAdapters, ControlVectors, TensorBuftOverrides, etc.)." />
                             <TextBox AcceptsReturn="True" MinHeight="60" MaxHeight="160"
                                      Text="{Binding ExtraArgs, Mode=TwoWay}"
                                      PlaceholderText="One per line." />
