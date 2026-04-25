@@ -4,6 +4,14 @@ Reference: `llama-server --help` as of llama.cpp `b8893-1-g86db42e97` (2026-04-2
 Sampling-side parity lives in `docs/webui_feature_checklist.md` §6 — this
 doc covers **loading, runtime, and model-source** parameters only.
 
+> **Scope:** this checklist tracks parity for the **LlamaChat desktop app**
+> — each `[x]` requires a profile field + UI control. For the
+> **LlamaCpp.Bindings.Server project's** parity story (HTTP endpoints,
+> auth, sampling knobs on `/v1/chat/completions`, etc.) see
+> [`server_parity_checklist.md`](server_parity_checklist.md). The two docs
+> share the same binding layer but diverge at the consumer: the desktop
+> app needs UI; the server needs HTTP surface.
+
 ## Source-of-truth files
 
 - **Binding surface**: `src/LlamaCpp.Bindings/LlamaModelParameters.cs`, `LlamaContextParameters.cs`
