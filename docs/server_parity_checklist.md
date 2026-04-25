@@ -284,13 +284,20 @@ Features clients expect from the OpenAI chat-completions API.
 - [x] min_p, typical_p, top_n_sigma, XTC, DRY (§3 / §4)
 - [x] mirostat, mirostat_v2 (§3 / §4)
 - [x] repeat_penalty / frequency_penalty / presence_penalty, repeat_last_n
-- [ ] adaptive_p terminal — binding exposes `WithAdaptiveP`; parity
-  would be a third terminal-selection branch in `SamplerFactory`.
-- [ ] Dynamic temperature (`dynatemp_range`, `dynatemp_exponent`) —
-  binding has `WithExtendedTemperature`; low priority.
-- [ ] Custom sampler ordering (`samplers`, `sampler_seq`) — current
-  builder applies a fixed order; exposing it requires a sampler-
-  builder change.
+- [x] adaptive_p terminal — `adaptive_p_target` + `adaptive_p_decay` on
+  chat + completion. When `target ≥ 0`, replaces the
+  greedy/distribution terminal with `WithAdaptiveP`. Mirostat (when
+  set) still wins.
+- [x] Dynamic temperature — `dynatemp_range` + `dynatemp_exponent` on
+  chat + completion. When `range > 0`, the temperature stage uses
+  `WithExtendedTemperature(temp, range, exponent)` instead of plain
+  `WithTemperature(temp)`.
+- [x] Custom sampler ordering — `samplers` (a string list) on chat +
+  completion. When non-null, only the named stages run, in the order
+  given. Allowed names: `dry`, `top_k`, `top_p`, `min_p`, `typical_p`,
+  `top_n_sigma`, `xtc`, `temperature`. Unknown names → 400. Stages
+  whose params are absent silently skip. Penalties + logit bias stay
+  at the head; terminal selection stays at the tail.
 
 ## 11. Observability + lifecycle
 
@@ -351,20 +358,27 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 61 | shipped, tested |
-| `[ ]` TODO | 3 | binding already exposes; server-side wiring only |
+| `[x]` done | 64 | shipped, tested |
+| `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 5 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
 
 ## Remaining `[ ]` TODO items
 
-For at-a-glance triage. Each is small (a few config fields + tests).
+None. Every "binding already exposes; server-side wiring only" row is
+shipped. What's left lives in the binding-blocked, tracked-issues, and
+non-goal columns above.
 
-§1 endpoints: `GET /props` (informational dump).
-§4 completion: `cache_prompt` opt-out.
-§7 multimodal: `--mmproj-auto` (probe sibling file), remote-URL image fetch.
-§10 sampling: adaptive_p terminal, dynamic temperature, custom sampler ordering.
+Deliberate skips (logged here for memory rather than re-discussion):
+
+- §1: `GET /props` — narrow audience (only the bundled llama.cpp web UI
+  reads it; OpenAI-compatible frontends ignore it). Re-evaluate if a
+  user actually needs it.
+- §4: `cache_prompt` opt-out — the SessionPool's prefix matching is
+  cheap; per-request opt-out is a knob looking for a use case.
+- §7: `--mmproj-auto`, remote-URL image fetch — both are usability
+  niceties, not parity gaps.
 
 ## Recommended order of attack
 

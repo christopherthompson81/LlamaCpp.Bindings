@@ -67,6 +67,32 @@ public sealed class ChatCompletionsRequest
     [JsonPropertyName("mirostat_tau")]       public float? MirostatTau { get; set; }
     [JsonPropertyName("mirostat_eta")]       public float? MirostatEta { get; set; }
 
+    /// <summary>
+    /// Dynamic-temperature stretch (llama.cpp's <c>dynatemp_range</c>).
+    /// When &gt; 0, the temperature stage flexes around
+    /// <see cref="Temperature"/> by ± this amount based on entropy.
+    /// </summary>
+    [JsonPropertyName("dynatemp_range")]     public float? DynatempRange { get; set; }
+    [JsonPropertyName("dynatemp_exponent")]  public float? DynatempExponent { get; set; }
+
+    /// <summary>
+    /// Adaptive-p target probability. When &gt;= 0, replaces the standard
+    /// greedy / distribution / mirostat terminal with the adaptive-p
+    /// sampler. Mutually exclusive with <see cref="Mirostat"/> (mirostat
+    /// wins if both are set).
+    /// </summary>
+    [JsonPropertyName("adaptive_p_target")]  public float? AdaptivePTarget { get; set; }
+    [JsonPropertyName("adaptive_p_decay")]   public float? AdaptivePDecay { get; set; }
+
+    /// <summary>
+    /// llama-server's <c>samplers</c> field — custom ordering for the
+    /// truncation + temperature stages. Allowed names: <c>dry</c>,
+    /// <c>top_k</c>, <c>top_p</c>, <c>min_p</c>, <c>typical_p</c>,
+    /// <c>top_n_sigma</c>, <c>xtc</c>, <c>temperature</c>. Stages whose
+    /// parameters are absent silently skip. Unknown names are HTTP 400.
+    /// </summary>
+    [JsonPropertyName("samplers")]           public List<string>? Samplers { get; set; }
+
     [JsonPropertyName("repeat_penalty")]     public float? RepeatPenalty { get; set; }
     [JsonPropertyName("frequency_penalty")]  public float? FrequencyPenalty { get; set; }
     [JsonPropertyName("presence_penalty")]   public float? PresencePenalty { get; set; }
@@ -538,6 +564,14 @@ public sealed class CompletionRequest
     [JsonPropertyName("mirostat_tau")]       public float? MirostatTau { get; set; }
     [JsonPropertyName("mirostat_eta")]       public float? MirostatEta { get; set; }
 
+    [JsonPropertyName("dynatemp_range")]     public float? DynatempRange { get; set; }
+    [JsonPropertyName("dynatemp_exponent")]  public float? DynatempExponent { get; set; }
+
+    [JsonPropertyName("adaptive_p_target")]  public float? AdaptivePTarget { get; set; }
+    [JsonPropertyName("adaptive_p_decay")]   public float? AdaptivePDecay { get; set; }
+
+    [JsonPropertyName("samplers")]           public List<string>? Samplers { get; set; }
+
     [JsonPropertyName("repeat_penalty")]     public float? RepeatPenalty { get; set; }
     [JsonPropertyName("frequency_penalty")]  public float? FrequencyPenalty { get; set; }
     [JsonPropertyName("presence_penalty")]   public float? PresencePenalty { get; set; }
@@ -689,9 +723,13 @@ internal static class SamplerParamsExtensions
     {
         Temperature         = r.Temperature,
         Seed                = r.Seed,
+        DynatempRange       = r.DynatempRange,
+        DynatempExponent    = r.DynatempExponent,
         Mirostat            = r.Mirostat,
         MirostatTau         = r.MirostatTau,
         MirostatEta         = r.MirostatEta,
+        AdaptivePTarget     = r.AdaptivePTarget,
+        AdaptivePDecay      = r.AdaptivePDecay,
         TopK                = r.TopK,
         TopP                = r.TopP,
         MinP                = r.MinP,
@@ -709,6 +747,7 @@ internal static class SamplerParamsExtensions
         PresencePenalty     = r.PresencePenalty,
         RepeatLastN         = r.RepeatLastN,
         LogitBias           = r.LogitBias,
+        Samplers            = r.Samplers,
         // Grammar is resolved separately by the endpoint and assigned to
         // SamplerParams after this projection — keeps JSON-parse errors
         // (malformed schema, unknown response_format.type) out of the
@@ -719,9 +758,13 @@ internal static class SamplerParamsExtensions
     {
         Temperature         = r.Temperature,
         Seed                = r.Seed,
+        DynatempRange       = r.DynatempRange,
+        DynatempExponent    = r.DynatempExponent,
         Mirostat            = r.Mirostat,
         MirostatTau         = r.MirostatTau,
         MirostatEta         = r.MirostatEta,
+        AdaptivePTarget     = r.AdaptivePTarget,
+        AdaptivePDecay      = r.AdaptivePDecay,
         TopK                = r.TopK,
         TopP                = r.TopP,
         MinP                = r.MinP,
@@ -739,6 +782,7 @@ internal static class SamplerParamsExtensions
         PresencePenalty     = r.PresencePenalty,
         RepeatLastN         = r.RepeatLastN,
         LogitBias           = r.LogitBias,
+        Samplers            = r.Samplers,
         // Grammar is resolved separately by the endpoint and assigned to
         // SamplerParams after this projection — keeps JSON-parse errors
         // (malformed schema, unknown response_format.type) out of the

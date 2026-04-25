@@ -2359,6 +2359,94 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// §10 extended sampler knobs: adaptive_p terminal, dynamic temperature,
+/// custom sampler ordering. Each test is a smoke check that the new field
+/// reaches the binding without producing a 400 — the actual sampler
+/// behaviour (temperature flexing, adaptive-p convergence) is covered by
+/// the binding's own LlamaSampler tests.
+/// </summary>
+public class LlamaServerExtendedSamplerTests : IClassFixture<LlamaServerTests.Factory>
+{
+    private readonly LlamaServerTests.Factory _factory;
+    public LlamaServerExtendedSamplerTests(LlamaServerTests.Factory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Adaptive_P_Terminal_Round_Trips()
+    {
+        var client = _factory.CreateClient();
+        var json = """
+            {
+              "messages": [ { "role": "user", "content": "Hi" } ],
+              "max_tokens": 4,
+              "adaptive_p_target": 0.6,
+              "adaptive_p_decay": 0.9
+            }
+            """;
+        var resp = await client.PostAsync("/v1/chat/completions",
+            new StringContent(json, Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Dynatemp_Range_Round_Trips()
+    {
+        var client = _factory.CreateClient();
+        var json = """
+            {
+              "messages": [ { "role": "user", "content": "Hi" } ],
+              "max_tokens": 4,
+              "temperature": 0.8,
+              "dynatemp_range": 0.4,
+              "dynatemp_exponent": 1.5
+            }
+            """;
+        var resp = await client.PostAsync("/v1/chat/completions",
+            new StringContent(json, Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Custom_Sampler_Order_Round_Trips()
+    {
+        var client = _factory.CreateClient();
+        var json = """
+            {
+              "messages": [ { "role": "user", "content": "Hi" } ],
+              "max_tokens": 4,
+              "temperature": 0.7,
+              "min_p": 0.05,
+              "samplers": ["min_p", "temperature"]
+            }
+            """;
+        var resp = await client.PostAsync("/v1/chat/completions",
+            new StringContent(json, Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Unknown_Sampler_Stage_Returns_400()
+    {
+        var client = _factory.CreateClient();
+        var json = """
+            {
+              "messages": [ { "role": "user", "content": "Hi" } ],
+              "max_tokens": 4,
+              "samplers": ["bogus_stage"]
+            }
+            """;
+        var resp = await client.PostAsync("/v1/chat/completions",
+            new StringContent(json, Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("bogus_stage", body);
+    }
+}
+
+/// <summary>
 /// §9 LoRA adapters at startup. Boots the server with a Qwen3-compatible
 /// LoRA attached to the main context and verifies a chat request still
 /// returns a well-formed response. The behavioural delta from "no LoRA"
