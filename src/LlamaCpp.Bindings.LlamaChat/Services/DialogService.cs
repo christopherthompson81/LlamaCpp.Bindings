@@ -262,4 +262,24 @@ internal static class DialogService
         });
         return result.Count > 0 ? result[0].TryGetLocalPath() : null;
     }
+
+    public static async Task<string?> PickServerExecutableAsync()
+    {
+        var owner = Owner;
+        if (owner is null) return null;
+        var result = await owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select LlamaCpp.Bindings.Server (.dll or .exe)",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Server executable")
+                {
+                    Patterns = new[] { "LlamaCpp.Bindings.Server.dll", "LlamaCpp.Bindings.Server.exe" },
+                },
+                FilePickerFileTypes.All,
+            },
+        });
+        return result.Count > 0 ? result[0].TryGetLocalPath() : null;
+    }
 }

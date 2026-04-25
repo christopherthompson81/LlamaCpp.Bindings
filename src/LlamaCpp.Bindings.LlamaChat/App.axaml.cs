@@ -17,11 +17,21 @@ public partial class App : Application
         // that failures during ctor / initial binding are caught too.
         ErrorBoundary.Install();
 
+        // Kill any child server we spawned, even on abrupt CLR teardown
+        // (signals, unhandled exceptions). Avalonia's ShutdownRequested
+        // covers the normal-exit path; this is the belt to its braces.
+        System.AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+            ServerLaunchService.Instance.Dispose();
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var vm = new MainWindowViewModel();
             desktop.MainWindow = new MainWindow { DataContext = vm };
-            desktop.ShutdownRequested += (_, _) => vm.Dispose();
+            desktop.ShutdownRequested += (_, _) =>
+            {
+                ServerLaunchService.Instance.Dispose();
+                vm.Dispose();
+            };
         }
         base.OnFrameworkInitializationCompleted();
     }

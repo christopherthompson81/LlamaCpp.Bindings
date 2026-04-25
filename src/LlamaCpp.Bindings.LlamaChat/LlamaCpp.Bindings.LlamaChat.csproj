@@ -41,4 +41,21 @@
   <ItemGroup>
     <ProjectReference Include="..\LlamaCpp.Bindings\LlamaCpp.Bindings.csproj" />
   </ItemGroup>
+
+  <!-- Publish LlamaCpp.Bindings.Server alongside LlamaChat under
+       bin/<cfg>/<tfm>/server/ so the in-app "Server" tab can launch it
+       without further setup. Set SkipServerPublish=true to opt out. -->
+  <Target Name="PublishLlamaServerSideBySide"
+          AfterTargets="Build"
+          Condition="'$(SkipServerPublish)' != 'true'">
+    <PropertyGroup>
+      <_LlamaServerProj>$(MSBuildThisFileDirectory)..\LlamaCpp.Bindings.Server\LlamaCpp.Bindings.Server.csproj</_LlamaServerProj>
+      <!-- Absolute path so the inner Publish doesn't resolve OutputPath
+           against the Server project's own directory. -->
+      <_LlamaServerPublishDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)$(OutputPath)server'))\</_LlamaServerPublishDir>
+    </PropertyGroup>
+    <MSBuild Projects="$(_LlamaServerProj)"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);PublishDir=$(_LlamaServerPublishDir);SelfContained=false;PublishSingleFile=false;PublishReadyToRun=false" />
+  </Target>
 </Project>

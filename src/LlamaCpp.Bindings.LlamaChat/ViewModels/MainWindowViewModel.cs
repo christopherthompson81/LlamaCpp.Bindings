@@ -236,6 +236,51 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             var t = _audioRecorder.Elapsed;
             RecordingDuration = $"{(int)t.TotalMinutes}:{t.Seconds:D2}";
         };
+
+        // Auto-wire local-server launches into a "Local server" remote profile.
+        ServerLaunchService.Instance.RemoteProfileRequested += OnRemoteProfileRequested;
+        if (ServerLaunchService.Instance.CurrentConfig.LaunchOnAppStart)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await ServerLaunchService.Instance.StartAsync().ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                        ToastService.Error("Local server", ex.Message));
+                }
+            });
+        }
+    }
+
+    private void OnRemoteProfileRequested(object? sender, RemoteProfileRequestEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var existing = Profiles.FirstOrDefault(p => p.Name == e.ProfileName);
+            if (existing is null)
+            {
+                existing = new ProfileEditorViewModel
+                {
+                    Name = e.ProfileName,
+                    Kind = ProfileKind.Remote,
+                    BaseUrl = e.BaseUrl,
+                    ApiKey = e.ApiKey ?? string.Empty,
+                    ModelId = e.ModelId,
+                };
+                Profiles.Add(existing);
+            }
+            else
+            {
+                existing.Kind = ProfileKind.Remote;
+                existing.BaseUrl = e.BaseUrl;
+                existing.ApiKey = e.ApiKey ?? string.Empty;
+                existing.ModelId = e.ModelId;
+            }
+            try { ProfileStore.Save(Profiles.Select(p => p.ToProfile())); } catch { }
+            if (e.AutoSelect) SelectedProfile = existing;
+            ToastService.Success("Local server", $"Profile \"{e.ProfileName}\" updated.");
+        });
     }
 
     private void RefreshActiveMcpServers()

@@ -12,6 +12,7 @@ public partial class SettingsWindowViewModel : ObservableObject
     public ObservableCollection<ProfileEditorViewModel> Profiles { get; }
     public AppSettingsViewModel AppSettings { get; }
     public McpSettingsViewModel McpSettings { get; } = new();
+    public ServerSettingsViewModel ServerSettings { get; } = new();
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(DeleteProfileCommand), nameof(DuplicateProfileCommand))]

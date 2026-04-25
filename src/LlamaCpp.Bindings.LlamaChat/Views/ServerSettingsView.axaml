@@ -1,0 +1,208 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:LlamaCpp.Bindings.LlamaChat.ViewModels"
+             xmlns:lcp="using:LlamaCpp.Bindings"
+             mc:Ignorable="d"
+             d:DesignWidth="800" d:DesignHeight="600"
+             x:Class="LlamaCpp.Bindings.LlamaChat.Views.ServerSettingsView"
+             x:DataType="vm:ServerSettingsViewModel">
+
+    <Grid RowDefinitions="*,Auto" Margin="8">
+        <ScrollViewer Grid.Row="0">
+            <StackPanel Spacing="14">
+
+                <!-- ===== Status ===== -->
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Local server" Classes="h3" />
+                            <Border Grid.Column="1" Background="{DynamicResource Muted}"
+                                    CornerRadius="10" Padding="8,2">
+                                <TextBlock Text="{Binding StateLabel}" Classes="xs muted" />
+                            </Border>
+                        </Grid>
+                        <TextBlock Text="{Binding Service.RunningBaseUrl}" Classes="sm muted"
+                                   IsVisible="{Binding Service.RunningBaseUrl,
+                                       Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="{Binding Service.Error}" Classes="xs"
+                                   Foreground="{DynamicResource Destructive}"
+                                   TextWrapping="Wrap"
+                                   IsVisible="{Binding Service.Error,
+                                       Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Content="Start" Command="{Binding StartCommand}" />
+                            <Button Content="Stop" Classes="outline" Command="{Binding StopCommand}" />
+                            <Button Content="Restart" Classes="outline" Command="{Binding RestartCommand}" />
+                            <Button Content="Copy URL" Classes="sm outline"
+                                    Command="{Binding CopyBaseUrlCommand}"
+                                    IsVisible="{Binding IsRunning}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Model ===== -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Model" Classes="section" />
+                        <Grid ColumnDefinitions="130,*,Auto">
+                            <TextBlock Grid.Column="0" Text="Model path"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     PlaceholderText="/path/to/model.gguf"
+                                     Text="{Binding ModelPath, Mode=TwoWay}" />
+                            <Button Grid.Column="2" Content="Browse…" Margin="6,0,0,0"
+                                    Command="{Binding BrowseModelPathCommand}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Network ===== -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Network" Classes="section" />
+                        <Grid ColumnDefinitions="130,*,80,110" RowSpacing="10"
+                              RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Bind address"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding BindAddress, Mode=TwoWay}" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Port"
+                                       VerticalAlignment="Center" Margin="12,0,6,0" />
+                            <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="1" Maximum="65535"
+                                           Value="{Binding Port, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="API key"
+                                       VerticalAlignment="Center" />
+                            <TextBox Grid.Row="1" Grid.Column="1"
+                                     Text="{Binding ApiKey, Mode=TwoWay}"
+                                     PlaceholderText="(empty = no auth)" />
+                            <Button Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2"
+                                    Content="Generate" Margin="12,0,0,0"
+                                    Command="{Binding GenerateApiKeyCommand}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Inference ===== -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Inference" Classes="section" />
+                        <Grid ColumnDefinitions="160,*" RowSpacing="10"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Context size"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="512" Maximum="262144"
+                                           Value="{Binding ContextSize, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="GPU layers (-1 = all)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="-1" Maximum="999"
+                                           Value="{Binding GpuLayerCount, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Parallel sequences"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="2" Grid.Column="1" Minimum="1" Maximum="64"
+                                           Value="{Binding MaxSequenceCount, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Flash attention"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="3" Grid.Column="1"
+                                      SelectedItem="{Binding FlashAttention, Mode=TwoWay}">
+                                <ComboBox.Items>
+                                    <lcp:LlamaFlashAttention>Auto</lcp:LlamaFlashAttention>
+                                    <lcp:LlamaFlashAttention>Enabled</lcp:LlamaFlashAttention>
+                                    <lcp:LlamaFlashAttention>Disabled</lcp:LlamaFlashAttention>
+                                </ComboBox.Items>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Startup timeout (s)"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="4" Grid.Column="1" Minimum="1" Maximum="600"
+                                           Value="{Binding StartupTimeoutSeconds, Mode=TwoWay}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Behaviour ===== -->
+                <Border Classes="card">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Behaviour" Classes="section" />
+                        <ToggleButton Classes="switch" Content="Launch on app start"
+                                      IsChecked="{Binding LaunchOnAppStart}" />
+                        <ToggleButton Classes="switch" Content="Auto-create &quot;Local server&quot; profile"
+                                      IsChecked="{Binding AutoCreateRemoteProfile}" />
+                        <ToggleButton Classes="switch" Content="Switch to it on launch"
+                                      IsChecked="{Binding AutoSelectProfileOnLaunch}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Advanced ===== -->
+                <Expander Header="Advanced">
+                    <StackPanel Spacing="14" Margin="0,8,0,0">
+
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Server path" Classes="section" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Override the LlamaCpp.Bindings.Server binary LlamaChat launches. Leave empty to auto-discover the published copy in this app's install dir. Only useful for testing against a different build." />
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBox Grid.Column="0"
+                                         PlaceholderText="(auto-discover)"
+                                         Text="{Binding ServerExecutablePath, Mode=TwoWay}" />
+                                <Button Grid.Column="1" Content="Browse…" Margin="6,0,0,0"
+                                        Command="{Binding BrowseExecutablePathCommand}" />
+                            </Grid>
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Extra args" Classes="section" />
+                            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                                       Text="Appended verbatim to the server command line. Use the --LlamaServer:Key=Value form for any ServerOptions field not exposed above." />
+                            <TextBox AcceptsReturn="True" MinHeight="60" MaxHeight="160"
+                                     Text="{Binding ExtraArgs, Mode=TwoWay}"
+                                     PlaceholderText="One per line." />
+                        </StackPanel>
+
+                    </StackPanel>
+                </Expander>
+
+                <!-- ===== Log ===== -->
+                <Border Classes="card">
+                    <Grid RowDefinitions="Auto,*">
+                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Server log" Classes="section" />
+                            <Button Grid.Column="1" Content="Clear" Classes="sm outline"
+                                    Command="{Binding ClearLogCommand}" />
+                        </Grid>
+                        <Border Grid.Row="1" Background="{DynamicResource CodeBackground}"
+                                CornerRadius="{DynamicResource RadiusMd}" Padding="8"
+                                MinHeight="120" MaxHeight="240" Margin="0,6,0,0">
+                            <ScrollViewer>
+                                <ItemsControl ItemsSource="{Binding Service.Log}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="x:String">
+                                            <SelectableTextBlock Text="{Binding}"
+                                                                 FontFamily="{DynamicResource CodeFontFamily}"
+                                                                 FontSize="12"
+                                                                 Foreground="{DynamicResource CodeForeground}"
+                                                                 TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="0,12,0,0" Spacing="6">
+            <TextBlock Text="{Binding Status}" Classes="xs muted"
+                       VerticalAlignment="Center" Margin="0,0,8,0" />
+            <Button Content="Save" Command="{Binding SaveCommand}" />
+        </StackPanel>
+    </Grid>
+</UserControl>

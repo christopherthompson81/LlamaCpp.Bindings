@@ -172,6 +172,17 @@
                 </ContentControl>
             </TabItem>
 
+            <!-- ===== Server ===== -->
+            <TabItem Header="Server">
+                <ContentControl Content="{Binding ServerSettings}">
+                    <ContentControl.ContentTemplate>
+                        <DataTemplate DataType="vm:ServerSettingsViewModel">
+                            <v:ServerSettingsView />
+                        </DataTemplate>
+                    </ContentControl.ContentTemplate>
+                </ContentControl>
+            </TabItem>
+
             <!-- ===== Response format ===== -->
             <TabItem Header="Response format">
                 <Grid RowDefinitions="Auto,*" Margin="8"
