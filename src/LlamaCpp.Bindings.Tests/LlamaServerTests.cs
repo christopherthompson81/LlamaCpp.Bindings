@@ -999,6 +999,154 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.Null(body!.Choices[0].Message.ToolCalls);
     }
 
+    // ----- Logprobs / top_logprobs -----
+
+    [Fact]
+    public async Task Logprobs_True_Returns_Per_Token_Entries()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"hi {Guid.NewGuid():N}" } },
+            MaxTokens = 6,
+            Temperature = 0.0f,
+            Logprobs = true,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        var choice = body!.Choices[0];
+        Assert.NotNull(choice.Logprobs);
+        Assert.NotEmpty(choice.Logprobs!.Content);
+        // Every token's logprob is in (-inf, 0]: log of a probability.
+        foreach (var entry in choice.Logprobs.Content)
+        {
+            Assert.True(entry.Logprob <= 0,
+                $"logprob must be ≤ 0; got {entry.Logprob} for token '{entry.Token}'");
+            Assert.False(string.IsNullOrEmpty(entry.Token),
+                "every entry should have a non-empty token piece");
+            // top_logprobs not requested, so the alternatives list is empty.
+            Assert.Empty(entry.TopLogprobs);
+        }
+    }
+
+    [Fact]
+    public async Task TopLogprobs_Returns_Requested_Alternatives_Sorted_By_Logprob()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"reply briefly {Guid.NewGuid():N}" } },
+            MaxTokens = 4,
+            Temperature = 0.0f,
+            Logprobs = true,
+            TopLogprobs = 3,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var content = body!.Choices[0].Logprobs!.Content;
+        Assert.NotEmpty(content);
+        foreach (var entry in content)
+        {
+            Assert.Equal(3, entry.TopLogprobs.Count);
+            // Sorted descending by logprob: [0] >= [1] >= [2].
+            Assert.True(entry.TopLogprobs[0].Logprob >= entry.TopLogprobs[1].Logprob,
+                $"top_logprobs not sorted: {entry.TopLogprobs[0].Logprob} < {entry.TopLogprobs[1].Logprob}");
+            Assert.True(entry.TopLogprobs[1].Logprob >= entry.TopLogprobs[2].Logprob);
+            // The chosen token should be at position 0 of the alternatives
+            // for greedy sampling — the model picked the argmax, which is
+            // the highest-logit token.
+            Assert.Equal(entry.Token, entry.TopLogprobs[0].Token);
+            // All alternatives have non-empty token text.
+            foreach (var alt in entry.TopLogprobs)
+            {
+                Assert.False(string.IsNullOrEmpty(alt.Token));
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Logprobs_False_Or_Unset_Returns_Null_Logprobs_Field()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"hi {Guid.NewGuid():N}" } },
+            MaxTokens = 4,
+            // Logprobs unset == false; field should be omitted from the response.
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+
+        // Inspect the raw JSON to verify the logprobs field really isn't present.
+        var raw = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("\"logprobs\"", raw);
+    }
+
+    [Fact]
+    public async Task Streaming_With_Logprobs_Carries_Per_Chunk_Entries()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"hi {Guid.NewGuid():N}" } },
+            MaxTokens = 6,
+            Temperature = 0.0f,
+            Stream = true,
+            Logprobs = true,
+            TopLogprobs = 2,
+        };
+        using var httpReq = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent.Create(req),
+        };
+        using var resp = await client.SendAsync(
+            httpReq, HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+
+        using var stream = await resp.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken);
+        using var reader = new StreamReader(stream);
+
+        int contentChunks = 0;
+        int logprobChunks = 0;
+        while (!reader.EndOfStream)
+        {
+            var line = await reader.ReadLineAsync(TestContext.Current.CancellationToken);
+            if (line is null || !line.StartsWith("data: ")) continue;
+            var payload = line["data: ".Length..];
+            if (payload == "[DONE]") break;
+
+            using var doc = JsonDocument.Parse(payload);
+            var choice = doc.RootElement.GetProperty("choices")[0];
+            if (choice.GetProperty("delta").TryGetProperty("content", out var c) &&
+                c.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrEmpty(c.GetString()))
+            {
+                contentChunks++;
+                if (choice.TryGetProperty("logprobs", out var lp) &&
+                    lp.ValueKind == JsonValueKind.Object)
+                {
+                    logprobChunks++;
+                    var entries = lp.GetProperty("content");
+                    Assert.True(entries.GetArrayLength() > 0,
+                        "logprobs.content array shouldn't be empty for a content-bearing chunk");
+                }
+            }
+        }
+
+        Assert.True(contentChunks > 0);
+        Assert.Equal(contentChunks, logprobChunks);
+    }
+
     // ----- Multimodal content part handling -----
 
     [Fact]

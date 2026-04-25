@@ -235,6 +235,8 @@ public sealed class LlamaGenerator
         bool renderSpecialPieces = false,
         int firstNewIndex = 0,
         Action<int>? onTokenDecoded = null,
+        int logprobsTopN = 0,
+        Action<TokenLogprobInfo>? onLogprobs = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(promptTokens);
@@ -285,7 +287,15 @@ public sealed class LlamaGenerator
             // llama_sampler_sample already does apply + select + accept
             // internally. Do NOT call _sampler.Accept(nextToken) after —
             // that double-advances stateful stages (grammar, penalties).
-            return _sampler.Sample(_context);
+            int chosen = _sampler.Sample(_context);
+            // logprobs (if requested): logits at -1 are still valid here
+            // since the sampler doesn't advance state, so capture before
+            // we leave the lock.
+            if (onLogprobs is not null)
+            {
+                onLogprobs(ComputeLogprobsForChosen(chosen, logprobsTopN));
+            }
+            return chosen;
         }, cancellationToken).ConfigureAwait(false);
 
         // 3) Sampling loop. Each iteration: emit the most recent sample;
@@ -348,7 +358,12 @@ public sealed class LlamaGenerator
             currentToken = await _context.WithDecodeLockAsync(() =>
             {
                 DecodeSingleToken(tokenToDecode);
-                return _sampler.Sample(_context);
+                int chosen = _sampler.Sample(_context);
+                if (onLogprobs is not null)
+                {
+                    onLogprobs(ComputeLogprobsForChosen(chosen, logprobsTopN));
+                }
+                return chosen;
             }, cancellationToken).ConfigureAwait(false);
             // onTokenDecoded fires outside the lock so a slow callback can't
             // throttle other sessions. By the time we're here the token is
@@ -541,7 +556,93 @@ public sealed class LlamaGenerator
                 _context.Model.Vocab.Handle, token, bufPtr, buf.Length, lstrip: 0, special: renderSpecial);
         }
     }
+
+    /// <summary>
+    /// Compute the natural log-softmax over the model's last-position
+    /// logits, look up <paramref name="chosenToken"/>'s log-probability,
+    /// and return the top <paramref name="topN"/> alternatives by raw
+    /// logit. Caller must invoke this under the context's decode lock —
+    /// <c>llama_get_logits_ith</c> returns a pointer into the context's
+    /// internal buffer that's valid only until the next decode.
+    /// </summary>
+    private unsafe TokenLogprobInfo ComputeLogprobsForChosen(int chosenToken, int topN)
+    {
+        int nVocab = _context.Model.Vocab.TokenCount;
+        float* logits = Native.NativeMethods.llama_get_logits_ith(
+            _context.Handle.DangerousHandle, -1);
+        if (logits is null)
+        {
+            // No logits at -1 — shouldn't happen on the post-decode path
+            // but guard rather than dereference null.
+            return new TokenLogprobInfo(chosenToken, 0f, Array.Empty<TokenLogprobAlternative>());
+        }
+
+        // log-sum-exp trick for numerical stability.
+        float maxLogit = logits[0];
+        for (int i = 1; i < nVocab; i++)
+        {
+            if (logits[i] > maxLogit) maxLogit = logits[i];
+        }
+        double sum = 0;
+        for (int i = 0; i < nVocab; i++) sum += Math.Exp(logits[i] - maxLogit);
+        float logZ = (float)(maxLogit + Math.Log(sum));
+
+        float chosenLogprob = chosenToken >= 0 && chosenToken < nVocab
+            ? logits[chosenToken] - logZ
+            : 0f;
+
+        if (topN <= 0)
+        {
+            return new TokenLogprobInfo(chosenToken, chosenLogprob, Array.Empty<TokenLogprobAlternative>());
+        }
+
+        // Top-N by raw logit, using a min-heap of size N. Equivalent
+        // ordering to top-N by log-probability (logZ is constant).
+        // PriorityQueue<TElement, TPriority>.Peek() returns the
+        // ELEMENT, not the priority — we compare against the priority
+        // via TryPeek out-parameter to avoid the silent bug.
+        int n = Math.Min(topN, nVocab);
+        var heap = new PriorityQueue<int, float>(n);
+        for (int i = 0; i < nVocab; i++)
+        {
+            if (heap.Count < n)
+            {
+                heap.Enqueue(i, logits[i]);
+            }
+            else
+            {
+                heap.TryPeek(out _, out var smallest);
+                if (logits[i] > smallest)
+                {
+                    heap.Dequeue();
+                    heap.Enqueue(i, logits[i]);
+                }
+            }
+        }
+        var top = new TokenLogprobAlternative[heap.Count];
+        for (int i = top.Length - 1; i >= 0; i--)
+        {
+            int id = heap.Dequeue();
+            top[i] = new TokenLogprobAlternative(id, logits[id] - logZ);
+        }
+        return new TokenLogprobInfo(chosenToken, chosenLogprob, top);
+    }
 }
+
+/// <summary>
+/// Per-token log-probability info reported via the
+/// <c>onLogprobs</c> callback on
+/// <see cref="LlamaGenerator.GenerateAsync(IReadOnlyList{int},int,bool,int,Action{int}?,int,Action{TokenLogprobInfo}?,CancellationToken)"/>.
+/// </summary>
+/// <param name="TokenId">The token id that was sampled at this step.</param>
+/// <param name="Logprob">Natural log of the post-softmax probability for the sampled token under the full vocabulary.</param>
+/// <param name="TopAlternatives">Top-N candidates by logit, each with its own logprob. Empty when the caller didn't request top-N.</param>
+public readonly record struct TokenLogprobInfo(
+    int TokenId,
+    float Logprob,
+    IReadOnlyList<TokenLogprobAlternative> TopAlternatives);
+
+public readonly record struct TokenLogprobAlternative(int TokenId, float Logprob);
 
 /// <summary>
 /// Why generation stopped. Distinct from "how the caller observed the stop"

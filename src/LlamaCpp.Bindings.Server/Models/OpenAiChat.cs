@@ -129,6 +129,23 @@ public sealed class ChatCompletionsRequest
     /// </summary>
     [JsonPropertyName("tool_choice")]
     public JsonElement? ToolChoice { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, each choice's response carries a <c>logprobs</c>
+    /// object listing per-token log-probabilities. Default <c>false</c>
+    /// (no overhead).
+    /// </summary>
+    [JsonPropertyName("logprobs")]
+    public bool? Logprobs { get; set; }
+
+    /// <summary>
+    /// When set with <see cref="Logprobs"/> = true, each per-token entry
+    /// includes <see cref="LogprobToken.TopLogprobs"/> — the N
+    /// highest-logit alternatives at that step. Capped at 20 (OpenAI's
+    /// limit) to prevent quadratic cost on long completions.
+    /// </summary>
+    [JsonPropertyName("top_logprobs")]
+    public int? TopLogprobs { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -362,6 +379,52 @@ public sealed class ChatChoice
 
     [JsonPropertyName("finish_reason")]
     public string FinishReason { get; set; } = "stop";
+
+    /// <summary>Per-token log-probabilities, populated when the request set <c>logprobs: true</c>.</summary>
+    [JsonPropertyName("logprobs")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LogprobsContent? Logprobs { get; set; }
+}
+
+/// <summary>
+/// OpenAI's <c>choices[].logprobs</c> envelope. <see cref="Content"/>
+/// holds one entry per generated token, in emission order.
+/// </summary>
+public sealed class LogprobsContent
+{
+    [JsonPropertyName("content")]
+    public List<LogprobToken> Content { get; set; } = new();
+}
+
+public sealed class LogprobToken
+{
+    /// <summary>The token's text rendering (the same string the chunk's <c>delta.content</c> would have carried).</summary>
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = "";
+
+    /// <summary>Natural log of the token's probability under the full vocabulary distribution.</summary>
+    [JsonPropertyName("logprob")]
+    public float Logprob { get; set; }
+
+    /// <summary>The token's UTF-8 byte sequence, or <c>null</c> when the token isn't representable as UTF-8.</summary>
+    [JsonPropertyName("bytes")]
+    public int[]? Bytes { get; set; }
+
+    /// <summary>Top-N alternatives at this position, populated when the request set <c>top_logprobs</c>.</summary>
+    [JsonPropertyName("top_logprobs")]
+    public List<TopLogprob> TopLogprobs { get; set; } = new();
+}
+
+public sealed class TopLogprob
+{
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = "";
+
+    [JsonPropertyName("logprob")]
+    public float Logprob { get; set; }
+
+    [JsonPropertyName("bytes")]
+    public int[]? Bytes { get; set; }
 }
 
 /// <summary>SSE chunk emitted while <c>stream=true</c>.</summary>
@@ -398,6 +461,11 @@ public sealed class ChatChunkChoice
 
     [JsonPropertyName("finish_reason")]
     public string? FinishReason { get; set; }
+
+    /// <summary>Per-chunk logprobs (one entry per token in this delta).</summary>
+    [JsonPropertyName("logprobs")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LogprobsContent? Logprobs { get; set; }
 }
 
 public sealed class ChatDelta

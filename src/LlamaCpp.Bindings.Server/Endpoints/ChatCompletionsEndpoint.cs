@@ -280,17 +280,23 @@ public static class ChatCompletionsEndpoint
         string completionId = "chatcmpl-" + Guid.NewGuid().ToString("N");
         long createdUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
+        // Logprobs config — capped at OpenAI's documented top_logprobs
+        // upper bound (20). The cap protects the per-token cost when a
+        // caller asks for an unreasonably large alternative set.
+        bool wantLogprobs = req.Logprobs == true;
+        int topN = wantLogprobs ? Math.Clamp(req.TopLogprobs ?? 0, 0, 20) : 0;
+
         // Forced tool-call paths go through the non-streaming writer:
         // tool-call streaming has its own delta format and V1 doesn't
         // implement it. Plain text requests honour stream=true as usual.
         bool forcedTool = toolChoice.Kind == ToolChoiceKind.ForcedFunction;
         if (req.Stream && !forcedTool)
         {
-            await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, cancellationToken);
+            await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, wantLogprobs, topN, cancellationToken);
         }
         else
         {
-            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, toolChoice, cancellationToken);
+            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, toolChoice, wantLogprobs, topN, cancellationToken);
         }
     }
 
@@ -406,10 +412,12 @@ public static class ChatCompletionsEndpoint
         StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
         RequestTimer timer, ServerMetrics metrics,
-        ToolChoiceDescriptor toolChoice, CancellationToken ct)
+        ToolChoiceDescriptor toolChoice,
+        bool wantLogprobs, int topN, CancellationToken ct)
     {
         var buf = new StringBuilder();
         bool stoppedOnMatch = false;
+        var logprobs = wantLogprobs ? new List<TokenLogprobInfo>() : null;
         await foreach (var piece in gen.GenerateAsync(
             lease.PromptTokens,
             maxTokens: maxTokens,
@@ -419,6 +427,8 @@ public static class ChatCompletionsEndpoint
                 lease.OnTokenDecoded(t);
                 timer.IncrementPredicted();
             },
+            logprobsTopN: topN,
+            onLogprobs: logprobs is null ? null : info => logprobs.Add(info),
             cancellationToken: ct))
         {
             timer.MarkFirstToken();
@@ -438,6 +448,10 @@ public static class ChatCompletionsEndpoint
                 Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
                 FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
             };
+        if (logprobs is not null)
+        {
+            choice.Logprobs = BuildLogprobs(host.Model.Vocab, logprobs);
+        }
 
         var response = new ChatCompletionsResponse
         {
@@ -458,7 +472,8 @@ public static class ChatCompletionsEndpoint
         HttpContext http, LlamaGenerator gen, SessionLease lease,
         StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
-        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+        RequestTimer timer, ServerMetrics metrics,
+        bool wantLogprobs, int topN, CancellationToken ct)
     {
         http.Response.ContentType = "text/event-stream";
         http.Response.Headers.CacheControl = "no-cache";
@@ -476,6 +491,13 @@ public static class ChatCompletionsEndpoint
             },
         }, ct);
 
+        // Streaming logprobs accumulate into a per-chunk queue so each
+        // SSE chunk carries the logprobs for the tokens that produced
+        // its delta.content. The generator's onLogprobs callback fires
+        // per-token; pieces aggregate multiple tokens via the UTF-8
+        // decoder before they reach us, so we buffer until the next
+        // chunk emit.
+        var pendingLogprobs = wantLogprobs ? new Queue<TokenLogprobInfo>() : null;
         bool stoppedOnMatch = false;
         await foreach (var piece in gen.GenerateAsync(
             lease.PromptTokens,
@@ -486,18 +508,27 @@ public static class ChatCompletionsEndpoint
                 lease.OnTokenDecoded(t);
                 timer.IncrementPredicted();
             },
+            logprobsTopN: topN,
+            onLogprobs: pendingLogprobs is null ? null : info => pendingLogprobs.Enqueue(info),
             cancellationToken: ct))
         {
             timer.MarkFirstToken();
             var (emit, stopped) = matcher.Offer(piece);
             if (!string.IsNullOrEmpty(emit))
             {
+                LogprobsContent? chunkLogprobs = null;
+                if (pendingLogprobs is { Count: > 0 })
+                {
+                    var drained = new List<TokenLogprobInfo>(pendingLogprobs.Count);
+                    while (pendingLogprobs.Count > 0) drained.Add(pendingLogprobs.Dequeue());
+                    chunkLogprobs = BuildLogprobs(host.Model.Vocab, drained);
+                }
                 await WriteChunk(http, new ChatCompletionsChunk
                 {
                     Id = id, Created = created, Model = host.ModelId,
                     Choices = new()
                     {
-                        new() { Index = 0, Delta = new() { Content = emit }, FinishReason = null },
+                        new() { Index = 0, Delta = new() { Content = emit }, FinishReason = null, Logprobs = chunkLogprobs },
                     },
                 }, ct);
             }
@@ -642,6 +673,56 @@ public static class ChatCompletionsEndpoint
             },
             FinishReason = "tool_calls",
         };
+    }
+
+    /// <summary>
+    /// Convert the generator's per-token <see cref="TokenLogprobInfo"/>
+    /// entries into the OpenAI-shaped <see cref="LogprobsContent"/>
+    /// envelope. The token's piece-text + UTF-8 bytes come from
+    /// <see cref="LlamaVocab.TokenToPiece"/>; tokens that don't roundtrip
+    /// through UTF-8 cleanly (e.g. byte-fallback fragments) get
+    /// <c>bytes = null</c>, matching OpenAI's convention.
+    /// </summary>
+    private static LogprobsContent BuildLogprobs(
+        LlamaVocab vocab, IReadOnlyList<TokenLogprobInfo> tokens)
+    {
+        var content = new List<LogprobToken>(tokens.Count);
+        foreach (var info in tokens)
+        {
+            var piece = vocab.TokenToPiece(info.TokenId, renderSpecial: true);
+            var entry = new LogprobToken
+            {
+                Token = piece,
+                Logprob = info.Logprob,
+                Bytes = TokenBytes(piece),
+            };
+            foreach (var alt in info.TopAlternatives)
+            {
+                var altPiece = vocab.TokenToPiece(alt.TokenId, renderSpecial: true);
+                entry.TopLogprobs.Add(new TopLogprob
+                {
+                    Token = altPiece,
+                    Logprob = alt.Logprob,
+                    Bytes = TokenBytes(altPiece),
+                });
+            }
+            content.Add(entry);
+        }
+        return new LogprobsContent { Content = content };
+    }
+
+    private static int[]? TokenBytes(string piece)
+    {
+        if (string.IsNullOrEmpty(piece)) return Array.Empty<int>();
+        // OpenAI emits bytes as an array of integer code-units. A
+        // round-tripable UTF-8 encoding is the common case; if the piece
+        // contains a U+FFFD replacement (i.e. came in as a partial
+        // byte-fallback fragment), report null per OpenAI's convention.
+        if (piece.Contains('�')) return null;
+        var bytes = System.Text.Encoding.UTF8.GetBytes(piece);
+        var ints = new int[bytes.Length];
+        for (int i = 0; i < bytes.Length; i++) ints[i] = bytes[i];
+        return ints;
     }
 
     private static string MapFinishReason(LlamaStopReason reason) => reason switch

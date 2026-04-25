@@ -126,11 +126,16 @@ Features clients expect from the OpenAI chat-completions API.
   (any-JSON grammar) / `"json_schema"` (compiled via
   `JsonSchemaToGbnf`). Malformed schema or unknown type returns 400
   before a pool slot is taken; GBNF parse errors likewise.
-- [ ] **`logprobs`** / **`top_logprobs`** — needs per-token probability
-  snapshot surfaced from the sampler. Binding touches the logits via
-  `llama_get_logits_ith`; the sampler currently applies and selects but
-  doesn't expose the per-token probability of the selected token. Small
-  binding extension.
+- [x] **`logprobs`** / **`top_logprobs`** — chat completions accept
+  both fields. `LlamaGenerator.GenerateAsync` gained `logprobsTopN`
+  + an `onLogprobs` callback; the generator computes a numerically-
+  stable log-softmax over the full vocab under the same lock as the
+  sample call (so the logits are still fresh) and emits a
+  `TokenLogprobInfo` per generated token. The server collects these
+  and shapes them as OpenAI's `choices[].logprobs.content[]` with
+  per-token `bytes` arrays. Streaming honours the field too — each
+  content-bearing chunk carries the logprobs for the tokens it
+  produced. `top_logprobs` capped at 20 to match OpenAI.
 - [x] **Tool-calling schema** (`tools[]`, `tool_choice`) — DTOs
   accepted, tools rendered into the chat-template via the
   Jinja-side `tools` argument. `tool_choice = {"type":"function",
@@ -318,8 +323,8 @@ Features clients expect from the OpenAI chat-completions API.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 47 | shipped, tested |
-| `[ ]` TODO | 11 | binding already exposes; server-side wiring only |
+| `[x]` done | 48 | shipped, tested |
+| `[ ]` TODO | 10 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -330,15 +335,18 @@ Weighed by user-visible impact per unit of work, with the understanding
 that we've already hit the big items (multi-session, prompt caching,
 embeddings, auth, observability, cancellation, extended sampling).
 
-1. **Logprobs / top_logprobs** (§3) — useful for evals; tracked in
-   [#20](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/20).
-2. **Remote-URL image fetch** (§7) — the multimodal follow-up; needs
+1. **Remote-URL image fetch** (§7) — the multimodal follow-up; needs
    a size-capped download manager. Tracked alongside #19.
-3. **`tool_choice="required"` (any-tool)** (§3) — needs a GBNF union
-   across every tool's parameters schema. Follow-up to #21.
-4. **Auto-mode tool-call parsing** (§3) — detect Qwen3
+2. **Auto-mode tool-call wrapper detection** (§3) — Qwen3
    `<tool_call>...</tool_call>` / Llama-3.1 `<|python_tag|>` /
-   Mistral `[TOOL_CALLS]` wrappers in plain output. Follow-up to #21.
+   Mistral `[TOOL_CALLS]`. Tracked in
+   [#24](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/24).
+3. **`tool_choice="required"` (any-tool)** (§3) — needs a GBNF union
+   across every tool's parameters schema. Tracked in
+   [#26](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/26).
+4. **`/v1/rerank` endpoint** (§1) — embedding-host-shaped sibling
+   for reranker models; binding already supports the rank pooling
+   type.
 
 Everything under `[~]` is binding-side work of varying size. Speculative
 decoding (§8) and LoRA (§9) are the two most feature-complete on the
