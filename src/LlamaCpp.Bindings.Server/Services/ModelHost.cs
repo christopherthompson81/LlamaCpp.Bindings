@@ -45,17 +45,26 @@ public sealed class ModelHost : IDisposable
         Model = new LlamaModel(_opts.ModelPath, new LlamaModelParameters
         {
             GpuLayerCount = _opts.GpuLayerCount,
-            UseMmap = _opts.UseMmap,
-            UseMlock = _opts.UseMlock,
+            MainGpu       = _opts.MainGpu,
+            SplitMode     = _opts.SplitMode,
+            UseMmap       = _opts.UseMmap,
+            UseMlock      = _opts.UseMlock,
+            CheckTensors  = _opts.CheckTensors,
         });
 
         Context = new LlamaContext(Model, new LlamaContextParameters
         {
-            ContextSize = (uint)Math.Max(0, _opts.ContextSize),
-            LogicalBatchSize = (uint)Math.Max(1, _opts.LogicalBatchSize),
+            ContextSize       = (uint)Math.Max(0, _opts.ContextSize),
+            LogicalBatchSize  = (uint)Math.Max(1, _opts.LogicalBatchSize),
             PhysicalBatchSize = (uint)Math.Max(1, _opts.PhysicalBatchSize),
-            MaxSequenceCount = (uint)Math.Max(1, _opts.MaxSequenceCount),
-            OffloadKQV = _opts.OffloadKqv,
+            MaxSequenceCount  = (uint)Math.Max(1, _opts.MaxSequenceCount),
+            OffloadKQV        = _opts.OffloadKqv,
+            ThreadCount       = _opts.ThreadCount,
+            BatchThreadCount  = _opts.BatchThreadCount,
+            FlashAttention    = _opts.FlashAttention,
+            UseFullSwaCache   = _opts.UseFullSwaCache,
+            KvCacheTypeK      = _opts.KvCacheTypeK,
+            KvCacheTypeV      = _opts.KvCacheTypeV,
         });
 
         ModelId = !string.IsNullOrWhiteSpace(_opts.ModelAlias)

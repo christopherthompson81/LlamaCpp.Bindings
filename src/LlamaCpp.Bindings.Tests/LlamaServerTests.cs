@@ -2357,3 +2357,69 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
         }
     }
 }
+
+/// <summary>
+/// §6 model-loading knobs bundle. Boots the server with non-default values
+/// for every new field and verifies a chat completion still returns 200 —
+/// proves the wiring is in place without depending on a particular GPU
+/// topology. The knobs themselves are exercised by the binding's existing
+/// LlamaContextTests and StructLayoutTests; this is purely the
+/// ServerOptions-to-binding handoff.
+/// </summary>
+public class LlamaServerLoadingKnobsTests : IClassFixture<LlamaServerLoadingKnobsTests.KnobsFactory>
+{
+    private readonly KnobsFactory _factory;
+    public LlamaServerLoadingKnobsTests(KnobsFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Server_Boots_With_Non_Default_Knobs_And_Completes_Chat()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.Single(body!.Choices);
+    }
+
+    public sealed class KnobsFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]         = modelPath,
+                    ["LlamaServer:ContextSize"]       = "1024",
+                    ["LlamaServer:MaxSequenceCount"]  = "1",
+                    ["LlamaServer:GpuLayerCount"]     = "-1",
+                    ["LlamaServer:OffloadKqv"]        = "true",
+                    ["LlamaServer:MaxOutputTokens"]   = "16",
+                    // Non-default §6 knobs. Quantised KV pairs with FA=Enabled —
+                    // that's the documented prerequisite. SplitMode=None +
+                    // MainGpu=0 forces single-GPU placement.
+                    ["LlamaServer:MainGpu"]           = "0",
+                    ["LlamaServer:SplitMode"]         = "None",
+                    ["LlamaServer:CheckTensors"]      = "true",
+                    ["LlamaServer:ThreadCount"]       = "2",
+                    ["LlamaServer:BatchThreadCount"]  = "4",
+                    ["LlamaServer:FlashAttention"]    = "Enabled",
+                    ["LlamaServer:UseFullSwaCache"]   = "false",
+                    ["LlamaServer:KvCacheTypeK"]      = "Q8_0",
+                    ["LlamaServer:KvCacheTypeV"]      = "Q8_0",
+                    ["LlamaServer:Urls"]              = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}

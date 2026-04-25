@@ -202,18 +202,20 @@ Features clients expect from the OpenAI chat-completions API.
 - [x] **`--mmap` / `--no-mmap`** — `ServerOptions.UseMmap`.
 - [x] **`--mlock`** — `ServerOptions.UseMlock`.
 - [x] **`-kvo / -nkvo, --kv-offload`** — `ServerOptions.OffloadKqv`.
-- [ ] **`-ctk` / `-ctv` KV cache types** — binding has
-  `LlamaKvCacheType` enum; just needs `EmbeddingKvCacheType` /
-  `KvCacheTypeK` / `KvCacheTypeV` on `ServerOptions`.
-- [ ] **`--threads` / `--threads-batch`** — binding exposes them; V1
-  relied on llama.cpp defaults. Small add.
-- [ ] **`-fa, --flash-attn`** — `LlamaFlashAttention` enum on
-  `LlamaContextParameters`; add to `ServerOptions`.
-- [ ] **`-sm, --split-mode`** / **`-mg, --main-gpu`** — on
-  `LlamaModelParameters`; add to `ServerOptions`.
-- [ ] **`--swa-full`** — on `LlamaContextParameters`; add to
-  `ServerOptions`.
-- [ ] **`--check-tensors`** — on `LlamaModelParameters`; add.
+- [x] **`-ctk` / `-ctv` KV cache types** — `ServerOptions.KvCacheTypeK`
+  / `KvCacheTypeV`. Quantised options need Flash Attention; the
+  binding's `LlamaKvCacheType` enum lists every accepted variant.
+- [x] **`--threads` / `--threads-batch`** — `ServerOptions.ThreadCount`
+  / `BatchThreadCount`. `-1` (default) inherits llama.cpp's choice.
+- [x] **`-fa, --flash-attn`** — `ServerOptions.FlashAttention`
+  (`Auto` / `Enabled` / `Disabled`).
+- [x] **`-sm, --split-mode`** / **`-mg, --main-gpu`** —
+  `ServerOptions.SplitMode` (`None` / `Layer` / `Row`) and
+  `ServerOptions.MainGpu`.
+- [x] **`--swa-full`** — `ServerOptions.UseFullSwaCache`. Defaults to
+  `true` to match the binding's opinionated default — full SWA lets
+  the KV cache be edited (multi-turn chat with retries).
+- [x] **`--check-tensors`** — `ServerOptions.CheckTensors`.
 - [~] **`--rope-scaling`, `--rope-scale`, `--rope-freq-base`, all YARN
   knobs** — mostly needs managed property on `LlamaContextParameters`
   (binding row). Load-time-only; no per-request shape.
@@ -338,8 +340,8 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 53 | shipped, tested |
-| `[ ]` TODO | 9 | binding already exposes; server-side wiring only |
+| `[x]` done | 59 | shipped, tested |
+| `[ ]` TODO | 3 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 7 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -350,8 +352,6 @@ For at-a-glance triage. Each is small (a few config fields + tests).
 
 §1 endpoints: `GET /props` (informational dump).
 §4 completion: `cache_prompt` opt-out.
-§6 model loading: KV cache types, threads / threads-batch, flash-attn,
-   split-mode / main-gpu, swa-full, check-tensors.
 §7 multimodal: `--mmproj-auto` (probe sibling file), remote-URL image fetch.
 §10 sampling: adaptive_p terminal, dynamic temperature, custom sampler ordering.
 
@@ -362,16 +362,11 @@ observability, cancellation, extended sampling, multimodal, tool
 calling, logprobs, rerank) are all shipped. What's left is operator-
 ergonomic polish + binding-blocked features.
 
-1. **Model-loading knobs bundle** (§6) — KV cache types,
-   flash-attn, threads / threads-batch, split-mode / main-gpu,
-   swa-full, check-tensors. All are existing binding fields needing
-   a `ServerOptions` field + appsettings entry. Operator-tuning
-   audience. One PR.
-2. **Speculative decoding wiring** (§8) — `LlamaSpeculativeGenerator`
+1. **Speculative decoding wiring** (§8) — `LlamaSpeculativeGenerator`
    exists; needs a draft-model load path + per-request opt-in on
    chat completions. Real perf gain (2–3× on greedy chat). Bigger
    PR.
-3. **LoRA adapters at startup** (§9) — `ServerOptions.LoraAdapters`
+2. **LoRA adapters at startup** (§9) — `ServerOptions.LoraAdapters`
    list, attach during `ModelHost` ctor. Per-request adapter
    selection is harder (binding attaches to context, not session) and
    stays deferred.

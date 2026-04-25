@@ -40,6 +40,74 @@ public sealed class ServerOptions
 
     public bool OffloadKqv { get; set; } = true;
 
+    /// <summary>
+    /// Index of the GPU to use when <see cref="SplitMode"/> is
+    /// <c>None</c>; the device that holds the model when the model
+    /// fits on a single GPU. Default <c>0</c> = first GPU.
+    /// </summary>
+    public int MainGpu { get; set; } = 0;
+
+    /// <summary>
+    /// How to split a model that doesn't fit on one GPU.
+    /// <c>None</c> = single-GPU (uses <see cref="MainGpu"/>);
+    /// <c>Layer</c> = layer-wise split (default);
+    /// <c>Row</c> = row-wise split (rare; needed only for some
+    /// models / hardware combinations).
+    /// </summary>
+    public LlamaSplitMode SplitMode { get; set; } = LlamaSplitMode.Layer;
+
+    /// <summary>
+    /// Verify tensor data during model load. Slow but catches
+    /// corrupted GGUFs early instead of producing garbage at decode
+    /// time. Off by default — operators can flip this on for ops
+    /// that ship third-party model files.
+    /// </summary>
+    public bool CheckTensors { get; set; } = false;
+
+    /// <summary>
+    /// Threads used for single-token decode (per-token work). <c>-1</c>
+    /// = let llama.cpp pick (default). Most chat workloads with a
+    /// GPU model don't benefit from raising this; CPU-only deployments
+    /// usually want it pinned to physical-core count.
+    /// </summary>
+    public int ThreadCount { get; set; } = -1;
+
+    /// <summary>
+    /// Threads used for batched (prompt-processing) decode. <c>-1</c> =
+    /// match <see cref="ThreadCount"/>. Useful when the prompt eval is
+    /// the bottleneck and decode benefits from a different thread budget.
+    /// </summary>
+    public int BatchThreadCount { get; set; } = -1;
+
+    /// <summary>
+    /// Flash Attention selection. <c>Auto</c> (default) lets llama.cpp
+    /// pick per-model based on its FA support; <c>Enabled</c> forces it
+    /// on (required for any quantised KV cache); <c>Disabled</c> turns
+    /// it off (debug only).
+    /// </summary>
+    public LlamaFlashAttention FlashAttention { get; set; } = LlamaFlashAttention.Auto;
+
+    /// <summary>
+    /// Use a full-size SWA cache rather than the compact one. The
+    /// binding defaults this to <c>true</c> because it allows the KV
+    /// cache to be edited (multi-turn chat with retried turns); set
+    /// <c>false</c> for memory-constrained workloads where the KV is
+    /// append-only.
+    /// </summary>
+    public bool UseFullSwaCache { get; set; } = true;
+
+    /// <summary>
+    /// Element type for the K component of the KV cache. <c>F16</c>
+    /// = llama.cpp default. Quantised options (<c>Q8_0</c>, <c>Q4_0</c>,
+    /// etc.) shrink the cache footprint but require Flash Attention —
+    /// see <see cref="FlashAttention"/>. The llama.cpp header flags
+    /// these as EXPERIMENTAL; behaviour can change across version bumps.
+    /// </summary>
+    public LlamaKvCacheType KvCacheTypeK { get; set; } = LlamaKvCacheType.F16;
+
+    /// <summary>Element type for the V component of the KV cache. See <see cref="KvCacheTypeK"/>.</summary>
+    public LlamaKvCacheType KvCacheTypeV { get; set; } = LlamaKvCacheType.F16;
+
     // ----- File I/O -----
 
     public bool UseMmap { get; set; } = true;
