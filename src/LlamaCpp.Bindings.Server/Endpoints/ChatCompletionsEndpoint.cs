@@ -186,6 +186,25 @@ public static class ChatCompletionsEndpoint
             return;
         }
 
+        // If the rendered template's assistant prefix opened a <think> block
+        // (e.g. Qwen3-thinking with enable_thinking=true), the model continues
+        // inside that block and the open tag is NEVER in the response stream
+        // — only the eventual </think> close. Streaming clients can't
+        // retroactively reclassify text already pushed to their content
+        // channel, so reasoning ends up displayed as plain content. We fix
+        // that here: emit the prefix-side <think>...EOP slice as the first
+        // content delta of the response, restoring the full assistant turn.
+        // Non-thinking flows are unaffected — prefixThinkText stays null.
+        string? prefixThinkText = null;
+        {
+            int lastOpen = prompt.LastIndexOf("<think>", StringComparison.Ordinal);
+            int lastClose = prompt.LastIndexOf("</think>", StringComparison.Ordinal);
+            if (lastOpen >= 0 && lastOpen > lastClose)
+            {
+                prefixThinkText = prompt[lastOpen..];
+            }
+        }
+
         int maxTokens = Math.Clamp(req.MaxTokens ?? opts.MaxOutputTokens, 1, opts.MaxOutputTokens);
 
         // Parse stop strings up front — malformed inputs reject before we
@@ -310,13 +329,13 @@ public static class ChatCompletionsEndpoint
             {
                 await StreamSseSpeculative(
                     http, specGen, promptTokens, matcher, maxTokens,
-                    host, specId, specCreated, specTimer, metrics, cancellationToken);
+                    host, specId, specCreated, specTimer, metrics, prefixThinkText, cancellationToken);
             }
             else
             {
                 await WriteSingleJsonSpeculative(
                     http, specGen, promptTokens, matcher, maxTokens,
-                    host, specId, specCreated, specTimer, metrics, cancellationToken);
+                    host, specId, specCreated, specTimer, metrics, prefixThinkText, cancellationToken);
             }
             return;
         }
@@ -372,11 +391,11 @@ public static class ChatCompletionsEndpoint
                 bool forcedTool0 = toolChoice.Kind == ToolChoiceKind.ForcedFunction;
                 if (req.Stream && !forcedTool0)
                 {
-                    await StreamSseFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, cancellationToken);
+                    await StreamSseFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, prefixThinkText, cancellationToken);
                 }
                 else
                 {
-                    await WriteSingleJsonFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, toolChoice, cancellationToken);
+                    await WriteSingleJsonFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, toolChoice, prefixThinkText, cancellationToken);
                 }
             }
             finally
@@ -421,11 +440,11 @@ public static class ChatCompletionsEndpoint
         bool forcedTool = toolChoice.Kind == ToolChoiceKind.ForcedFunction;
         if (req.Stream && !forcedTool)
         {
-            await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, wantLogprobs, topN, cancellationToken);
+            await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, wantLogprobs, topN, prefixThinkText, cancellationToken);
         }
         else
         {
-            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, toolChoice, wantLogprobs, topN, cancellationToken);
+            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, toolChoice, wantLogprobs, topN, prefixThinkText, cancellationToken);
         }
     }
 
@@ -435,9 +454,11 @@ public static class ChatCompletionsEndpoint
         HttpContext http, LlamaSpeculativeGenerator gen,
         int[] promptTokens, StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
-        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+        RequestTimer timer, ServerMetrics metrics,
+        string? prefixThinkText, CancellationToken ct)
     {
         var buf = new StringBuilder();
+        if (prefixThinkText is not null) buf.Append(prefixThinkText);
         bool stoppedOnMatch = false;
         int predicted = 0;
         await foreach (var piece in gen.GenerateAsync(
@@ -476,7 +497,8 @@ public static class ChatCompletionsEndpoint
         HttpContext http, LlamaSpeculativeGenerator gen,
         int[] promptTokens, StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
-        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+        RequestTimer timer, ServerMetrics metrics,
+        string? prefixThinkText, CancellationToken ct)
     {
         http.Response.ContentType = "text/event-stream";
         http.Response.Headers.CacheControl = "no-cache";
@@ -488,6 +510,15 @@ public static class ChatCompletionsEndpoint
             Id = id, Created = created, Model = host.ModelId,
             Choices = new() { new() { Index = 0, Delta = new() { Role = "assistant" }, FinishReason = null } },
         }, ct);
+
+        if (prefixThinkText is not null)
+        {
+            await WriteChunk(http, new ChatCompletionsChunk
+            {
+                Id = id, Created = created, Model = host.ModelId,
+                Choices = new() { new() { Index = 0, Delta = new() { Content = prefixThinkText }, FinishReason = null } },
+            }, ct);
+        }
 
         bool stoppedOnMatch = false;
         int predicted = 0;
@@ -543,9 +574,11 @@ public static class ChatCompletionsEndpoint
         StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
         RequestTimer timer, ServerMetrics metrics,
-        ToolChoiceDescriptor toolChoice, CancellationToken ct)
+        ToolChoiceDescriptor toolChoice,
+        string? prefixThinkText, CancellationToken ct)
     {
         var buf = new StringBuilder();
+        if (prefixThinkText is not null) buf.Append(prefixThinkText);
         bool stoppedOnMatch = false;
         await foreach (var piece in gen.StreamFromCurrentStateAsync(
             maxTokens: maxTokens, cancellationToken: ct))
@@ -583,7 +616,8 @@ public static class ChatCompletionsEndpoint
         HttpContext http, LlamaGenerator gen,
         StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
-        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+        RequestTimer timer, ServerMetrics metrics,
+        string? prefixThinkText, CancellationToken ct)
     {
         http.Response.ContentType = "text/event-stream";
         http.Response.Headers.CacheControl = "no-cache";
@@ -595,6 +629,15 @@ public static class ChatCompletionsEndpoint
             Id = id, Created = created, Model = host.ModelId,
             Choices = new() { new() { Index = 0, Delta = new() { Role = "assistant" }, FinishReason = null } },
         }, ct);
+
+        if (prefixThinkText is not null)
+        {
+            await WriteChunk(http, new ChatCompletionsChunk
+            {
+                Id = id, Created = created, Model = host.ModelId,
+                Choices = new() { new() { Index = 0, Delta = new() { Content = prefixThinkText }, FinishReason = null } },
+            }, ct);
+        }
 
         bool stoppedOnMatch = false;
         await foreach (var piece in gen.StreamFromCurrentStateAsync(
@@ -649,9 +692,11 @@ public static class ChatCompletionsEndpoint
         ModelHost host, string id, long created,
         RequestTimer timer, ServerMetrics metrics,
         ToolChoiceDescriptor toolChoice,
-        bool wantLogprobs, int topN, CancellationToken ct)
+        bool wantLogprobs, int topN,
+        string? prefixThinkText, CancellationToken ct)
     {
         var buf = new StringBuilder();
+        if (prefixThinkText is not null) buf.Append(prefixThinkText);
         bool stoppedOnMatch = false;
         var logprobs = wantLogprobs ? new List<TokenLogprobInfo>() : null;
         await foreach (var piece in gen.GenerateAsync(
@@ -709,7 +754,8 @@ public static class ChatCompletionsEndpoint
         StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
         RequestTimer timer, ServerMetrics metrics,
-        bool wantLogprobs, int topN, CancellationToken ct)
+        bool wantLogprobs, int topN,
+        string? prefixThinkText, CancellationToken ct)
     {
         http.Response.ContentType = "text/event-stream";
         http.Response.Headers.CacheControl = "no-cache";
@@ -726,6 +772,15 @@ public static class ChatCompletionsEndpoint
                 new() { Index = 0, Delta = new() { Role = "assistant" }, FinishReason = null },
             },
         }, ct);
+
+        if (prefixThinkText is not null)
+        {
+            await WriteChunk(http, new ChatCompletionsChunk
+            {
+                Id = id, Created = created, Model = host.ModelId,
+                Choices = new() { new() { Index = 0, Delta = new() { Content = prefixThinkText }, FinishReason = null } },
+            }, ct);
+        }
 
         // Streaming logprobs accumulate into a per-chunk queue so each
         // SSE chunk carries the logprobs for the tokens that produced
