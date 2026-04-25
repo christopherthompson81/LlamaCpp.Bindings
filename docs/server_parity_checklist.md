@@ -302,54 +302,80 @@ Features clients expect from the OpenAI chat-completions API.
 
 ## 12. Server-side safety / ops
 
-- [ ] **Max prompt tokens per request** — `MaxOutputTokens` guards the
-  generation budget but nothing bounds prompt length. A bad client could
-  send a prompt that doesn't fit in the context and get an unhelpful
-  error. A pre-tokenise length check with a clear 413 would be nicer.
-- [ ] **Request timeouts** — long generations currently ride purely on
-  client-side timeouts. A server-side upper bound (e.g. 5 minutes) would
-  prevent stuck requests.
-- [ ] **Graceful shutdown** — SIGTERM should drain in-flight requests
-  rather than drop them mid-stream.
+- [x] **Max prompt tokens per request** — `ServerOptions.MaxPromptTokens`.
+  Pre-tokenise check on chat + completion endpoints rejects oversize
+  prompts with HTTP 413 and an explanatory body before any pool slot is
+  taken. `0` derives the cap from `ContextSize - MaxOutputTokens`.
+- [x] **Request timeouts** — `ServerOptions.RequestTimeoutSeconds`
+  (default 300). Each request gets a linked CTS combining the client's
+  abort token with a server-side timer; non-streaming requests return
+  HTTP 504 on timeout, streaming requests close the connection so
+  clients observe end-of-stream early.
+- [x] **Graceful shutdown** — `ServerOptions.ShutdownDrainSeconds`
+  (default 30) wired into `HostOptions.ShutdownTimeout` so SIGTERM
+  drains in-flight requests rather than dropping them mid-stream.
 
 ---
 
 ## Open GitHub issues
 
+Tracked as separate items because each has enough scope (or external
+dependency) to deserve its own thread:
+
 | # | Title | Section |
 |---|---|---|
-| 14 | Speculative decoding: implement full DeepMind rejection-sampling protocol | §8 |
-| 15 | /v1/embeddings: support encoding_format="base64" | §5 |
+| 14 | Speculative decoding: full DeepMind rejection-sampling protocol | §8 |
+| 15 | /v1/embeddings: encoding_format="base64" | §5 |
 | 16 | /v1/embeddings: batch multiple inputs into one forward pass | §5 |
-| 17 | /v1/embeddings: support OpenAI's `dimensions` truncation parameter | §5 |
+| 17 | /v1/embeddings: `dimensions` truncation parameter | §5 |
+| 22 | Server: SSL/TLS end-to-end integration test | §2 |
+| 23 | Server: streaming format for forced tool calls | §3 |
+| 24 | Server: detect tool-call wrappers in auto-mode chat output | §3 |
+| 25 | Server: render assistant tool_calls in history through the chat template directly | §3 |
+| 26 | Server: tool_choice="required" (any-tool) needs GBNF union across schemas | §3 |
 
 ## Summary counts
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 50 | shipped, tested |
-| `[ ]` TODO | 8  | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 14 | binding work first |
-| `[#NN]` tracked | 4 | dedicated issue |
+| `[x]` done | 53 | shipped, tested |
+| `[ ]` TODO | 9 | binding already exposes; server-side wiring only |
+| `[~]` needs binding | 7 | binding work first |
+| `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
+
+## Remaining `[ ]` TODO items
+
+For at-a-glance triage. Each is small (a few config fields + tests).
+
+§1 endpoints: `GET /props` (informational dump).
+§4 completion: `cache_prompt` opt-out.
+§6 model loading: KV cache types, threads / threads-batch, flash-attn,
+   split-mode / main-gpu, swa-full, check-tensors.
+§7 multimodal: `--mmproj-auto` (probe sibling file), remote-URL image fetch.
+§10 sampling: adaptive_p terminal, dynamic temperature, custom sampler ordering.
 
 ## Recommended order of attack
 
-Weighed by user-visible impact per unit of work, with the understanding
-that we've already hit the big items (multi-session, prompt caching,
-embeddings, auth, observability, cancellation, extended sampling).
+Big features (multi-session, prompt caching, embeddings, auth,
+observability, cancellation, extended sampling, multimodal, tool
+calling, logprobs, rerank) are all shipped. What's left is operator-
+ergonomic polish + binding-blocked features.
 
-1. **Remote-URL image fetch** (§7) — the multimodal follow-up; needs
-   a size-capped download manager. Tracked alongside #19.
-2. **Auto-mode tool-call wrapper detection** (§3) — Qwen3
-   `<tool_call>...</tool_call>` / Llama-3.1 `<|python_tag|>` /
-   Mistral `[TOOL_CALLS]`. Tracked in
-   [#24](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/24).
-3. **`tool_choice="required"` (any-tool)** (§3) — needs a GBNF union
-   across every tool's parameters schema. Tracked in
-   [#26](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/26).
+1. **Model-loading knobs bundle** (§6) — KV cache types,
+   flash-attn, threads / threads-batch, split-mode / main-gpu,
+   swa-full, check-tensors. All are existing binding fields needing
+   a `ServerOptions` field + appsettings entry. Operator-tuning
+   audience. One PR.
+2. **Speculative decoding wiring** (§8) — `LlamaSpeculativeGenerator`
+   exists; needs a draft-model load path + per-request opt-in on
+   chat completions. Real perf gain (2–3× on greedy chat). Bigger
+   PR.
+3. **LoRA adapters at startup** (§9) — `ServerOptions.LoraAdapters`
+   list, attach during `ModelHost` ctor. Per-request adapter
+   selection is harder (binding attaches to context, not session) and
+   stays deferred.
 
-Everything under `[~]` is binding-side work of varying size. Speculative
-decoding (§8) and LoRA (§9) are the two most feature-complete on the
-binding side — they could be wired into the server whenever we decide
-the shape of "how does a client opt in."
+Everything in the GitHub-issues table is queued behind those when its
+scope warrants the work. The biggest is #14 (speculative
+rejection-sampling); the smallest is #22 (SSL e2e test).

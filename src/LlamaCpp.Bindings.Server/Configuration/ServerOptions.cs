@@ -92,6 +92,35 @@ public sealed class ServerOptions
     /// </summary>
     public int MaxOutputTokens { get; set; } = 2048;
 
+    /// <summary>
+    /// Hard cap on tokenised prompt length. Requests with longer prompts
+    /// reject with HTTP 413 before any pool slot is taken — fails fast
+    /// instead of letting the model decode hit a "no KV slot" error
+    /// halfway through. <c>0</c> or negative = derive at request time
+    /// from <c>ContextSize - MaxOutputTokens</c> (leaves room for the
+    /// reply); <c>&gt; 0</c> = use this value directly.
+    /// </summary>
+    public int MaxPromptTokens { get; set; } = 0;
+
+    /// <summary>
+    /// Server-side wall-clock cap on a single request's generation
+    /// budget. <c>0</c> = disabled (rely on client cancellation only);
+    /// <c>&gt; 0</c> = cancel the generator after this many seconds and
+    /// return HTTP 504 from non-streaming requests. Streaming requests
+    /// just close the connection — clients observe end-of-stream early.
+    /// Default 300 (5 minutes).
+    /// </summary>
+    public int RequestTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Maximum seconds the host waits for in-flight requests to drain
+    /// after SIGTERM before forcibly closing connections. Default 30
+    /// matches ASP.NET Core's own host default; raise for long-running
+    /// generation jobs that can't tolerate truncation, lower for
+    /// faster restarts in CI / development.
+    /// </summary>
+    public int ShutdownDrainSeconds { get; set; } = 30;
+
     // ----- Multimodal (optional mmproj) -----
 
     /// <summary>

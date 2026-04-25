@@ -25,6 +25,48 @@ public static class CompletionEndpoint
         ServerMetrics metrics,
         CancellationToken cancellationToken)
     {
+        var opts = options.Value;
+
+        var clientAbortedToken = cancellationToken;
+        var (linkedCts, timeoutCts) = RequestGuard.CreateLinkedToken(cancellationToken, opts);
+        using var _linkedCts = linkedCts;
+        using var _timeoutCts = timeoutCts;
+        cancellationToken = linkedCts.Token;
+
+        try
+        {
+            await HandleCore(http, req, host, pool, opts, metrics, cancellationToken);
+        }
+        catch (OperationCanceledException) when (
+            timeoutCts is not null
+            && timeoutCts.IsCancellationRequested
+            && !clientAbortedToken.IsCancellationRequested)
+        {
+            if (!http.Response.HasStarted)
+            {
+                http.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+                await http.Response.WriteAsJsonAsync(new
+                {
+                    error = new
+                    {
+                        message = $"Request exceeded the {opts.RequestTimeoutSeconds}s server-side timeout.",
+                        type = "timeout",
+                        code = "request_timeout",
+                    },
+                }, CancellationToken.None);
+            }
+        }
+    }
+
+    private static async Task HandleCore(
+        HttpContext http,
+        CompletionRequest req,
+        ModelHost host,
+        SessionPool pool,
+        ServerOptions opts,
+        ServerMetrics metrics,
+        CancellationToken cancellationToken)
+    {
         if (string.IsNullOrEmpty(req.Prompt))
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -32,7 +74,6 @@ public static class CompletionEndpoint
             return;
         }
 
-        var opts = options.Value;
         int maxTokens = Math.Clamp(req.MaxTokens ?? opts.MaxOutputTokens, 1, opts.MaxOutputTokens);
 
         string[]? stops;
@@ -63,6 +104,24 @@ public static class CompletionEndpoint
         // addSpecial=true mirrors llama-server's --special-tokens behaviour
         // for raw /completion calls.
         var promptTokens = host.Model.Vocab.Tokenize(req.Prompt, addSpecial: true, parseSpecial: false);
+
+        int maxPrompt = RequestGuard.EffectiveMaxPromptTokens(opts, host.Context.ContextSize);
+        if (promptTokens.Length > maxPrompt)
+        {
+            http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                error = new
+                {
+                    message = $"Prompt is {promptTokens.Length} tokens; the server caps prompt length " +
+                              $"at {maxPrompt} (context={host.Context.ContextSize}, " +
+                              $"max_output_tokens={opts.MaxOutputTokens}).",
+                    type = "request_too_large",
+                    code = "prompt_too_long",
+                },
+            }, cancellationToken);
+            return;
+        }
 
         LlamaSampler sampler;
         try

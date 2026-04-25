@@ -65,6 +65,15 @@ public class Program
         // time we've resolved ServerOptions via IOptions.
         builder.Services.AddCors();
 
+        // Drain in-flight requests on SIGTERM rather than dropping streams
+        // mid-flight. ASP.NET's HostOptions.ShutdownTimeout default is 30s;
+        // we expose it so operators with long-running generations can give
+        // it a generous bound (and CI / dev can shorten it).
+        var drainSeconds = Math.Max(0, builder.Configuration
+            .GetValue<int>($"{ServerOptions.Section}:ShutdownDrainSeconds", 30));
+        builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(opts =>
+            opts.ShutdownTimeout = TimeSpan.FromSeconds(drainSeconds));
+
         builder.Services.AddSingleton<ModelHost>();
         builder.Services.AddSingleton<SessionPool>();
         builder.Services.AddSingleton<EmbeddingHost>();

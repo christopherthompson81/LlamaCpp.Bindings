@@ -34,6 +34,57 @@ public static class ChatCompletionsEndpoint
         var log = loggerFactory.CreateLogger("ChatCompletions");
         var opts = options.Value;
 
+        // Wrap the client-driven cancellation token with a server-side
+        // timeout. Re-bind the parameter so every subsequent
+        // `cancellationToken` reference picks up the linked token —
+        // surfacing timeouts as 504 below requires checking
+        // timeoutCts.IsCancellationRequested in a caught OCE handler.
+        var clientAbortedToken = cancellationToken;
+        var (linkedCts, timeoutCts) = RequestGuard.CreateLinkedToken(cancellationToken, opts);
+        using var _linkedCts = linkedCts;
+        using var _timeoutCts = timeoutCts;
+        cancellationToken = linkedCts.Token;
+
+        try
+        {
+            await HandleCore(http, req, host, pool, opts, log, metrics, mmproj, cancellationToken);
+        }
+        catch (OperationCanceledException) when (
+            timeoutCts is not null
+            && timeoutCts.IsCancellationRequested
+            && !clientAbortedToken.IsCancellationRequested)
+        {
+            // Timeout fired and the client did NOT abort — surface as 504
+            // for non-streaming. Streaming responses will already have
+            // headers on the wire, so the best we can do is let the
+            // connection close (clients observe end-of-stream early).
+            if (!http.Response.HasStarted)
+            {
+                http.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+                await http.Response.WriteAsJsonAsync(new
+                {
+                    error = new
+                    {
+                        message = $"Request exceeded the {opts.RequestTimeoutSeconds}s server-side timeout.",
+                        type = "timeout",
+                        code = "request_timeout",
+                    },
+                }, CancellationToken.None);
+            }
+        }
+    }
+
+    private static async Task HandleCore(
+        HttpContext http,
+        ChatCompletionsRequest req,
+        ModelHost host,
+        SessionPool pool,
+        ServerOptions opts,
+        ILogger log,
+        ServerMetrics metrics,
+        MmprojHost mmproj,
+        CancellationToken cancellationToken)
+    {
         if (req.Messages.Count == 0)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -165,6 +216,27 @@ public static class ChatCompletionsEndpoint
         // Tokenize up front so the pool can do prefix matching before we
         // pick a slot.
         var promptTokens = host.Model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
+
+        // Prompt-length cap. Better than letting llama_decode hit a
+        // "no KV slot" error halfway through. 413 = request entity too
+        // large; the body explains how the limit was derived.
+        int maxPrompt = RequestGuard.EffectiveMaxPromptTokens(opts, host.Context.ContextSize);
+        if (promptTokens.Length > maxPrompt)
+        {
+            http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                error = new
+                {
+                    message = $"Prompt is {promptTokens.Length} tokens; the server caps prompt length " +
+                              $"at {maxPrompt} (context={host.Context.ContextSize}, " +
+                              $"max_output_tokens={opts.MaxOutputTokens}).",
+                    type = "request_too_large",
+                    code = "prompt_too_long",
+                },
+            }, cancellationToken);
+            return;
+        }
 
         // Build the sampler before taking a slot so malformed logit_bias /
         // mirostat / invalid grammar / etc. fail with 400 without holding

@@ -2248,3 +2248,112 @@ public class LlamaRerankTests : IClassFixture<LlamaRerankTests.RerankFactory>
         }
     }
 }
+
+/// <summary>
+/// Server-side safety bundle (issue §12): prompt-length cap returning 413,
+/// request-timeout returning 504 on non-streaming requests. Uses a dedicated
+/// factory with tight limits — a 32-token prompt cap and a 1-second timeout
+/// — so the tests stay fast and don't depend on the model's generation speed.
+/// </summary>
+public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.SafetyFactory>
+{
+    private readonly SafetyFactory _factory;
+    public LlamaServerSafetyTests(SafetyFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Oversize_Prompt_Returns_413_With_Explanatory_Body()
+    {
+        var client = _factory.CreateClient();
+        // Hundreds of distinct words → easily blows the 32-token cap.
+        var bigPrompt = string.Join(' ',
+            Enumerable.Range(0, 200).Select(i => "word" + i));
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = bigPrompt } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("prompt_too_long", body);
+        Assert.Contains("request_too_large", body);
+    }
+
+    [Fact]
+    public async Task Oversize_Prompt_On_Completion_Endpoint_Returns_413()
+    {
+        var client = _factory.CreateClient();
+        var bigPrompt = string.Join(' ',
+            Enumerable.Range(0, 200).Select(i => "word" + i));
+        var req = new CompletionRequest { Prompt = bigPrompt, MaxTokens = 4 };
+        var resp = await client.PostAsJsonAsync(
+            "/completion", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("prompt_too_long", body);
+    }
+
+    [Fact]
+    public async Task Slow_Request_Times_Out_With_504()
+    {
+        // The factory sets RequestTimeoutSeconds=1; ask for many tokens so the
+        // generator can't finish before the timeout fires.
+        var client = _factory.CreateClient();
+        // Long-ish (but inside the 32-token prompt cap) input to push generation.
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Tell me a story." } },
+            MaxTokens = 3000,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.GatewayTimeout, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("request_timeout", body);
+    }
+
+    [Fact]
+    public async Task Small_Prompt_Still_Works_When_Caps_Configured()
+    {
+        // Regression: making sure the safety bundle's checks don't blanket-reject
+        // legitimate small requests.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.Single(body!.Choices);
+    }
+
+    public sealed class SafetyFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]             = modelPath,
+                    ["LlamaServer:ContextSize"]           = "4096",
+                    ["LlamaServer:MaxSequenceCount"]      = "1",
+                    ["LlamaServer:GpuLayerCount"]         = "-1",
+                    ["LlamaServer:OffloadKqv"]            = "true",
+                    ["LlamaServer:MaxOutputTokens"]       = "3000",
+                    ["LlamaServer:MaxPromptTokens"]       = "32",
+                    ["LlamaServer:RequestTimeoutSeconds"] = "1",
+                    ["LlamaServer:Urls"]                  = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
