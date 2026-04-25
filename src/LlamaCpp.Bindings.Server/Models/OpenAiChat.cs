@@ -108,6 +108,27 @@ public sealed class ChatCompletionsRequest
     /// </summary>
     [JsonPropertyName("json_schema")]
     public JsonElement? JsonSchemaShort { get; set; }
+
+    // ----- Tool calling (OpenAI-compatible) -----
+
+    /// <summary>
+    /// List of tools the model may call. The chat template renders these
+    /// into the prompt so tool-capable models know they're available.
+    /// </summary>
+    [JsonPropertyName("tools")]
+    public List<ToolDef>? Tools { get; set; }
+
+    /// <summary>
+    /// Polymorphic tool-choice hint. Accepts:
+    /// <list type="bullet">
+    ///   <item><c>"none"</c> — don't call any tool.</item>
+    ///   <item><c>"auto"</c> — let the model decide (default when tools present).</item>
+    ///   <item><c>"required"</c> — force any tool call.</item>
+    ///   <item><c>{"type":"function","function":{"name":"X"}}</c> — force a specific tool by name.</item>
+    /// </list>
+    /// </summary>
+    [JsonPropertyName("tool_choice")]
+    public JsonElement? ToolChoice { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -118,13 +139,31 @@ public sealed class ChatMessageDto
     /// <summary>
     /// Polymorphic content: a plain string (the legacy and still-most-common
     /// shape) or an array of <see cref="ContentPart"/> entries for
-    /// multimodal chat (text interleaved with images). The
-    /// <see cref="MessageContent"/> converter handles the shape detection
-    /// on the wire; C# code can assign a string directly thanks to the
-    /// implicit operator.
+    /// multimodal chat (text interleaved with images). May be null when
+    /// the message is an assistant tool-call turn (<see cref="ToolCalls"/>
+    /// is populated instead).
     /// </summary>
     [JsonPropertyName("content")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MessageContent? Content { get; set; }
+
+    /// <summary>
+    /// For <c>role: "tool"</c> messages — matches the <c>id</c> of the
+    /// assistant-side tool_call this message is responding to.
+    /// </summary>
+    [JsonPropertyName("tool_call_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolCallId { get; set; }
+
+    /// <summary>
+    /// Assistant-side tool calls. Set on the response when the model has
+    /// been grammar-forced into a specific tool invocation. Also accepted
+    /// on incoming history messages (role=assistant) so multi-turn tool
+    /// flows can round-trip.
+    /// </summary>
+    [JsonPropertyName("tool_calls")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ToolCall>? ToolCalls { get; set; }
 }
 
 /// <summary>
@@ -168,6 +207,70 @@ public sealed class ImageUrl
 {
     [JsonPropertyName("url")]
     public string Url { get; set; } = "";
+}
+
+// ----- Tool-calling DTOs -----
+
+/// <summary>
+/// OpenAI tool definition: <c>{"type":"function","function":{...}}</c>.
+/// The outer envelope leaves room for future non-function tools
+/// (OpenAI has been teasing retrieval + code interpreter); for now
+/// only <c>type = "function"</c> is meaningful.
+/// </summary>
+public sealed class ToolDef
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonPropertyName("function")]
+    public ToolFunctionDef? Function { get; set; }
+}
+
+public sealed class ToolFunctionDef
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// JSON Schema describing the function's argument object. Compiled
+    /// to GBNF via <see cref="JsonSchemaToGbnf"/> when the server
+    /// forces a tool call.
+    /// </summary>
+    [JsonPropertyName("parameters")]
+    public JsonElement? Parameters { get; set; }
+}
+
+/// <summary>
+/// One tool call emitted by the assistant.
+/// </summary>
+public sealed class ToolCall
+{
+    /// <summary>Unique id for the call — clients match <c>role=tool</c> responses to it.</summary>
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonPropertyName("function")]
+    public ToolCallFunction Function { get; set; } = new();
+}
+
+public sealed class ToolCallFunction
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    /// <summary>
+    /// The function arguments as a JSON string (OpenAI's convention —
+    /// the arguments object is returned stringified so clients can
+    /// parse once they know which function was called).
+    /// </summary>
+    [JsonPropertyName("arguments")]
+    public string Arguments { get; set; } = "{}";
 }
 
 internal sealed class MessageContentConverter : JsonConverter<MessageContent>

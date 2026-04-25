@@ -792,6 +792,213 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.Contains(body!.StopReason, new[] { "stop", "length" });
     }
 
+    // ----- Tool calling -----
+
+    [Fact]
+    public async Task ToolChoice_Specific_Function_Forces_Tool_Call_Response()
+    {
+        // tool_choice forcing a specific function compiles a grammar from
+        // that function's parameters schema. Output is therefore guaranteed
+        // to be valid JSON matching the schema, and the response must
+        // surface as tool_calls (not content) with finish_reason=tool_calls.
+        var client = _factory.CreateClient();
+        var schemaJson = """
+            {
+              "type": "object",
+              "properties": {
+                "city": { "type": "string" },
+                "unit": { "type": "string" }
+              },
+              "required": ["city"]
+            }
+            """;
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"What's the weather in Paris? ({Guid.NewGuid():N})" } },
+            MaxTokens = 32,
+            Temperature = 0.0f,
+            Tools = new()
+            {
+                new ToolDef
+                {
+                    Type = "function",
+                    Function = new()
+                    {
+                        Name = "get_weather",
+                        Description = "Look up the weather for a city.",
+                        Parameters = JsonDocument.Parse(schemaJson).RootElement,
+                    },
+                },
+            },
+            ToolChoice = JsonDocument.Parse("""{"type":"function","function":{"name":"get_weather"}}""").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        var choice = body!.Choices[0];
+        Assert.Equal("tool_calls", choice.FinishReason);
+        Assert.Null(choice.Message.Content);
+        Assert.NotNull(choice.Message.ToolCalls);
+        Assert.Single(choice.Message.ToolCalls!);
+        var call = choice.Message.ToolCalls![0];
+        Assert.Equal("function", call.Type);
+        Assert.Equal("get_weather", call.Function.Name);
+        Assert.False(string.IsNullOrEmpty(call.Function.Arguments));
+
+        // The Arguments string must parse as JSON conforming to the schema
+        // (city required + a string).
+        using var argsDoc = JsonDocument.Parse(call.Function.Arguments);
+        Assert.Equal(JsonValueKind.Object, argsDoc.RootElement.ValueKind);
+        Assert.True(argsDoc.RootElement.TryGetProperty("city", out var cityEl));
+        Assert.Equal(JsonValueKind.String, cityEl.ValueKind);
+    }
+
+    [Fact]
+    public async Task ToolChoice_Unknown_Function_Returns_400()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "hi" } },
+            MaxTokens = 4,
+            Tools = new()
+            {
+                new ToolDef
+                {
+                    Type = "function",
+                    Function = new()
+                    {
+                        Name = "get_weather",
+                        Parameters = JsonDocument.Parse("""{"type":"object"}""").RootElement,
+                    },
+                },
+            },
+            ToolChoice = JsonDocument.Parse("""{"type":"function","function":{"name":"unknown_tool"}}""").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task ToolChoice_Required_Returns_400_Documenting_V1_Limitation()
+    {
+        // V1 doesn't support tool_choice="required" without a specific name;
+        // would require a GBNF union of every tool's schema. Document via 400.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "hi" } },
+            MaxTokens = 4,
+            Tools = new()
+            {
+                new ToolDef
+                {
+                    Type = "function",
+                    Function = new()
+                    {
+                        Name = "f1",
+                        Parameters = JsonDocument.Parse("""{"type":"object"}""").RootElement,
+                    },
+                },
+            },
+            ToolChoice = JsonDocument.Parse("\"required\"").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Tool_Role_Message_In_History_Round_Trips()
+    {
+        // OpenAI's multi-turn tool flow: the conversation can include
+        // role=tool messages with tool_call_id. The chat template should
+        // accept them without choking; the Jinja renderer for our default
+        // model (Qwen3) handles the shape natively.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new()
+            {
+                new() { Role = "user", Content = $"What's the weather? ({Guid.NewGuid():N})" },
+                new()
+                {
+                    Role = "assistant",
+                    Content = (string?)null,
+                    ToolCalls = new()
+                    {
+                        new ToolCall
+                        {
+                            Id = "call_test1",
+                            Type = "function",
+                            Function = new() { Name = "get_weather", Arguments = "{\"city\":\"Paris\"}" },
+                        },
+                    },
+                },
+                new()
+                {
+                    Role = "tool",
+                    Content = "{\"temperature\":\"15C\"}",
+                    ToolCallId = "call_test1",
+                },
+            },
+            MaxTokens = 8,
+            Temperature = 0.0f,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        // We don't assert on output text — different templates render
+        // tool_calls + tool messages differently. Asserting "request
+        // didn't 4xx/5xx" is the wiring check.
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.Single(body!.Choices);
+    }
+
+    [Fact]
+    public async Task Tools_Without_ToolChoice_Pass_Through_As_Plain_Text()
+    {
+        // tools[] given but tool_choice unset → tools get rendered into
+        // the prompt but no grammar is forced. The model may or may not
+        // emit a tool call; we don't parse "auto" output for tool calls
+        // in V1 (filed as a follow-up). Either way the request should
+        // succeed and return a normal content response.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"hi {Guid.NewGuid():N}" } },
+            MaxTokens = 4,
+            Temperature = 0.0f,
+            Tools = new()
+            {
+                new ToolDef
+                {
+                    Type = "function",
+                    Function = new()
+                    {
+                        Name = "noop",
+                        Parameters = JsonDocument.Parse("""{"type":"object"}""").RootElement,
+                    },
+                },
+            },
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        // "auto" mode in V1 always returns content — never tool_calls.
+        Assert.Null(body!.Choices[0].Message.ToolCalls);
+    }
+
     // ----- Multimodal content part handling -----
 
     [Fact]

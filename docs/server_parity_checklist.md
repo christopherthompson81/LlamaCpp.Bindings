@@ -131,10 +131,16 @@ Features clients expect from the OpenAI chat-completions API.
   `llama_get_logits_ith`; the sampler currently applies and selects but
   doesn't expose the per-token probability of the selected token. Small
   binding extension.
-- [ ] **Tool-calling schema** (`tools[]`, `tool_choice`) — can piggyback
-  on the grammar path by compiling a schema from the requested tool
-  definitions. The on-the-wire shape matters more than the implementation
-  strategy.
+- [x] **Tool-calling schema** (`tools[]`, `tool_choice`) — DTOs
+  accepted, tools rendered into the chat-template via the
+  Jinja-side `tools` argument. `tool_choice = {"type":"function",
+  "function":{"name":"X"}}` compiles a grammar from X's parameters
+  schema and wraps the output as a single `tool_calls` entry on the
+  response with `finish_reason="tool_calls"`. `tool_choice="required"`
+  (any-tool) returns 400 for now — a GBNF union across every tool's
+  schema isn't supported yet. `tool_choice="auto"` / unset passes
+  tools through to the prompt but doesn't parse output for tool
+  calls; clients have to do that themselves in V1.
 - [x] **Multi-part content blocks** (text + image-url parts) — wired
   in §7. The text-only multipart path works regardless of mmproj
   availability (it flattens to a plain string); image parts require
@@ -312,8 +318,8 @@ Features clients expect from the OpenAI chat-completions API.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 46 | shipped, tested |
-| `[ ]` TODO | 12 | binding already exposes; server-side wiring only |
+| `[x]` done | 47 | shipped, tested |
+| `[ ]` TODO | 11 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -324,12 +330,15 @@ Weighed by user-visible impact per unit of work, with the understanding
 that we've already hit the big items (multi-session, prompt caching,
 embeddings, auth, observability, cancellation, extended sampling).
 
-1. **Tool calling / function calling** (§3) — high value for agent
-   workflows; tracked in [#21](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/21).
-2. **Logprobs / top_logprobs** (§3) — useful for evals; tracked in
+1. **Logprobs / top_logprobs** (§3) — useful for evals; tracked in
    [#20](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/20).
-3. **Remote-URL image fetch** (§7) — the multimodal follow-up; needs
+2. **Remote-URL image fetch** (§7) — the multimodal follow-up; needs
    a size-capped download manager. Tracked alongside #19.
+3. **`tool_choice="required"` (any-tool)** (§3) — needs a GBNF union
+   across every tool's parameters schema. Follow-up to #21.
+4. **Auto-mode tool-call parsing** (§3) — detect Qwen3
+   `<tool_call>...</tool_call>` / Llama-3.1 `<|python_tag|>` /
+   Mistral `[TOOL_CALLS]` wrappers in plain output. Follow-up to #21.
 
 Everything under `[~]` is binding-side work of varying size. Speculative
 decoding (§8) and LoRA (§9) are the two most feature-complete on the

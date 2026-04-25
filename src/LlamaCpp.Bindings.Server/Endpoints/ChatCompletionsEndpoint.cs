@@ -79,11 +79,49 @@ public static class ChatCompletionsEndpoint
             return;
         }
 
+        // Resolve tool_choice first — it's the most specific grammar
+        // source and overrides response_format / grammar / json_schema
+        // when it forces a specific tool. Also drives whether tools are
+        // passed to the chat template.
+        ToolChoiceDescriptor toolChoice;
+        try
+        {
+            toolChoice = ToolChoiceResolver.Resolve(req.ToolChoice, req.Tools);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
+        if (toolChoice.Kind == ToolChoiceKind.RequiredAny)
+        {
+            // V1 would need a GBNF union across every tool's schema;
+            // JsonSchemaToGbnf doesn't currently support that cleanly.
+            // Filed as a follow-up (see tool-calling issue notes).
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                error = "tool_choice='required' (any-tool) is not supported in V1. " +
+                        "Specify a single tool via " +
+                        "{\"type\":\"function\",\"function\":{\"name\":\"X\"}} to force it.",
+            }, cancellationToken);
+            return;
+        }
+
         string prompt;
         try
         {
-            var messages = req.Messages.Select(m => new ChatMessage(m.Role, m.Content?.Text ?? "")).ToArray();
-            prompt = LlamaChatTemplate.Apply(template, messages, addAssistantPrefix: true);
+            var messages = req.Messages.Select(m =>
+                new ChatMessage(m.Role, FlattenMessageContent(m))).ToArray();
+            // Only pass tools to the template when we actually want them
+            // rendered into the prompt — "none" means no mention.
+            var toolsForTemplate = toolChoice.Kind == ToolChoiceKind.None
+                ? null
+                : ToolDefsToTemplate(req.Tools);
+            prompt = LlamaChatTemplate.Apply(
+                template, messages, addAssistantPrefix: true, tools: toolsForTemplate);
         }
         catch (Exception ex)
         {
@@ -109,13 +147,13 @@ public static class ChatCompletionsEndpoint
             return;
         }
 
-        // Resolve grammar (response_format / grammar / json_schema) before
-        // anything expensive runs — malformed schemas return 400 without
-        // a pool lease.
+        // Resolve grammar (response_format / grammar / json_schema) — tool
+        // choice takes precedence when it forces a specific tool.
         LlamaGrammar? grammar;
         try
         {
-            grammar = GrammarFactory.Resolve(req.Grammar, req.JsonSchemaShort, req.ResponseFormat);
+            grammar = ToolChoiceResolver.ForcedGrammar(toolChoice)
+                      ?? GrammarFactory.Resolve(req.Grammar, req.JsonSchemaShort, req.ResponseFormat);
         }
         catch (ArgumentException ex)
         {
@@ -203,13 +241,14 @@ public static class ChatCompletionsEndpoint
             }
             try
             {
-                if (req.Stream)
+                bool forcedTool0 = toolChoice.Kind == ToolChoiceKind.ForcedFunction;
+                if (req.Stream && !forcedTool0)
                 {
                     await StreamSseFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, cancellationToken);
                 }
                 else
                 {
-                    await WriteSingleJsonFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, cancellationToken);
+                    await WriteSingleJsonFromCurrent(http, generator0, matcher, maxTokens, host, id0, created0, timer0, metrics, toolChoice, cancellationToken);
                 }
             }
             finally
@@ -241,13 +280,17 @@ public static class ChatCompletionsEndpoint
         string completionId = "chatcmpl-" + Guid.NewGuid().ToString("N");
         long createdUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        if (req.Stream)
+        // Forced tool-call paths go through the non-streaming writer:
+        // tool-call streaming has its own delta format and V1 doesn't
+        // implement it. Plain text requests honour stream=true as usual.
+        bool forcedTool = toolChoice.Kind == ToolChoiceKind.ForcedFunction;
+        if (req.Stream && !forcedTool)
         {
             await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, cancellationToken);
         }
         else
         {
-            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, cancellationToken);
+            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, toolChoice, cancellationToken);
         }
     }
 
@@ -257,7 +300,8 @@ public static class ChatCompletionsEndpoint
         HttpContext http, LlamaGenerator gen,
         StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
-        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+        RequestTimer timer, ServerMetrics metrics,
+        ToolChoiceDescriptor toolChoice, CancellationToken ct)
     {
         var buf = new StringBuilder();
         bool stoppedOnMatch = false;
@@ -274,17 +318,19 @@ public static class ChatCompletionsEndpoint
         timer.Finish();
         metrics.AddTokensGenerated(timer.PredictedTokens);
 
+        var choice = toolChoice.Kind == ToolChoiceKind.ForcedFunction
+            ? BuildForcedToolChoice(toolChoice, buf.ToString())
+            : new ChatChoice
+            {
+                Index = 0,
+                Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
+                FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
+            };
+
         var response = new ChatCompletionsResponse
         {
             Id = id, Created = created, Model = host.ModelId,
-            Choices = new()
-            {
-                new() {
-                    Index = 0,
-                    Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
-                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
-                },
-            },
+            Choices = new() { choice },
             Timings = timer.Snapshot(),
         };
         http.Response.ContentType = "application/json";
@@ -359,7 +405,8 @@ public static class ChatCompletionsEndpoint
         HttpContext http, LlamaGenerator gen, SessionLease lease,
         StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created,
-        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
+        RequestTimer timer, ServerMetrics metrics,
+        ToolChoiceDescriptor toolChoice, CancellationToken ct)
     {
         var buf = new StringBuilder();
         bool stoppedOnMatch = false;
@@ -383,19 +430,21 @@ public static class ChatCompletionsEndpoint
         timer.Finish();
         metrics.AddTokensGenerated(timer.PredictedTokens);
 
+        var choice = toolChoice.Kind == ToolChoiceKind.ForcedFunction
+            ? BuildForcedToolChoice(toolChoice, buf.ToString())
+            : new ChatChoice
+            {
+                Index = 0,
+                Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
+                FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
+            };
+
         var response = new ChatCompletionsResponse
         {
             Id = id,
             Created = created,
             Model = host.ModelId,
-            Choices = new List<ChatChoice>
-            {
-                new() {
-                    Index = 0,
-                    Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
-                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
-                },
-            },
+            Choices = new() { choice },
             Timings = timer.Snapshot(),
         };
 
@@ -497,6 +546,102 @@ public static class ChatCompletionsEndpoint
         await http.Response.WriteAsync(json, ct);
         await http.Response.WriteAsync("\n\n", ct);
         await http.Response.Body.FlushAsync(ct);
+    }
+
+    /// <summary>
+    /// Collapse a message's rich content / tool-related fields into the
+    /// plain string the chat template sees. The binding's
+    /// <see cref="ChatMessage"/> is <c>(role, content)</c> only, so
+    /// assistant messages that carry tool_calls have their calls
+    /// serialised into the content body here — the template will render
+    /// them as prose in V1 (known limitation; some Jinja templates that
+    /// check <c>message.tool_calls</c> directly won't see the field).
+    /// </summary>
+    private static string FlattenMessageContent(ChatMessageDto m)
+    {
+        if (m.ToolCalls is { Count: > 0 })
+        {
+            // OpenAI history shape: assistant-turn tool_calls. Serialise
+            // into the content body so at least the template sees SOME
+            // representation of what the assistant did.
+            var prefix = m.Content?.Text ?? "";
+            var suffix = System.Text.Json.JsonSerializer.Serialize(m.ToolCalls);
+            return string.IsNullOrEmpty(prefix) ? suffix : prefix + "\n" + suffix;
+        }
+        return m.Content?.Text ?? "";
+    }
+
+    /// <summary>
+    /// Convert <see cref="ToolDef"/> records into the untyped shape the
+    /// Jinja template expects: a list of <c>{type: "function", function:
+    /// {name, description, parameters}}</c> dictionaries. Jinja engines
+    /// access fields by name, not by JsonPropertyName attribute, so a
+    /// direct pass-through of the DTO objects wouldn't work.
+    /// </summary>
+    private static IReadOnlyList<object?>? ToolDefsToTemplate(IReadOnlyList<ToolDef>? tools)
+    {
+        if (tools is null || tools.Count == 0) return null;
+        var result = new List<object?>(tools.Count);
+        foreach (var t in tools)
+        {
+            if (t.Function is null) continue;
+            var fn = new Dictionary<string, object?>
+            {
+                ["name"] = t.Function.Name,
+            };
+            if (!string.IsNullOrEmpty(t.Function.Description))
+            {
+                fn["description"] = t.Function.Description;
+            }
+            if (t.Function.Parameters is System.Text.Json.JsonElement p &&
+                p.ValueKind != System.Text.Json.JsonValueKind.Null &&
+                p.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+            {
+                // JsonElement is serialisable; Jinja engines that care
+                // about iteration can walk it as an object tree.
+                fn["parameters"] = p;
+            }
+            result.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "function",
+                ["function"] = fn,
+            });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Wrap the generator's raw output as a single <see cref="ToolCall"/>
+    /// when the caller forced a specific function via tool_choice. The
+    /// caller generated under a grammar that constrained output to the
+    /// function's parameters schema, so <paramref name="generatedJson"/>
+    /// is expected to parse as a valid argument object.
+    /// </summary>
+    private static ChatChoice BuildForcedToolChoice(
+        ToolChoiceDescriptor toolChoice, string generatedJson)
+    {
+        return new ChatChoice
+        {
+            Index = 0,
+            Message = new ChatMessageDto
+            {
+                Role = "assistant",
+                ToolCalls = new()
+                {
+                    new ToolCall
+                    {
+                        Id = "call_" + Guid.NewGuid().ToString("N")[..12],
+                        Type = "function",
+                        Function = new()
+                        {
+                            Name = toolChoice.ForcedTool!.Function!.Name,
+                            Arguments = generatedJson,
+                        },
+                    },
+                },
+            },
+            FinishReason = "tool_calls",
+        };
     }
 
     private static string MapFinishReason(LlamaStopReason reason) => reason switch
