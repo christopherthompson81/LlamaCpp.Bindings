@@ -133,6 +133,35 @@ public sealed class SessionPool : IDisposable
         _permits.Release();
     }
 
+    /// <summary>
+    /// Point-in-time snapshot of every slot's bookkeeping. Useful for the
+    /// <c>/slots</c> observability endpoint and for tests that need to
+    /// verify a cancelled request actually released its slot. The array
+    /// is freshly allocated so callers can hold it without racing the
+    /// pool's internal state.
+    /// </summary>
+    public SlotSnapshot[] Snapshot()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_lock)
+        {
+            var copy = new SlotSnapshot[_slots.Length];
+            for (int i = 0; i < _slots.Length; i++)
+            {
+                var s = _slots[i];
+                copy[i] = new SlotSnapshot
+                {
+                    SlotIndex = i,
+                    SequenceId = s.Session.SequenceId,
+                    InUse = s.InUse,
+                    CachedTokenCount = s.Tokens.Length,
+                    LastUsedTicks = s.LastUsedTicks,
+                };
+            }
+            return copy;
+        }
+    }
+
     /// <summary>Length of the longest prefix on which <paramref name="a"/> and <paramref name="b"/> agree.</summary>
     internal static int CommonPrefixLength(int[] a, int[] b)
     {
@@ -154,6 +183,29 @@ public sealed class SessionPool : IDisposable
         }
         _permits.Dispose();
     }
+}
+
+/// <summary>
+/// Read-only point-in-time view of one pool slot. Returned by
+/// <see cref="SessionPool.Snapshot"/>; not a live handle.
+/// </summary>
+public sealed class SlotSnapshot
+{
+    /// <summary>Zero-based slot index in the pool.</summary>
+    public int SlotIndex { get; set; }
+    /// <summary>KV sequence id this slot owns inside the shared context.</summary>
+    public int SequenceId { get; set; }
+    /// <summary>True while a request is holding this slot.</summary>
+    public bool InUse { get; set; }
+    /// <summary>Number of tokens currently in the slot's KV cache.</summary>
+    public int CachedTokenCount { get; set; }
+    /// <summary>
+    /// Process-relative timestamp (from <see cref="Environment.TickCount64"/>)
+    /// recorded the last time this slot was released. Zero before the slot
+    /// has ever been used. Compare against <c>Environment.TickCount64</c>
+    /// to derive a "ms since last use" value.
+    /// </summary>
+    public long LastUsedTicks { get; set; }
 }
 
 /// <summary>

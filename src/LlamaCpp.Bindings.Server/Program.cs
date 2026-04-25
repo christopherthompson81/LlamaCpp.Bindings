@@ -85,6 +85,13 @@ public class Program
             };
         });
 
+        // Operator visibility into the session pool: which slots are
+        // currently in use, how many cached tokens each holds, which
+        // seq_id maps to which slot. Subject to the same API-key auth
+        // gate as everything else — the snapshot reveals cache state
+        // which could leak info about what other callers have asked.
+        app.MapGet("/slots", (SessionPool pool) => pool.Snapshot());
+
         app.MapPost("/v1/chat/completions", async (
             HttpContext ctx,
             ChatCompletionsRequest req,

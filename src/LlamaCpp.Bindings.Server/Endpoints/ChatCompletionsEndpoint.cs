@@ -68,10 +68,25 @@ public static class ChatCompletionsEndpoint
         // pick a slot.
         var promptTokens = host.Model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
 
+        // Build the sampler before taking a slot so malformed logit_bias
+        // entries fail with 400 without holding the pool.
+        LlamaSampler sampler;
+        try
+        {
+            sampler = SamplerFactory.Build(
+                host.Model.Vocab, req.Temperature, req.TopK, req.TopP, req.Seed, req.LogitBias);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
         // Lease a slot (may queue). The lease carries FirstNewIndex = how
         // many of these tokens are already in KV from the last request.
         using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
-        using var sampler = BuildSampler(req);
+        using var _ = sampler; // dispose sampler with the request, not earlier.
         var generator = new LlamaGenerator(lease.Session, sampler);
 
         // Prototype observability header — tells callers how many prompt
@@ -90,22 +105,6 @@ public static class ChatCompletionsEndpoint
         {
             await WriteSingleJson(http, generator, lease, maxTokens, host, completionId, createdUnix, cancellationToken);
         }
-    }
-
-    private static LlamaSampler BuildSampler(ChatCompletionsRequest req)
-    {
-        var b = new LlamaSamplerBuilder();
-        if (req.TopK is int k && k > 0) b = b.WithTopK(k);
-        if (req.TopP is float p && p is > 0f and < 1f) b = b.WithTopP(p);
-        // A temperature of 0 collapses to greedy — short-circuit so the chain
-        // doesn't include a degenerate temp=0 stage before a distribution
-        // sampler (which would be slower for the same result).
-        float temp = req.Temperature ?? 0f;
-        if (temp <= 0f)
-        {
-            return b.WithGreedy().Build();
-        }
-        return b.WithTemperature(temp).WithDistribution(req.Seed ?? 0u).Build();
     }
 
     // ----- Non-streaming: collect all pieces into one response body. -----

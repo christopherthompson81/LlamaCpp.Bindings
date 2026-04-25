@@ -39,8 +39,21 @@ public static class CompletionEndpoint
         // for raw /completion calls.
         var promptTokens = host.Model.Vocab.Tokenize(req.Prompt, addSpecial: true, parseSpecial: false);
 
+        LlamaSampler sampler;
+        try
+        {
+            sampler = SamplerFactory.Build(
+                host.Model.Vocab, req.Temperature, req.TopK, req.TopP, req.Seed, req.LogitBias);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
         using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
-        using var sampler = BuildSampler(req);
+        using var _ = sampler;
         var generator = new LlamaGenerator(lease.Session, sampler);
 
         http.Response.Headers["X-Cached-Tokens"] = lease.CachedTokens.ToString();
@@ -96,16 +109,6 @@ public static class CompletionEndpoint
             http.Response.ContentType = "application/json";
             await http.Response.WriteAsJsonAsync(body, cancellationToken: cancellationToken);
         }
-    }
-
-    private static LlamaSampler BuildSampler(CompletionRequest req)
-    {
-        var b = new LlamaSamplerBuilder();
-        if (req.TopK is int k && k > 0) b = b.WithTopK(k);
-        if (req.TopP is float p && p is > 0f and < 1f) b = b.WithTopP(p);
-        float temp = req.Temperature ?? 0f;
-        if (temp <= 0f) return b.WithGreedy().Build();
-        return b.WithTemperature(temp).WithDistribution(req.Seed ?? 0u).Build();
     }
 
     private static string MapStopReason(LlamaStopReason r) => r switch

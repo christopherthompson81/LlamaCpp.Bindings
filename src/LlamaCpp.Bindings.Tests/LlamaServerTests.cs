@@ -374,6 +374,185 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.False(string.IsNullOrWhiteSpace(results[1]));
     }
 
+    // ----- /slots observability -----
+
+    [Fact]
+    public async Task Slots_Reports_Pool_Size_And_Shape()
+    {
+        var client = _factory.CreateClient();
+        var slots = await client.GetFromJsonAsync<LlamaCpp.Bindings.Server.Services.SlotSnapshot[]>(
+            "/slots", TestContext.Current.CancellationToken);
+        Assert.NotNull(slots);
+        // Factory configures MaxSequenceCount=2, so the pool has 2 slots.
+        Assert.Equal(2, slots!.Length);
+        Assert.Equal(0, slots[0].SlotIndex);
+        Assert.Equal(1, slots[1].SlotIndex);
+        // Sequence ids must be distinct within the pool.
+        Assert.NotEqual(slots[0].SequenceId, slots[1].SequenceId);
+    }
+
+    [Fact]
+    public async Task Slots_Show_CachedTokens_After_A_Completion()
+    {
+        var client = _factory.CreateClient();
+        var marker = Guid.NewGuid().ToString("N");
+        await client.PostAsJsonAsync("/v1/chat/completions", new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"slots-marker-{marker}" } },
+            MaxTokens = 3,
+        }, TestContext.Current.CancellationToken);
+
+        var slots = await client.GetFromJsonAsync<LlamaCpp.Bindings.Server.Services.SlotSnapshot[]>(
+            "/slots", TestContext.Current.CancellationToken);
+        Assert.NotNull(slots);
+        Assert.All(slots!, s => Assert.False(s.InUse));
+        // At least one slot should hold some cached tokens after a request.
+        Assert.Contains(slots, s => s.CachedTokenCount > 0);
+    }
+
+    // ----- logit_bias -----
+
+    [Fact]
+    public async Task LogitBias_Rejects_Non_Numeric_Key()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "hello" } },
+            MaxTokens = 2,
+            LogitBias = new() { ["not-a-number"] = -100f },
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task LogitBias_Rejects_Out_Of_Range_Token()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "hello" } },
+            MaxTokens = 2,
+            LogitBias = new() { ["99999999"] = -100f },
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task LogitBias_Changes_Output_Tokens()
+    {
+        // Greedy baseline run collects the first generated text. Then we
+        // repeat with a -100 bias on the first tokens of that output — the
+        // model is forced to pick something else. Proves the bias actually
+        // reaches the sampler; a no-op implementation would produce the
+        // same text twice.
+        var client = _factory.CreateClient();
+        var marker = Guid.NewGuid().ToString("N");
+        var baseReq = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"Say 'hi'. ({marker})" } },
+            MaxTokens = 3,
+            Temperature = 0.0f,
+        };
+        var baseResp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", baseReq, TestContext.Current.CancellationToken);
+        baseResp.EnsureSuccessStatusCode();
+        var baseline = await baseResp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        var baseText = baseline!.Choices[0].Message.Content;
+        Assert.False(string.IsNullOrEmpty(baseText), "baseline produced empty output");
+
+        // Tokenize the baseline output via the /completion endpoint's vocab
+        // indirectly — we don't expose a tokenize endpoint, but we can grab
+        // any token id in the model's range by just banning a huge chunk
+        // below 1024. Pick token ids in the common ASCII / punctuation range
+        // that are near-guaranteed to appear in the first few generated
+        // tokens of a "hi"-style reply.
+        var banned = new Dictionary<string, float>();
+        for (int i = 0; i < 2000; i++) banned[i.ToString()] = -100f;
+
+        var biasedReq = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"Say 'hi'. ({marker})" } },
+            MaxTokens = 3,
+            Temperature = 0.0f,
+            LogitBias = banned,
+        };
+        var biasedResp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", biasedReq, TestContext.Current.CancellationToken);
+        biasedResp.EnsureSuccessStatusCode();
+        var biased = await biasedResp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(baseText, biased!.Choices[0].Message.Content);
+    }
+
+    // ----- Client-disconnect cancellation releases the pool slot -----
+
+    [Fact]
+    public async Task Cancelled_Stream_Releases_Pool_Slot()
+    {
+        // Streaming requests are the path where a misbehaving
+        // RequestAborted propagation would leak slots — a dropped client
+        // mid-stream should cancel the generator and release its session.
+        // We simulate the drop by cancelling the client's own CTS partway
+        // through the SSE stream, then poll /slots and expect no slot to
+        // still be marked InUse.
+        var client = _factory.CreateClient();
+        using var cts = new CancellationTokenSource();
+
+        using var httpReq = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent.Create(new ChatCompletionsRequest
+            {
+                Messages = new() { new() { Role = "user", Content = $"Count slowly. ({Guid.NewGuid():N})" } },
+                MaxTokens = 64,
+                Stream = true,
+            }),
+        };
+
+        var streamTask = client.SendAsync(
+            httpReq, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        using var resp = await streamTask;
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+
+        using (var stream = await resp.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken))
+        using (var reader = new StreamReader(stream))
+        {
+            // Read a couple of chunks to prove the stream has actually
+            // started producing, then cancel.
+            int dataLines = 0;
+            while (dataLines < 2)
+            {
+                var line = await reader.ReadLineAsync(TestContext.Current.CancellationToken);
+                if (line is null) break;
+                if (line.StartsWith("data: ")) dataLines++;
+            }
+            cts.Cancel();
+        }
+
+        // Poll /slots until InUse drops to false across all slots — give
+        // the server a generous window (generation loop observes the
+        // cancellation on the next iteration, plus lease dispose takes a
+        // moment). If cancellation isn't propagated this will time out.
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var slots = await client.GetFromJsonAsync<LlamaCpp.Bindings.Server.Services.SlotSnapshot[]>(
+                "/slots", TestContext.Current.CancellationToken);
+            if (slots!.All(s => !s.InUse))
+            {
+                return; // success
+            }
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }
+        Assert.Fail("A slot remained marked InUse more than 10 seconds after the client cancelled — pool leak.");
+    }
+
     // ----- /v1/embeddings: 501 when no embedding model is configured -----
 
     [Fact]

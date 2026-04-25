@@ -34,6 +34,16 @@ public sealed class ChatCompletionsRequest
 
     [JsonPropertyName("stream")]
     public bool Stream { get; set; }
+
+    /// <summary>
+    /// OpenAI-style per-token logit bias map. Keys are token ids (as
+    /// strings, since JSON object keys are strings); values are floats
+    /// added to the raw logit before sampling. The canonical idiom:
+    /// <c>-100</c> effectively bans a token, <c>+100</c> strongly
+    /// favours it. Absent or empty = no biasing.
+    /// </summary>
+    [JsonPropertyName("logit_bias")]
+    public Dictionary<string, float>? LogitBias { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -141,6 +151,10 @@ public sealed class CompletionRequest
 
     [JsonPropertyName("stream")]
     public bool Stream { get; set; }
+
+    /// <summary>Per-token logit bias, same semantics as <see cref="ChatCompletionsRequest.LogitBias"/>.</summary>
+    [JsonPropertyName("logit_bias")]
+    public Dictionary<string, float>? LogitBias { get; set; }
 }
 
 public sealed class CompletionResponse
