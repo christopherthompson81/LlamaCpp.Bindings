@@ -980,12 +980,97 @@ public sealed class LlamaContext : IDisposable
         }
     }
 
+    // ----- Multi-session support (Tier 3 / issue #5) -----
+    //
+    // The native context reserves a fixed number of sequence-id slots
+    // (MaxSequenceCount, set at context creation). CreateSession hands out
+    // the next free slot so callers can run isolated conversations against
+    // the same shared model weights. The lock below serializes the one API
+    // that can't be called concurrently on a single context: llama_decode.
+    // Callers that stick to a single session per thread don't notice it;
+    // callers that drive two sessions from two threads have their decodes
+    // cooperatively interleaved rather than corrupting each other.
+
+    private readonly HashSet<int> _liveSessions = new();
+    private readonly System.Threading.SemaphoreSlim _decodeLock = new(1, 1);
+
+    /// <summary>
+    /// Allocate a new <see cref="LlamaSession"/> backed by the next free
+    /// sequence slot in this context. Throws if every slot (up to
+    /// <see cref="MaxSequenceCount"/>) is already in use — sessions must
+    /// be disposed to return their slot to the pool.
+    /// </summary>
+    /// <remarks>
+    /// <para>When <see cref="MaxSequenceCount"/> is 1 the only available
+    /// slot is <c>seq_id = 0</c>, which is also the slot the legacy
+    /// <see cref="LlamaGenerator(LlamaContext, LlamaSampler)"/> ctor targets
+    /// implicitly. Creating a session there will succeed once, but running
+    /// the legacy generator at the same time would step on the session's
+    /// KV state. For multi-session workloads, set
+    /// <see cref="LlamaContextParameters.MaxSequenceCount"/> &gt; 1 up front.</para>
+    /// </remarks>
+    public LlamaSession CreateSession()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_liveSessions)
+        {
+            for (int id = 0; id < MaxSequenceCount; id++)
+            {
+                if (_liveSessions.Add(id))
+                {
+                    return new LlamaSession(this, id);
+                }
+            }
+        }
+        throw new InvalidOperationException(
+            $"All {MaxSequenceCount} sequence slots are in use. Dispose an existing " +
+            "LlamaSession before creating another, or rebuild the context with a higher " +
+            "LlamaContextParameters.MaxSequenceCount.");
+    }
+
+    internal void ReleaseSession(LlamaSession session)
+    {
+        if (session is null) return;
+        lock (_liveSessions)
+        {
+            _liveSessions.Remove(session.SequenceId);
+        }
+    }
+
+    /// <summary>
+    /// Internal gate around calls that mutate the native context's shared
+    /// logits buffer — i.e. <c>llama_decode</c> and any sampler call that
+    /// reads logits produced by that decode. Generator loops acquire this
+    /// for the decode+sample pair so another session's decode can't
+    /// overwrite the logits mid-flight.
+    /// </summary>
+    internal async Task WithDecodeLockAsync(Action action, CancellationToken cancellationToken)
+    {
+        await _decodeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { action(); }
+        finally { _decodeLock.Release(); }
+    }
+
+    /// <summary>
+    /// Typed variant of <see cref="WithDecodeLockAsync(Action, CancellationToken)"/>
+    /// for calls that compute a value under the lock (e.g. sample + decode →
+    /// returned token id).
+    /// </summary>
+    internal async Task<T> WithDecodeLockAsync<T>(Func<T> action, CancellationToken cancellationToken)
+    {
+        await _decodeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return action(); }
+        finally { _decodeLock.Release(); }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _memoryHandleCache = IntPtr.Zero;
         _activeAdapters.Clear();
+        lock (_liveSessions) { _liveSessions.Clear(); }
+        _decodeLock.Dispose();
         _handle.Dispose();
     }
 }

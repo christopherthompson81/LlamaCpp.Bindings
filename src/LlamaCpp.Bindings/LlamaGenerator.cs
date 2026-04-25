@@ -20,13 +20,37 @@ public sealed class LlamaGenerator
 {
     private readonly LlamaContext _context;
     private readonly LlamaSampler _sampler;
+    private readonly int _sequenceId;
 
+    /// <summary>
+    /// Build a generator bound to <paramref name="context"/>'s implicit
+    /// sequence 0. This is the original single-conversation ctor and the
+    /// default when the context was created with
+    /// <see cref="LlamaContextParameters.MaxSequenceCount"/> = 1.
+    /// </summary>
     public LlamaGenerator(LlamaContext context, LlamaSampler sampler)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(sampler);
         _context = context;
         _sampler = sampler;
+        _sequenceId = 0;
+    }
+
+    /// <summary>
+    /// Build a generator bound to a specific <see cref="LlamaSession"/>.
+    /// Tokens decoded, sampled, and yielded by this generator live in the
+    /// session's dedicated sequence slot — concurrent sessions on the same
+    /// context can run this ctor's output side-by-side without their
+    /// histories colliding.
+    /// </summary>
+    public LlamaGenerator(LlamaSession session, LlamaSampler sampler)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(sampler);
+        _context = session.Context;
+        _sampler = sampler;
+        _sequenceId = session.SequenceId;
     }
 
     /// <summary>
@@ -111,11 +135,34 @@ public sealed class LlamaGenerator
         int emitted = 0;
         LastStopReason = LlamaStopReason.None;
 
+        // Sample/decode pairs serialize through the context's decode lock so
+        // a second session driving the same context can't clobber our
+        // last-position logits between our decode and our sample. See
+        // LlamaContext.WithDecodeLockAsync.
+        int? prev = null;
         while (emitted < maxTokens)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            int nextToken = await Task.Run(() => _sampler.Sample(_context), cancellationToken).ConfigureAwait(false);
+            int nextToken;
+            if (prev is null)
+            {
+                // First sample — logits are already in the buffer from the
+                // caller's prior decode. Take the lock anyway so we're not
+                // racing with another session's decode between now and our
+                // sampler.Sample call.
+                nextToken = await _context.WithDecodeLockAsync(
+                    () => _sampler.Sample(_context), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                int prevTok = prev.Value;
+                nextToken = await _context.WithDecodeLockAsync(() =>
+                {
+                    DecodeSingleToken(prevTok);
+                    return _sampler.Sample(_context);
+                }, cancellationToken).ConfigureAwait(false);
+            }
 
             if (vocab.IsEndOfGeneration(nextToken))
             {
@@ -145,8 +192,19 @@ public sealed class LlamaGenerator
                 yield break;
             }
 
-            await Task.Run(() => DecodeSingleToken(nextToken), cancellationToken).ConfigureAwait(false);
+            prev = nextToken;
             emitted++;
+        }
+
+        // Hit maxTokens: the last emitted token still needs to land in KV so
+        // the context's state matches the contract the pre-multi-session
+        // path promised ("every emitted token ends up decoded unless we
+        // stopped on EOG"). Decode it under the lock.
+        if (prev.HasValue)
+        {
+            int finalPrev = prev.Value;
+            await _context.WithDecodeLockAsync(
+                () => DecodeSingleToken(finalPrev), cancellationToken).ConfigureAwait(false);
         }
 
         int trailing = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
@@ -208,58 +266,61 @@ public sealed class LlamaGenerator
             suffixArray[i] = promptTokens[skipCount + i];
         }
 
+        // 1-2) Prompt decode and first sample under a single lock acquire. A
+        // second session decoding between our DecodePromptBatch and our
+        // first sampler.Sample would give us their logits instead of ours —
+        // serializing the pair eliminates that window.
         cancellationToken.ThrowIfCancellationRequested();
-        await Task.Run(() => DecodePromptBatch(suffixArray), cancellationToken).ConfigureAwait(false);
+        int firstToken = await _context.WithDecodeLockAsync(() =>
+        {
+            DecodePromptBatch(suffixArray);
+            // Prime the sampler chain with the full prompt — even the part
+            // that was cached. Mirrors llama.cpp's common_sampler_accept with
+            // accept_grammar=false: penalties / DRY must see the prompt so
+            // they treat repetition of prompt words as repetition. Grammar
+            // is intentionally NOT primed here — it only constrains
+            // generation, and since e1423ef the grammar is held outside the
+            // chain, so this loop can't accidentally touch it.
+            foreach (var t in promptTokens) _sampler.Accept(t);
+            // llama_sampler_sample already does apply + select + accept
+            // internally. Do NOT call _sampler.Accept(nextToken) after —
+            // that double-advances stateful stages (grammar, penalties).
+            return _sampler.Sample(_context);
+        }, cancellationToken).ConfigureAwait(false);
 
-        // Prime the sampler chain with the full prompt — even the part that
-        // was cached. Mirrors llama.cpp's common_sampler_accept(.., accept_grammar=false)
-        // for prompt tokens: penalties (and any other history-aware sampler)
-        // must see the prompt so they treat repetition of prompt words as
-        // repetition. Grammar is intentionally NOT primed here — it only
-        // constrains generation, and since e1423ef the grammar is held
-        // outside the chain, so this loop can't accidentally touch it.
-        foreach (var t in promptTokens) _sampler.Accept(t);
-
-        // 2) Sampling loop. At each step: sample one token from the logits of
-        //    the last decoded position; accept it into sampler state; exit on
-        //    EOG; otherwise decode the single-token batch and emit the piece.
+        // 3) Sampling loop. Each iteration: emit the most recent sample;
+        //    if we're continuing, atomically decode that sample and produce
+        //    the next one under the same lock acquire.
         var decoder = Encoding.UTF8.GetDecoder();
         var charBuf = new char[64];
-        var byteBuf = new byte[1];
         int emitted = 0;
         LastStopReason = LlamaStopReason.None;
+        int currentToken = firstToken;
 
         while (emitted < maxTokens)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // llama_sampler_sample already does apply + select + accept
-            // internally. Do NOT call _sampler.Accept(nextToken) after — that
-            // double-advances stateful stages (grammar, penalties). The
-            // double-accept on grammar was fatal ("empty grammar stack"
-            // runtime_error) once the grammar got close to completion.
-            int nextToken = await Task.Run(() => _sampler.Sample(_context), cancellationToken).ConfigureAwait(false);
-
-            if (vocab.IsEndOfGeneration(nextToken))
+            if (vocab.IsEndOfGeneration(currentToken))
             {
-                // Flush any bytes buffered in the decoder (rare at EOG but possible).
+                // EOG token is NOT decoded into KV — matches the pre-multi-
+                // session contract that the model's requested stop point
+                // doesn't land as a live token in the cache.
                 int finalChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
                 if (finalChars > 0) yield return new string(charBuf, 0, finalChars);
                 LastStopReason = LlamaStopReason.EndOfGeneration;
                 yield break;
             }
 
-            // TokenToPiece handles UTF-8 correctly but a single token may be a
-            // partial multi-byte sequence (very common for CJK, emoji). Feed
-            // the raw bytes into an incremental UTF-8 decoder so we only yield
-            // complete characters — partial bytes stay buffered until the
-            // next token completes them.
-            var pieceBytes = GetPieceBytes(nextToken, renderSpecialPieces);
+            // TokenToPiece handles UTF-8 correctly but a single token may be
+            // a partial multi-byte sequence (very common for CJK, emoji).
+            // Feed the raw bytes into an incremental UTF-8 decoder so we
+            // only yield complete characters — partial bytes stay buffered
+            // until the next token completes them.
+            var pieceBytes = GetPieceBytes(currentToken, renderSpecialPieces);
             if (pieceBytes.Length > 0)
             {
                 int charCount = decoder.GetChars(pieceBytes, charBuf, flush: false);
-                // Buffer may need to grow for unusually long pieces (thousand-character
-                // tokens don't exist in practice, but be defensive).
                 while (charCount == 0 && pieceBytes.Length > charBuf.Length)
                 {
                     Array.Resize(ref charBuf, pieceBytes.Length * 2);
@@ -280,21 +341,32 @@ public sealed class LlamaGenerator
                 yield break;
             }
 
-            // Feed the accepted token back into the context as a 1-token batch
-            // so the next decode attends over it. The onTokenDecoded callback
-            // fires immediately after — callers (e.g. ChatSession's prompt-
-            // cache tracker) can append to their "what's in the KV" log here
-            // knowing the token is now actually in the cache.
-            await Task.Run(() => DecodeSingleToken(nextToken), cancellationToken).ConfigureAwait(false);
-            onTokenDecoded?.Invoke(nextToken);
-
             emitted++;
+            if (emitted >= maxTokens) break;
+
+            int tokenToDecode = currentToken;
+            currentToken = await _context.WithDecodeLockAsync(() =>
+            {
+                DecodeSingleToken(tokenToDecode);
+                return _sampler.Sample(_context);
+            }, cancellationToken).ConfigureAwait(false);
+            // onTokenDecoded fires outside the lock so a slow callback can't
+            // throttle other sessions. By the time we're here the token is
+            // already committed to KV.
+            onTokenDecoded?.Invoke(tokenToDecode);
         }
 
+        // Hit maxTokens: the last emitted token is in `currentToken` and has
+        // NOT been decoded yet. The pre-multi-session contract was "every
+        // emitted token lands in KV unless we stopped on EOG", so decode it
+        // now so the context's state matches what callers expect.
+        await _context.WithDecodeLockAsync(
+            () => DecodeSingleToken(currentToken), cancellationToken).ConfigureAwait(false);
+        onTokenDecoded?.Invoke(currentToken);
+
         // Flush any residual buffered bytes if we hit the maxTokens cap mid-char.
-        int trailing = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
-        if (trailing > 0) yield return new string(charBuf, 0, trailing);
-        _ = byteBuf; // silence unused warning if the compiler notices
+        int trailing2 = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuf.AsSpan(), flush: true);
+        if (trailing2 > 0) yield return new string(charBuf, 0, trailing2);
         LastStopReason = LlamaStopReason.MaxTokens;
     }
 
@@ -303,40 +375,130 @@ public sealed class LlamaGenerator
         // llama.cpp asserts n_tokens_all <= cparams.n_batch inside
         // llama_decode and crashes the process with GGML_ASSERT if we exceed
         // it — an uncatchable abort. Chunk into ≤ n_batch slices and decode
-        // each sequentially. llama_batch_get_one auto-positions from the
-        // current KV tail, so each chunk lands after the previous one.
+        // each sequentially.
+        //
+        // For the legacy seq_id=0 path we stay on llama_batch_get_one so the
+        // fast default-path behaviour (no managed-side batch allocation) is
+        // preserved exactly. For any other seq_id we build an explicit batch
+        // via llama_batch_init + manual seq_id / position fill, since
+        // batch_get_one hard-codes seq 0.
         int batchCap = Math.Max(1, _context.LogicalBatchSize);
         int offset = 0;
-        while (offset < tokens.Length)
+
+        if (_sequenceId == 0)
         {
-            int take = Math.Min(batchCap, tokens.Length - offset);
-            fixed (int* tokPtr = &tokens[offset])
+            while (offset < tokens.Length)
             {
-                var batch = NativeMethods.llama_batch_get_one(tokPtr, take);
-                var rc = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batch);
+                int take = Math.Min(batchCap, tokens.Length - offset);
+                fixed (int* tokPtr = &tokens[offset])
+                {
+                    var batch = NativeMethods.llama_batch_get_one(tokPtr, take);
+                    var rc = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batch);
+                    if (rc != 0)
+                    {
+                        throw new LlamaException(
+                            nameof(NativeMethods.llama_decode), rc,
+                            $"llama_decode returned {rc} for a {take}-token prompt chunk " +
+                            $"(offset {offset}/{tokens.Length}). " +
+                            (rc == 1 ? "Code 1 = no KV slot; reduce prompt size or increase context." : ""));
+                    }
+                }
+                offset += take;
+            }
+            return;
+        }
+
+        // Non-zero sequence: managed-side batch. Position starts at the
+        // sequence's current KV tail (or 0 if empty) and advances per chunk.
+        var range = _context.SequencePositionRange(_sequenceId);
+        int basePos = range.Maximum.HasValue ? range.Maximum.Value + 1 : 0;
+
+        var batchHandle = NativeMethods.llama_batch_init(batchCap, embd: 0, n_seq_max: 1);
+        try
+        {
+            while (offset < tokens.Length)
+            {
+                int take = Math.Min(batchCap, tokens.Length - offset);
+                PopulateBatch(ref batchHandle, tokens, offset, take, basePos + offset, _sequenceId, logitsOnLast: true);
+                var rc = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batchHandle);
                 if (rc != 0)
                 {
                     throw new LlamaException(
                         nameof(NativeMethods.llama_decode), rc,
-                        $"llama_decode returned {rc} for a {take}-token prompt chunk " +
+                        $"llama_decode returned {rc} for a {take}-token prompt chunk on seq_id {_sequenceId} " +
                         $"(offset {offset}/{tokens.Length}). " +
                         (rc == 1 ? "Code 1 = no KV slot; reduce prompt size or increase context." : ""));
                 }
+                offset += take;
             }
-            offset += take;
+        }
+        finally
+        {
+            NativeMethods.llama_batch_free(batchHandle);
         }
     }
 
     private unsafe void DecodeSingleToken(int token)
     {
-        var tokens = stackalloc int[1]; tokens[0] = token;
-        var batch = NativeMethods.llama_batch_get_one(tokens, 1);
-        var rc = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batch);
-        if (rc != 0)
+        if (_sequenceId == 0)
         {
-            throw new LlamaException(
-                nameof(NativeMethods.llama_decode), rc,
-                $"llama_decode returned {rc} during generation step.");
+            var tokens = stackalloc int[1]; tokens[0] = token;
+            var batch = NativeMethods.llama_batch_get_one(tokens, 1);
+            var rc = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batch);
+            if (rc != 0)
+            {
+                throw new LlamaException(
+                    nameof(NativeMethods.llama_decode), rc,
+                    $"llama_decode returned {rc} during generation step.");
+            }
+            return;
+        }
+
+        var range = _context.SequencePositionRange(_sequenceId);
+        int nextPos = range.Maximum.HasValue ? range.Maximum.Value + 1 : 0;
+
+        var batchHandle = NativeMethods.llama_batch_init(1, embd: 0, n_seq_max: 1);
+        try
+        {
+            var arr = new[] { token };
+            PopulateBatch(ref batchHandle, arr, 0, 1, nextPos, _sequenceId, logitsOnLast: true);
+            var rc2 = NativeMethods.llama_decode(_context.Handle.DangerousHandle, batchHandle);
+            if (rc2 != 0)
+            {
+                throw new LlamaException(
+                    nameof(NativeMethods.llama_decode), rc2,
+                    $"llama_decode returned {rc2} during generation step on seq_id {_sequenceId}.");
+            }
+        }
+        finally
+        {
+            NativeMethods.llama_batch_free(batchHandle);
+        }
+    }
+
+    private static unsafe void PopulateBatch(
+        ref Native.llama_batch batch, int[] tokens, int offset, int count,
+        int basePos, int seqId, bool logitsOnLast)
+    {
+        // batch was allocated via llama_batch_init with n_seq_max = 1, so
+        // each seq_id[i] points to a one-element array we can dereference
+        // directly. Pass by ref so the caller sees the updated n_tokens —
+        // llama_batch is a value struct; without ref we'd mutate a copy and
+        // llama_decode would see stale n_tokens.
+        batch.n_tokens = count;
+        var tokPtr   = (int*)batch.token;
+        var posPtr   = (int*)batch.pos;
+        var nSeqPtr  = (int*)batch.n_seq_id;
+        var seqIdArr = (int**)batch.seq_id;
+        var logits   = (sbyte*)batch.logits;
+
+        for (int i = 0; i < count; i++)
+        {
+            tokPtr[i]     = tokens[offset + i];
+            posPtr[i]     = basePos + i;
+            nSeqPtr[i]    = 1;
+            seqIdArr[i][0] = seqId;
+            logits[i]     = (sbyte)(logitsOnLast && i == count - 1 ? 1 : 0);
         }
     }
 
