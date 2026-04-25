@@ -386,7 +386,8 @@ public static class ChatCompletionsEndpoint
 
         // Lease a slot (may queue). The lease carries FirstNewIndex = how
         // many of these tokens are already in KV from the last request.
-        using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
+        using var lease = await pool.LeaseAsync(
+            promptTokens, cancellationToken, useCache: req.CachePrompt ?? true);
         using var _ = sampler; // dispose sampler with the request, not earlier.
         var generator = new LlamaGenerator(lease.Session, sampler);
 

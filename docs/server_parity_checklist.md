@@ -176,9 +176,11 @@ Features clients expect from the OpenAI chat-completions API.
   data chunk.
 - [x] **`grammar`**, **`json_schema`**, **`response_format`** — share
   the `GrammarFactory` + `SamplerFactory` path with the chat endpoint.
-- [ ] **`cache_prompt`** — currently always on (prompt cache is
-  unconditional). llama-server lets clients opt out per request. Needs a
-  bool field; when false, skip the LCP match and claim a fresh-state slot.
+- [x] **`cache_prompt`** — `cache_prompt` field on chat + completion
+  requests (default `true`). When `false`, `SessionPool.LeaseAsync`
+  forces match=0 across all free slots and tiebreaks to LRU, so the
+  request runs against the coldest available slot and `X-Cached-Tokens`
+  reports 0. Useful for determinism testing.
 - [~] **`image_data`** — multimodal side of `/completion`. V1 ships
   images through the chat endpoint only; the raw `/completion` path
   has no template to splice a media marker into. Lower priority.
@@ -279,11 +281,14 @@ Features clients expect from the OpenAI chat-completions API.
 - [x] **`--mmproj-offload`**, **`--image-min-tokens`**,
   **`--image-max-tokens`** — exposed as `MmprojOnCpu`,
   `MmprojImageMinTokens`, `MmprojImageMaxTokens`.
-- [ ] **`--mmproj-auto`** — probe for a sibling mmproj file next to
-  the chat model. Cheap filename convention check; not yet wired.
-- [ ] **Remote-URL image fetch** — `image_url.url` fields with
-  `http(s)://` schemes currently 400. Needs a download manager with
-  size caps + content-type sniffing; follow-up to #19.
+- [x] **`--mmproj-auto`** — `ServerOptions.MmprojAuto`. When
+  <c>MmprojPath</c> is unset and this is <c>true</c>, look for a
+  single sibling matching <c>mmproj-*.gguf</c> or
+  <c>*.mmproj.gguf</c>. Multiple matches log a warning and skip
+  (forcing the operator to disambiguate); zero matches falls through
+  to "no mmproj loaded".
+- [#27] **Remote-URL image fetch** — tracked in GH #27 with the SSRF /
+  size-cap / content-type-sniff design considerations spelled out.
 
 ## 8. Speculative decoding
 
@@ -404,15 +409,16 @@ dependency) to deserve its own thread:
 | 24 | Server: detect tool-call wrappers in auto-mode chat output | §3 |
 | 25 | Server: render assistant tool_calls in history through the chat template directly | §3 |
 | 26 | Server: tool_choice="required" (any-tool) needs GBNF union across schemas | §3 |
+| 27 | Server: remote-URL image fetch for /v1/chat/completions | §7 |
 
 ## Summary counts
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 74 | shipped, tested |
+| `[x]` done | 76 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 0 | binding work first |
-| `[#NN]` tracked | 9 | dedicated issue |
+| `[#NN]` tracked | 10 | dedicated issue |
 | `[!]` won't | 9 | explicit non-goal |
 
 ## Remaining `[ ]` TODO items
@@ -421,12 +427,10 @@ None. Every "binding already exposes; server-side wiring only" row is
 shipped. What's left lives in the binding-blocked, tracked-issues, and
 non-goal columns above.
 
-Deliberate skips (logged here for memory rather than re-discussion):
-
-- §4: `cache_prompt` opt-out — the SessionPool's prefix matching is
-  cheap; per-request opt-out is a knob looking for a use case.
-- §7: `--mmproj-auto`, remote-URL image fetch — both are usability
-  niceties, not parity gaps.
+Deliberate skips: none currently. Earlier-skipped rows
+(`cache_prompt`, `--mmproj-auto`) shipped after re-evaluation;
+remote-URL image fetch was reclassified as a real protocol gap and
+moved to GH #27.
 
 ## Recommended order of attack
 
@@ -435,16 +439,11 @@ observability, cancellation, extended sampling, multimodal, tool
 calling, logprobs, rerank) are all shipped. What's left is operator-
 ergonomic polish + binding-blocked features.
 
-All "binding already exposes" items are now wired, and every
-binding-blocked row has shipped its binding work. What remains:
-
-1. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
-   probe) and remote-URL image fetch (needs a download manager with
-   size caps + content-type sniffing). Both usability rather than
-   parity.
-2. **Tracked GitHub issues** — see the table above. #14 (DeepMind
-   rejection-sampling for speculative) is the largest remaining
-   feature; #22 (SSL e2e test) is the smallest.
+Every row outside the dedicated-issue and won't-implement columns is
+shipped. The only remaining work lives under tracked GH issues; #14
+(DeepMind rejection-sampling for speculative) is the largest, #22
+(SSL e2e test) the smallest, and #27 (remote-URL image fetch) carries
+the most design surface for new code.
 
 Parity, in the sense of "any feature llama-server has that we don't
-deliberately decline," is essentially done.
+deliberately decline," is done.

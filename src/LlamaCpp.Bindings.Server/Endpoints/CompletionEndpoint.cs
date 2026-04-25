@@ -144,7 +144,8 @@ public static class CompletionEndpoint
 
         var matcher = new StopMatcher(stops);
 
-        using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
+        using var lease = await pool.LeaseAsync(
+            promptTokens, cancellationToken, useCache: req.CachePrompt ?? true);
         using var _ = sampler;
         var generator = new LlamaGenerator(lease.Session, sampler);
 

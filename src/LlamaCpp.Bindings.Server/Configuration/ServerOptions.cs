@@ -290,6 +290,14 @@ public sealed class ServerOptions
     public string? MmprojPath { get; set; }
 
     /// <summary>
+    /// When <c>MmprojPath</c> is unset and this is <c>true</c>, look for a
+    /// sibling <c>mmproj-*.gguf</c> file in the same directory as the
+    /// main model and use it automatically. Multiple matches log a
+    /// warning and fall through to "no mmproj loaded" rather than guess.
+    /// </summary>
+    public bool MmprojAuto { get; set; } = false;
+
+    /// <summary>
     /// Run mmproj encoder on CPU even when the main model is GPU-offloaded.
     /// Some vision encoders (Gemma-3, Qwen2.5-VL) only have CPU paths in
     /// llama.cpp at the moment; others benefit from shared GPU memory.

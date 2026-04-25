@@ -2359,6 +2359,105 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// MmprojAuto sibling-file probe + cache_prompt opt-out. Two small
+/// behaviour tests over the default factory so the rest of the suite
+/// isn't disturbed.
+/// </summary>
+public class LlamaServerMmprojAutoTests : IClassFixture<LlamaServerMmprojAutoTests.AutoFactory>
+{
+    private readonly AutoFactory _factory;
+    public LlamaServerMmprojAutoTests(AutoFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task MmprojAuto_With_No_Sibling_Boots_Without_Multimodal()
+    {
+        // The default test model is text-only — there's no sibling
+        // mmproj-*.gguf next to it. MmprojAuto should silently fall
+        // through to "no mmproj loaded" and chat should still work;
+        // image requests would still 400, which we don't verify here
+        // because that's covered by the existing multimodal tests.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    public sealed class AutoFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]       = modelPath,
+                    ["LlamaServer:ContextSize"]     = "1024",
+                    ["LlamaServer:MaxSequenceCount"] = "1",
+                    ["LlamaServer:GpuLayerCount"]   = "-1",
+                    ["LlamaServer:OffloadKqv"]      = "true",
+                    ["LlamaServer:MaxOutputTokens"] = "16",
+                    ["LlamaServer:MmprojAuto"]      = "true",
+                    ["LlamaServer:Urls"]            = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
+/// cache_prompt opt-out. Sends the same prompt twice on a 1-slot pool;
+/// the second request normally reports a non-zero X-Cached-Tokens, but
+/// with cache_prompt=false it should report 0.
+/// </summary>
+public class LlamaServerCachePromptTests : IClassFixture<LlamaServerTests.Factory>
+{
+    private readonly LlamaServerTests.Factory _factory;
+    public LlamaServerCachePromptTests(LlamaServerTests.Factory factory) => _factory = factory;
+
+    [Fact]
+    public async Task CachePrompt_False_Reports_Zero_Cached_Tokens()
+    {
+        var client = _factory.CreateClient();
+        const string prompt = "List three primary colors.";
+
+        // Warm the pool with a normal request so the same prompt is
+        // sitting in some slot's KV.
+        var warm = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = prompt } },
+            MaxTokens = 4,
+        };
+        var r1 = await client.PostAsJsonAsync(
+            "/v1/chat/completions", warm, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, r1.StatusCode);
+
+        // Same prompt with cache_prompt=false should bypass LCP matching
+        // and decode from scratch — the response carries X-Cached-Tokens=0.
+        var coldJson = $$"""
+            {
+              "messages": [ { "role": "user", "content": {{System.Text.Json.JsonSerializer.Serialize(prompt)}} } ],
+              "max_tokens": 4,
+              "cache_prompt": false
+            }
+            """;
+        using var coldReq = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = new StringContent(coldJson, Encoding.UTF8, "application/json"),
+        };
+        using var r2 = await client.SendAsync(coldReq, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, r2.StatusCode);
+        Assert.Equal("0", r2.Headers.GetValues("X-Cached-Tokens").Single());
+    }
+}
+
+/// <summary>
 /// Control-vector wiring. Bad path surfaces during startup; an empty
 /// configuration is a no-op the rest of the suite already exercises.
 /// A full load-and-attach smoke test would need a Qwen3-shaped control-

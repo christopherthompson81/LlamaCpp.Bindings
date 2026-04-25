@@ -183,6 +183,16 @@ public sealed class ChatCompletionsRequest
     /// </summary>
     [JsonPropertyName("speculative")]
     public bool? Speculative { get; set; }
+
+    /// <summary>
+    /// llama-server's <c>cache_prompt</c>. Default <c>true</c> — the
+    /// SessionPool reuses the longest common prefix it can find. Set
+    /// <c>false</c> to force a cold decode (useful for determinism
+    /// testing and one-shot requests that shouldn't warm the cache for
+    /// later callers).
+    /// </summary>
+    [JsonPropertyName("cache_prompt")]
+    public bool? CachePrompt { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -589,6 +599,10 @@ public sealed class CompletionRequest
 
     [JsonPropertyName("json_schema")]
     public JsonElement? JsonSchemaShort { get; set; }
+
+    /// <summary>llama-server's <c>cache_prompt</c>. Default true; same semantics as the chat endpoint.</summary>
+    [JsonPropertyName("cache_prompt")]
+    public bool? CachePrompt { get; set; }
 }
 
 public sealed class CompletionResponse

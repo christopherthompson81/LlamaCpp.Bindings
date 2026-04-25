@@ -64,8 +64,13 @@ public sealed class SessionPool : IDisposable
     /// available cached prefix. The returned lease is
     /// <see cref="IDisposable"/>; dispose returns the slot to the pool
     /// with its tokens updated to reflect whatever the caller decoded.
+    /// When <paramref name="useCache"/> is <c>false</c>, the LCP match is
+    /// skipped — we pick any free slot, clear its KV, and force a fresh
+    /// decode. Used for determinism testing and one-shot requests where
+    /// the operator wants to opt out of pool warmth.
     /// </summary>
-    public async Task<SessionLease> LeaseAsync(int[] promptTokens, CancellationToken cancellationToken)
+    public async Task<SessionLease> LeaseAsync(
+        int[] promptTokens, CancellationToken cancellationToken, bool useCache = true)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(promptTokens);
@@ -83,10 +88,12 @@ public sealed class SessionPool : IDisposable
                 foreach (var slot in _slots)
                 {
                     if (slot.InUse) continue;
-                    int match = CommonPrefixLength(slot.Tokens, promptTokens);
-                    // Pick the slot with the largest common prefix. Tiebreak
-                    // to LRU (lower LastUsedTicks) so warmer cache entries
-                    // are preserved for potential future hits.
+                    // useCache=false fixes match=0 so every free slot is
+                    // equivalent — we then tiebreak to LRU and pick the
+                    // coldest one. That keeps warmer entries available
+                    // for subsequent cache-on requests instead of
+                    // burning them on a cache-bypassing call.
+                    int match = useCache ? CommonPrefixLength(slot.Tokens, promptTokens) : 0;
                     if (match > bestLcp ||
                         (match == bestLcp && slot.LastUsedTicks < bestLru))
                     {
