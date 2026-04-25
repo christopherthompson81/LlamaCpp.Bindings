@@ -43,6 +43,16 @@ public sealed record SamplerParams
 
     // ----- logit bias -----
     public IReadOnlyDictionary<string, float>? LogitBias { get; init; }
+
+    /// <summary>
+    /// Pre-resolved grammar (GBNF + root rule name). When set, the sampler
+    /// constrains generation to strings accepted by this grammar via
+    /// rejection sampling. Resolution of the caller's
+    /// <c>response_format</c> / <c>json_schema</c> / <c>grammar</c> fields
+    /// is the endpoint's job (see <see cref="GrammarFactory"/>); this
+    /// record only carries the output.
+    /// </summary>
+    public LlamaGrammar? Grammar { get; init; }
 }
 
 /// <summary>
@@ -79,6 +89,15 @@ public static class SamplerFactory
 
         var vocab = model.Vocab;
         var b = new LlamaSamplerBuilder();
+
+        // 0. Grammar — held outside the chain by LlamaSamplerBuilder; does
+        //    not participate in chain ordering. Attach first so failures
+        //    (invalid GBNF) surface before we've wasted per-token cost on
+        //    building the rest of the chain.
+        if (p.Grammar is LlamaGrammar grammar)
+        {
+            b = b.WithGrammar(vocab, grammar);
+        }
 
         // 1. Logit bias — applied first so downstream sees the biased
         //    values. Validate keys/ids up front so the request can fail

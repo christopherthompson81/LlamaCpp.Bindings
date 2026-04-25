@@ -82,6 +82,32 @@ public sealed class ChatCompletionsRequest
     /// </summary>
     [JsonPropertyName("stop")]
     public JsonElement? Stop { get; set; }
+
+    /// <summary>
+    /// OpenAI-style <c>response_format</c>. Accepts
+    /// <c>{"type":"text"}</c> (no constraint),
+    /// <c>{"type":"json_object"}</c> (any valid JSON), or
+    /// <c>{"type":"json_schema","json_schema":{"schema":{...}}}</c>
+    /// (constrained to the given JSON Schema).
+    /// </summary>
+    [JsonPropertyName("response_format")]
+    public ResponseFormat? ResponseFormat { get; set; }
+
+    /// <summary>
+    /// Raw GBNF grammar — llama-server parity. When set, takes precedence
+    /// over <see cref="ResponseFormat"/> and <see cref="JsonSchemaShort"/>.
+    /// </summary>
+    [JsonPropertyName("grammar")]
+    public string? Grammar { get; set; }
+
+    /// <summary>
+    /// llama-server shortcut: a bare JSON Schema (not wrapped in the
+    /// OpenAI <c>response_format</c> envelope). Compiled to GBNF via
+    /// <c>JsonSchemaToGbnf</c>. Takes precedence over
+    /// <see cref="ResponseFormat"/> but loses to <see cref="Grammar"/>.
+    /// </summary>
+    [JsonPropertyName("json_schema")]
+    public JsonElement? JsonSchemaShort { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -221,6 +247,15 @@ public sealed class CompletionRequest
     /// <summary>Stop strings, same semantics as <see cref="ChatCompletionsRequest.Stop"/>.</summary>
     [JsonPropertyName("stop")]
     public JsonElement? Stop { get; set; }
+
+    [JsonPropertyName("response_format")]
+    public ResponseFormat? ResponseFormat { get; set; }
+
+    [JsonPropertyName("grammar")]
+    public string? Grammar { get; set; }
+
+    [JsonPropertyName("json_schema")]
+    public JsonElement? JsonSchemaShort { get; set; }
 }
 
 public sealed class CompletionResponse
@@ -254,6 +289,42 @@ public sealed class ModelEntry
 
     [JsonPropertyName("owned_by")]
     public string OwnedBy { get; set; } = "local";
+}
+
+/// <summary>
+/// OpenAI's <c>response_format</c> object. <see cref="Type"/> drives
+/// everything:
+/// <list type="bullet">
+///   <item><c>"text"</c> — no constraint (default).</item>
+///   <item><c>"json_object"</c> — any valid JSON.</item>
+///   <item><c>"json_schema"</c> — requires <see cref="JsonSchema"/>.</item>
+/// </list>
+/// </summary>
+public sealed class ResponseFormat
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "text";
+
+    [JsonPropertyName("json_schema")]
+    public JsonSchemaSpec? JsonSchema { get; set; }
+}
+
+/// <summary>
+/// OpenAI's <c>response_format.json_schema</c> envelope. The actual
+/// schema lives in <see cref="Schema"/>; <see cref="Name"/> is
+/// cosmetic (surfaced in error messages), <see cref="Strict"/> is an
+/// OpenAI flag we honour implicitly (GBNF is always strict).
+/// </summary>
+public sealed class JsonSchemaSpec
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("schema")]
+    public JsonElement? Schema { get; set; }
+
+    [JsonPropertyName("strict")]
+    public bool? Strict { get; set; }
 }
 
 /// <summary>
@@ -336,6 +407,10 @@ internal static class SamplerParamsExtensions
         PresencePenalty     = r.PresencePenalty,
         RepeatLastN         = r.RepeatLastN,
         LogitBias           = r.LogitBias,
+        // Grammar is resolved separately by the endpoint and assigned to
+        // SamplerParams after this projection — keeps JSON-parse errors
+        // (malformed schema, unknown response_format.type) out of the
+        // DTO layer.
     };
 
     public static SamplerParams ToSamplerParams(this CompletionRequest r) => new()
@@ -362,5 +437,9 @@ internal static class SamplerParamsExtensions
         PresencePenalty     = r.PresencePenalty,
         RepeatLastN         = r.RepeatLastN,
         LogitBias           = r.LogitBias,
+        // Grammar is resolved separately by the endpoint and assigned to
+        // SamplerParams after this projection — keeps JSON-parse errors
+        // (malformed schema, unknown response_format.type) out of the
+        // DTO layer.
     };
 }

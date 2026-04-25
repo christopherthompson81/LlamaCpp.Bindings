@@ -115,10 +115,13 @@ Features clients expect from the OpenAI chat-completions API.
   matching OpenAI). `StopMatcher` does streaming-safe partial-match
   detection with hold-back; stop string is stripped from returned
   content and `finish_reason="stop"`.
-- [ ] **`grammar`** / **`response_format: json_schema`** — `LlamaSampler`
-  supports GBNF grammars and the project has a JSON-schema → GBNF
-  compiler (`JsonSchemaToGbnf`). Wire the request field through to the
-  sampler chain.
+- [x] **`grammar`** / **`response_format`** / **`json_schema`** — all
+  three shapes supported, precedence is raw `grammar` &gt;
+  `json_schema` (llama-server shortcut) &gt; `response_format` (OpenAI
+  envelope). `response_format.type` supports `"text"` / `"json_object"`
+  (any-JSON grammar) / `"json_schema"` (compiled via
+  `JsonSchemaToGbnf`). Malformed schema or unknown type returns 400
+  before a pool slot is taken; GBNF parse errors likewise.
 - [ ] **`logprobs`** / **`top_logprobs`** — needs per-token probability
   snapshot surfaced from the sampler. Binding touches the logits via
   `llama_get_logits_ith`; the sampler currently applies and selects but
@@ -145,7 +148,8 @@ Features clients expect from the OpenAI chat-completions API.
 - [x] **`stop` sequences** — shares the `StopMatcher` with the chat
   endpoint; streaming path reports `stop_reason="stop"` in its final
   data chunk.
-- [ ] **`grammar`**, **`json_schema`** — share the sampler-factory path.
+- [x] **`grammar`**, **`json_schema`**, **`response_format`** — share
+  the `GrammarFactory` + `SamplerFactory` path with the chat endpoint.
 - [ ] **`cache_prompt`** — currently always on (prompt cache is
   unconditional). llama-server lets clients opt out per request. Needs a
   bool field; when false, skip the LCP match and claim a fresh-state slot.
@@ -290,8 +294,8 @@ Features clients expect from the OpenAI chat-completions API.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 34 | shipped, tested |
-| `[ ]` TODO | 22 | binding already exposes; server-side wiring only |
+| `[x]` done | 36 | shipped, tested |
+| `[ ]` TODO | 20 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -302,14 +306,11 @@ Weighed by user-visible impact per unit of work, with the understanding
 that we've already hit the big items (multi-session, prompt caching,
 embeddings, auth, observability, cancellation, extended sampling).
 
-1. **`grammar` / `response_format: json_schema`** (§3) — structured
-   output is the other half of "is this a serious server." Project
-   already has a JSON-schema → GBNF compiler.
-2. **SSL / TLS + CORS** (§2) — unblocks non-localhost deployment and
+1. **SSL / TLS + CORS** (§2) — unblocks non-localhost deployment and
    browser-hosted clients.
-3. **Per-request timings + `/metrics`** (§11) — operational visibility as
+2. **Per-request timings + `/metrics`** (§11) — operational visibility as
    the server gets exercised beyond smoke tests.
-4. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
+3. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
    already does the hard part.
 
 Everything under `[~]` is binding-side work of varying size. Speculative

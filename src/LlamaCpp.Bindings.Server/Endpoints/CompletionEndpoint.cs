@@ -46,6 +46,18 @@ public static class CompletionEndpoint
             return;
         }
 
+        LlamaGrammar? grammar;
+        try
+        {
+            grammar = GrammarFactory.Resolve(req.Grammar, req.JsonSchemaShort, req.ResponseFormat);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
         // Tokenize up front — required for the pool's prefix-matching pass.
         // addSpecial=true mirrors llama-server's --special-tokens behaviour
         // for raw /completion calls.
@@ -54,12 +66,19 @@ public static class CompletionEndpoint
         LlamaSampler sampler;
         try
         {
-            sampler = SamplerFactory.Build(host.Model, req.ToSamplerParams());
+            var samplerParams = req.ToSamplerParams() with { Grammar = grammar };
+            sampler = SamplerFactory.Build(host.Model, samplerParams);
         }
         catch (ArgumentException ex)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+        catch (LlamaException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = "Invalid grammar: " + ex.Message }, cancellationToken);
             return;
         }
 

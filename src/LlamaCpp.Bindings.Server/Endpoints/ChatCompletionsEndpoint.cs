@@ -78,21 +78,47 @@ public static class ChatCompletionsEndpoint
             return;
         }
 
-        // Tokenize up front so the pool can do prefix matching before we
-        // pick a slot.
-        var promptTokens = host.Model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
-
-        // Build the sampler before taking a slot so malformed logit_bias /
-        // mirostat / etc. fail with 400 without holding the pool.
-        LlamaSampler sampler;
+        // Resolve grammar (response_format / grammar / json_schema) before
+        // anything expensive runs — malformed schemas return 400 without
+        // a pool lease.
+        LlamaGrammar? grammar;
         try
         {
-            sampler = SamplerFactory.Build(host.Model, req.ToSamplerParams());
+            grammar = GrammarFactory.Resolve(req.Grammar, req.JsonSchemaShort, req.ResponseFormat);
         }
         catch (ArgumentException ex)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
+        // Tokenize up front so the pool can do prefix matching before we
+        // pick a slot.
+        var promptTokens = host.Model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
+
+        // Build the sampler before taking a slot so malformed logit_bias /
+        // mirostat / invalid grammar / etc. fail with 400 without holding
+        // the pool.
+        LlamaSampler sampler;
+        try
+        {
+            var samplerParams = req.ToSamplerParams() with { Grammar = grammar };
+            sampler = SamplerFactory.Build(host.Model, samplerParams);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+        catch (LlamaException ex)
+        {
+            // GBNF parse errors surface here (the binding's grammar init
+            // returns NULL on invalid source, which LlamaSamplerBuilder
+            // wraps in LlamaException).
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = "Invalid grammar: " + ex.Message }, cancellationToken);
             return;
         }
 
