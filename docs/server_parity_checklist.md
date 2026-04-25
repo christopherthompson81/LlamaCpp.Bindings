@@ -55,9 +55,9 @@ The OpenAI-compatible surface plus llama-server's native routes.
   bge-reranker / jina-rerank. Binding already surfaces `LlamaPoolingType.Rank`;
   this is an `EmbeddingHost`-shaped sibling with a different response
   shape (one score per query × document pair).
-- [ ] **`GET /metrics`** — Prometheus-style counters (tokens/sec, queue
-  depth, slot utilisation, time-to-first-token distribution). Ties into
-  `LlamaContext.GetPerformance` for the model-side numbers.
+- [x] **`GET /metrics`** — Prometheus scrape target shipped in §11.
+  Time-to-first-token histograms remain a follow-up (tracked under
+  [#18](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/18)).
 - [ ] **`GET /props`** — llama-server's "what model is loaded and how"
   dump. We expose most of the same info via `/v1/models` + `/slots`;
   question is whether to match the exact llama-server schema or ship our
@@ -262,12 +262,16 @@ Features clients expect from the OpenAI chat-completions API.
   test in `Cancelled_Stream_Releases_Pool_Slot`.
 - [x] **Startup logging** — model path, GPU layers, pool size, loaded
   embedding model (when applicable).
-- [ ] **`/metrics`** — Prometheus scrape target (see §1).
-- [ ] **Per-request timing in response** — mirror llama-server's
-  `timings` sub-object (`prompt_ms`, `predicted_ms`, `prompt_per_token_ms`).
-  Data is already there in `LlamaContext.GetPerformance`.
-- [ ] **Request access log** — wire through the ASP.NET logging pipeline
-  so operators can tail the logs and see "who asked for what."
+- [x] **`/metrics`** — Prometheus scrape target. Counters:
+  `llama_requests_total{endpoint,status}`, `llama_tokens_generated_total`,
+  `llama_tokens_prompt_total`, `llama_tokens_cached_total`. Gauges:
+  `llama_slot_in_use{slot_id}`, `llama_slot_cached_tokens{slot_id}`.
+- [x] **Per-request timing in response** — `timings` sub-object on
+  chat + completion responses (and in the final SSE chunk on
+  streaming): `prompt_n`, `prompt_ms`, `prompt_per_token_ms`,
+  `predicted_n`, `predicted_ms`, `predicted_per_token_ms`, `cached_n`.
+- [x] **Request access log** — ASP.NET `UseHttpLogging` wired with
+  method + path + status + duration on every request.
 - [!] **Built-in dashboard / web UI** — LlamaChat exists; it can be
   pointed at this server. Not duplicating that inside the server binary.
 
@@ -298,8 +302,8 @@ Features clients expect from the OpenAI chat-completions API.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 38 | shipped, tested |
-| `[ ]` TODO | 18 | binding already exposes; server-side wiring only |
+| `[x]` done | 42 | shipped, tested |
+| `[ ]` TODO | 14 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -310,10 +314,12 @@ Weighed by user-visible impact per unit of work, with the understanding
 that we've already hit the big items (multi-session, prompt caching,
 embeddings, auth, observability, cancellation, extended sampling).
 
-1. **Per-request timings + `/metrics`** (§11) — operational visibility as
-   the server gets exercised beyond smoke tests.
-2. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
+1. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
    already does the hard part.
+2. **Tool calling / function calling** (§3) — high value for agent
+   workflows; tracked in [#21](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/21).
+3. **Logprobs / top_logprobs** (§3) — useful for evals; tracked in
+   [#20](https://github.com/christopherthompson81/LlamaCpp.Bindings/issues/20).
 
 Everything under `[~]` is binding-side work of varying size. Speculative
 decoding (§8) and LoRA (§9) are the two most feature-complete on the

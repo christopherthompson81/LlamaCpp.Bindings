@@ -22,6 +22,7 @@ public static class CompletionEndpoint
         ModelHost host,
         SessionPool pool,
         IOptions<ServerOptions> options,
+        ServerMetrics metrics,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(req.Prompt))
@@ -90,6 +91,17 @@ public static class CompletionEndpoint
 
         http.Response.Headers["X-Cached-Tokens"] = lease.CachedTokens.ToString();
 
+        int promptTokensToDecode = lease.PromptTokens.Length - lease.FirstNewIndex;
+        var timer = new RequestTimer(promptTokensToDecode, lease.CachedTokens);
+        metrics.AddPromptTokensIngested(promptTokensToDecode);
+        metrics.AddCachedTokensReused(lease.CachedTokens);
+
+        Action<int> onDecoded = t =>
+        {
+            lease.OnTokenDecoded(t);
+            timer.IncrementPredicted();
+        };
+
         if (req.Stream)
         {
             http.Response.ContentType = "text/event-stream";
@@ -102,9 +114,10 @@ public static class CompletionEndpoint
                 lease.PromptTokens,
                 maxTokens: maxTokens,
                 firstNewIndex: lease.FirstNewIndex,
-                onTokenDecoded: lease.OnTokenDecoded,
+                onTokenDecoded: onDecoded,
                 cancellationToken: cancellationToken))
             {
+                timer.MarkFirstToken();
                 var (emit, stopped) = matcher.Offer(piece);
                 if (!string.IsNullOrEmpty(emit))
                 {
@@ -124,6 +137,8 @@ public static class CompletionEndpoint
                     await http.Response.Body.FlushAsync(cancellationToken);
                 }
             }
+            timer.Finish();
+            metrics.AddTokensGenerated(timer.PredictedTokens);
 
             var tail = JsonSerializer.Serialize(new
             {
@@ -132,6 +147,7 @@ public static class CompletionEndpoint
                 stop_reason = stoppedOnMatch ? "stop" : MapStopReason(generator.LastStopReason),
                 model = host.ModelId,
                 tokens_cached = lease.CachedTokens,
+                timings = timer.Snapshot(),
             });
             await http.Response.WriteAsync("data: " + tail + "\n\n", cancellationToken);
         }
@@ -143,20 +159,24 @@ public static class CompletionEndpoint
                 lease.PromptTokens,
                 maxTokens: maxTokens,
                 firstNewIndex: lease.FirstNewIndex,
-                onTokenDecoded: lease.OnTokenDecoded,
+                onTokenDecoded: onDecoded,
                 cancellationToken: cancellationToken))
             {
+                timer.MarkFirstToken();
                 var (emit, stopped) = matcher.Offer(piece);
                 if (emit.Length > 0) buf.Append(emit);
                 if (stopped) { stoppedOnMatch = true; break; }
             }
             if (!stoppedOnMatch) buf.Append(matcher.Flush());
+            timer.Finish();
+            metrics.AddTokensGenerated(timer.PredictedTokens);
 
             var body = new CompletionResponse
             {
                 Content = buf.ToString(),
                 StopReason = stoppedOnMatch ? "stop" : MapStopReason(generator.LastStopReason),
                 Model = host.ModelId,
+                Timings = timer.Snapshot(),
             };
             http.Response.ContentType = "application/json";
             await http.Response.WriteAsJsonAsync(body, cancellationToken: cancellationToken);

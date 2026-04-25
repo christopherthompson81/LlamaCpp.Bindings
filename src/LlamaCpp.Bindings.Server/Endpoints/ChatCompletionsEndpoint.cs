@@ -27,6 +27,7 @@ public static class ChatCompletionsEndpoint
         SessionPool pool,
         IOptions<ServerOptions> options,
         ILoggerFactory loggerFactory,
+        ServerMetrics metrics,
         CancellationToken cancellationToken)
     {
         var log = loggerFactory.CreateLogger("ChatCompletions");
@@ -135,16 +136,24 @@ public static class ChatCompletionsEndpoint
         // reports the same thing in its streaming metadata.
         http.Response.Headers["X-Cached-Tokens"] = lease.CachedTokens.ToString();
 
+        // Timings + counters. `promptTokensToDecode` = total prompt minus
+        // cache hit, so cache-warm follow-ups report realistically low
+        // prompt_ms numbers.
+        int promptTokensToDecode = lease.PromptTokens.Length - lease.FirstNewIndex;
+        var timer = new RequestTimer(promptTokensToDecode, lease.CachedTokens);
+        metrics.AddPromptTokensIngested(promptTokensToDecode);
+        metrics.AddCachedTokensReused(lease.CachedTokens);
+
         string completionId = "chatcmpl-" + Guid.NewGuid().ToString("N");
         long createdUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         if (req.Stream)
         {
-            await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, cancellationToken);
+            await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, cancellationToken);
         }
         else
         {
-            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, cancellationToken);
+            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, timer, metrics, cancellationToken);
         }
     }
 
@@ -153,7 +162,8 @@ public static class ChatCompletionsEndpoint
     private static async Task WriteSingleJson(
         HttpContext http, LlamaGenerator gen, SessionLease lease,
         StopMatcher matcher, int maxTokens,
-        ModelHost host, string id, long created, CancellationToken ct)
+        ModelHost host, string id, long created,
+        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
     {
         var buf = new StringBuilder();
         bool stoppedOnMatch = false;
@@ -161,14 +171,21 @@ public static class ChatCompletionsEndpoint
             lease.PromptTokens,
             maxTokens: maxTokens,
             firstNewIndex: lease.FirstNewIndex,
-            onTokenDecoded: lease.OnTokenDecoded,
+            onTokenDecoded: t =>
+            {
+                lease.OnTokenDecoded(t);
+                timer.IncrementPredicted();
+            },
             cancellationToken: ct))
         {
+            timer.MarkFirstToken();
             var (emit, stopped) = matcher.Offer(piece);
             if (emit.Length > 0) buf.Append(emit);
             if (stopped) { stoppedOnMatch = true; break; }
         }
         if (!stoppedOnMatch) buf.Append(matcher.Flush());
+        timer.Finish();
+        metrics.AddTokensGenerated(timer.PredictedTokens);
 
         var response = new ChatCompletionsResponse
         {
@@ -183,6 +200,7 @@ public static class ChatCompletionsEndpoint
                     FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
                 },
             },
+            Timings = timer.Snapshot(),
         };
 
         http.Response.ContentType = "application/json";
@@ -194,7 +212,8 @@ public static class ChatCompletionsEndpoint
     private static async Task StreamSse(
         HttpContext http, LlamaGenerator gen, SessionLease lease,
         StopMatcher matcher, int maxTokens,
-        ModelHost host, string id, long created, CancellationToken ct)
+        ModelHost host, string id, long created,
+        RequestTimer timer, ServerMetrics metrics, CancellationToken ct)
     {
         http.Response.ContentType = "text/event-stream";
         http.Response.Headers.CacheControl = "no-cache";
@@ -217,9 +236,14 @@ public static class ChatCompletionsEndpoint
             lease.PromptTokens,
             maxTokens: maxTokens,
             firstNewIndex: lease.FirstNewIndex,
-            onTokenDecoded: lease.OnTokenDecoded,
+            onTokenDecoded: t =>
+            {
+                lease.OnTokenDecoded(t);
+                timer.IncrementPredicted();
+            },
             cancellationToken: ct))
         {
+            timer.MarkFirstToken();
             var (emit, stopped) = matcher.Offer(piece);
             if (!string.IsNullOrEmpty(emit))
             {
@@ -251,7 +275,10 @@ public static class ChatCompletionsEndpoint
             }
         }
 
-        // Final chunk: empty delta + finish_reason.
+        timer.Finish();
+        metrics.AddTokensGenerated(timer.PredictedTokens);
+
+        // Final chunk: empty delta + finish_reason + timings sidecar.
         await WriteChunk(http, new ChatCompletionsChunk
         {
             Id = id, Created = created, Model = host.ModelId,
@@ -260,6 +287,7 @@ public static class ChatCompletionsEndpoint
                 new() { Index = 0, Delta = new(),
                     FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason) },
             },
+            Timings = timer.Snapshot(),
         }, ct);
 
         // OpenAI terminates the stream with a literal "[DONE]" sentinel.

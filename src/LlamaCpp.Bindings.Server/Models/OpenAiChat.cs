@@ -135,6 +135,31 @@ public sealed class ChatCompletionsResponse
 
     [JsonPropertyName("choices")]
     public List<ChatChoice> Choices { get; set; } = new();
+
+    /// <summary>
+    /// llama-server-compatible per-request timing breakdown. Included on
+    /// non-streaming responses and in the final SSE chunk on streaming.
+    /// </summary>
+    [JsonPropertyName("timings")]
+    public RequestTimings? Timings { get; set; }
+}
+
+/// <summary>
+/// Per-request timing + token-count breakdown. <c>prompt_ms</c> is the
+/// wall-clock spent ingesting the new prompt tokens (skipping anything
+/// the pool's prefix cache satisfied); <c>predicted_ms</c> is the time
+/// from the first emitted token to the last. Token-per-ms fields are
+/// derived; they're there so clients don't have to compute them.
+/// </summary>
+public sealed class RequestTimings
+{
+    [JsonPropertyName("prompt_n")]            public int PromptN { get; set; }
+    [JsonPropertyName("prompt_ms")]           public double PromptMs { get; set; }
+    [JsonPropertyName("prompt_per_token_ms")] public double PromptPerTokenMs { get; set; }
+    [JsonPropertyName("predicted_n")]         public int PredictedN { get; set; }
+    [JsonPropertyName("predicted_ms")]        public double PredictedMs { get; set; }
+    [JsonPropertyName("predicted_per_token_ms")] public double PredictedPerTokenMs { get; set; }
+    [JsonPropertyName("cached_n")]            public int CachedN { get; set; }
 }
 
 public sealed class ChatChoice
@@ -166,6 +191,11 @@ public sealed class ChatCompletionsChunk
 
     [JsonPropertyName("choices")]
     public List<ChatChunkChoice> Choices { get; set; } = new();
+
+    /// <summary>Set only on the final chunk when the caller wants timings.</summary>
+    [JsonPropertyName("timings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RequestTimings? Timings { get; set; }
 }
 
 public sealed class ChatChunkChoice
@@ -268,6 +298,9 @@ public sealed class CompletionResponse
 
     [JsonPropertyName("model")]
     public string Model { get; set; } = "";
+
+    [JsonPropertyName("timings")]
+    public RequestTimings? Timings { get; set; }
 }
 
 public sealed class ModelsListResponse

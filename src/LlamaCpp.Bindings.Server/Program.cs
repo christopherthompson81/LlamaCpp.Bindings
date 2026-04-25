@@ -68,6 +68,19 @@ public class Program
         builder.Services.AddSingleton<ModelHost>();
         builder.Services.AddSingleton<SessionPool>();
         builder.Services.AddSingleton<EmbeddingHost>();
+        builder.Services.AddSingleton<ServerMetrics>();
+
+        // Structured HTTP request logging — {method} {path} {status}
+        // {duration} for every request. The default level is Information
+        // so operators can silence it via the usual Logging config.
+        builder.Services.AddHttpLogging(opts =>
+        {
+            opts.LoggingFields =
+                Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.RequestMethod |
+                Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.RequestPath |
+                Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.ResponseStatusCode |
+                Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.Duration;
+        });
 
         var app = builder.Build();
 
@@ -83,6 +96,18 @@ public class Program
         // no embedding model path is configured, so this is free in the
         // default single-model deployment.
         _ = app.Services.GetRequiredService<EmbeddingHost>();
+
+        // HTTP request logging + per-endpoint request counter. Both sit
+        // at the top of the pipeline so they see everything including
+        // 401s, preflights, and malformed requests. The counter is a
+        // shared singleton (ServerMetrics) feeding /metrics.
+        app.UseHttpLogging();
+        app.Use(async (ctx, next) =>
+        {
+            await next();
+            var metrics = ctx.RequestServices.GetRequiredService<ServerMetrics>();
+            metrics.IncrementRequest(ctx.Request.Path.ToString(), ctx.Response.StatusCode);
+        });
 
         // CORS runs BEFORE auth: preflight OPTIONS requests from browsers
         // don't carry the Authorization header, so they'd otherwise 401
@@ -151,6 +176,12 @@ public class Program
         // which could leak info about what other callers have asked.
         app.MapGet("/slots", (SessionPool pool) => pool.Snapshot());
 
+        // Prometheus scrape target. Counters are incremented by the
+        // request-logging middleware + the generator loops; slot gauges
+        // are snapshotted from the pool on each scrape.
+        app.MapGet("/metrics", (ServerMetrics metrics, SessionPool pool) =>
+            Results.Content(metrics.Render(pool), "text/plain; version=0.0.4; charset=utf-8"));
+
         app.MapPost("/v1/chat/completions", async (
             HttpContext ctx,
             ChatCompletionsRequest req,
@@ -158,9 +189,10 @@ public class Program
             SessionPool pool,
             IOptions<ServerOptions> options,
             ILoggerFactory loggers,
+            ServerMetrics metrics,
             CancellationToken ct) =>
         {
-            await ChatCompletionsEndpoint.Handle(ctx, req, host, pool, options, loggers, ct);
+            await ChatCompletionsEndpoint.Handle(ctx, req, host, pool, options, loggers, metrics, ct);
         });
 
         app.MapPost("/completion", async (
@@ -169,9 +201,10 @@ public class Program
             ModelHost host,
             SessionPool pool,
             IOptions<ServerOptions> options,
+            ServerMetrics metrics,
             CancellationToken ct) =>
         {
-            await CompletionEndpoint.Handle(ctx, req, host, pool, options, ct);
+            await CompletionEndpoint.Handle(ctx, req, host, pool, options, metrics, ct);
         });
 
         app.MapPost("/v1/embeddings", async (

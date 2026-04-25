@@ -792,6 +792,99 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.Contains(body!.StopReason, new[] { "stop", "length" });
     }
 
+    // ----- Per-request timings + /metrics -----
+
+    [Fact]
+    public async Task Chat_Response_Includes_Timings_Block()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"hi {Guid.NewGuid():N}" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.NotNull(body!.Timings);
+        Assert.True(body.Timings!.PromptN > 0, "prompt_n should be positive");
+        Assert.True(body.Timings.PredictedN > 0, "predicted_n should be positive");
+        Assert.True(body.Timings.PredictedMs >= 0, "predicted_ms should be non-negative");
+    }
+
+    [Fact]
+    public async Task Metrics_Endpoint_Returns_Prometheus_Text()
+    {
+        // Fire a request to seed some counters, then scrape /metrics.
+        var client = _factory.CreateClient();
+        await client.PostAsJsonAsync("/v1/chat/completions", new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"hi {Guid.NewGuid():N}" } },
+            MaxTokens = 2,
+        }, TestContext.Current.CancellationToken);
+
+        var resp = await client.GetAsync("/metrics", TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        Assert.StartsWith("text/plain", resp.Content.Headers.ContentType?.MediaType ?? "");
+
+        var text = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        // Spot-check the canonical counter names — the test shouldn't
+        // pin exact values (they change with every test run) but the
+        // presence of the lines confirms the Prometheus format and the
+        // counter pipeline are both wired.
+        Assert.Contains("llama_requests_total{", text);
+        Assert.Contains("llama_tokens_generated_total", text);
+        Assert.Contains("llama_tokens_prompt_total", text);
+        Assert.Contains("llama_slot_in_use{", text);
+        Assert.Contains("llama_slot_cached_tokens{", text);
+        // HELP/TYPE comments are required for proper Prometheus scraping.
+        Assert.Contains("# HELP llama_requests_total", text);
+        Assert.Contains("# TYPE llama_requests_total counter", text);
+    }
+
+    [Fact]
+    public async Task Metrics_Requests_Total_Counts_Each_Request()
+    {
+        var client = _factory.CreateClient();
+        // Pull starting value (request itself increments /metrics count too —
+        // we pick a specific endpoint to watch: /health, which we control).
+        await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        var scrape1 = await (await client.GetAsync("/metrics", TestContext.Current.CancellationToken))
+            .Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        int before = CountHealthRequests(scrape1);
+
+        // Fire three more health requests and re-scrape.
+        for (int i = 0; i < 3; i++)
+        {
+            await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        }
+        var scrape2 = await (await client.GetAsync("/metrics", TestContext.Current.CancellationToken))
+            .Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        int after = CountHealthRequests(scrape2);
+
+        Assert.True(after >= before + 3,
+            $"expected at least 3 more /health requests; before={before}, after={after}");
+    }
+
+    private static int CountHealthRequests(string promText)
+    {
+        // Parse the single line matching llama_requests_total{endpoint="/health",status="200"} N
+        foreach (var line in promText.Split('\n'))
+        {
+            if (line.StartsWith("llama_requests_total{") &&
+                line.Contains("endpoint=\"/health\"") &&
+                line.Contains("status=\"200\""))
+            {
+                var space = line.LastIndexOf(' ');
+                if (space > 0 && int.TryParse(line[(space + 1)..], out var n)) return n;
+            }
+        }
+        return 0;
+    }
+
     // ----- CORS (default fixture: CORS disabled) -----
 
     [Fact]
