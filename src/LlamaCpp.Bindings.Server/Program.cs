@@ -40,6 +40,7 @@ public class Program
 
         builder.Services.AddSingleton<ModelHost>();
         builder.Services.AddSingleton<SessionPool>();
+        builder.Services.AddSingleton<EmbeddingHost>();
 
         var app = builder.Build();
 
@@ -51,6 +52,10 @@ public class Program
         // rather than on the first request.
         var host = app.Services.GetRequiredService<ModelHost>();
         _ = app.Services.GetRequiredService<SessionPool>();
+        // Eager-construct the embedding host too — its ctor is a no-op when
+        // no embedding model path is configured, so this is free in the
+        // default single-model deployment.
+        _ = app.Services.GetRequiredService<EmbeddingHost>();
 
         // Resolve API keys once at startup from the inline list + optional
         // file. Any failure (missing file) throws here rather than on the
@@ -101,6 +106,15 @@ public class Program
             CancellationToken ct) =>
         {
             await CompletionEndpoint.Handle(ctx, req, host, pool, options, ct);
+        });
+
+        app.MapPost("/v1/embeddings", async (
+            HttpContext ctx,
+            EmbeddingsRequest req,
+            EmbeddingHost embeddings,
+            CancellationToken ct) =>
+        {
+            await EmbeddingsEndpoint.Handle(ctx, req, embeddings, ct);
         });
     }
 }

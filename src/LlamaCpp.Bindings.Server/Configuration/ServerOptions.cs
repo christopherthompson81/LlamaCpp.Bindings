@@ -58,6 +58,33 @@ public sealed class ServerOptions
     /// </summary>
     public int MaxOutputTokens { get; set; } = 2048;
 
+    // ----- Embeddings (optional second model) -----
+
+    /// <summary>
+    /// Path to a GGUF for the <c>/v1/embeddings</c> endpoint. A dedicated
+    /// embedding model (BGE, nomic-embed, etc.) is required — a chat model
+    /// loaded in embeddings mode will produce vectors but not meaningful
+    /// ones, since it wasn't trained with a pooling head.
+    /// </summary>
+    /// <remarks>
+    /// When null or empty, the <c>/v1/embeddings</c> endpoint is still
+    /// registered but returns HTTP 501 with an explanatory body. The chat
+    /// endpoints remain unaffected.
+    /// </remarks>
+    public string? EmbeddingModelPath { get; set; }
+
+    /// <summary>Context length for the embedding model. Most embedding models cap at 512–8192.</summary>
+    public int EmbeddingContextSize { get; set; } = 2048;
+
+    /// <summary>Logical batch size for the embedding model.</summary>
+    public int EmbeddingBatchSize { get; set; } = 512;
+
+    /// <summary>GPU offload for the embedding model. <c>-1</c> = all, <c>0</c> = CPU.</summary>
+    public int EmbeddingGpuLayerCount { get; set; } = -1;
+
+    /// <summary>Alias reported via <c>/v1/embeddings</c> responses. Falls back to the file stem.</summary>
+    public string? EmbeddingModelAlias { get; set; }
+
     // ----- Authentication -----
 
     /// <summary>

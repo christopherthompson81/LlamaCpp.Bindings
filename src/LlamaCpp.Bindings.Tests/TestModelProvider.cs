@@ -34,6 +34,15 @@ internal static class TestModelProvider
     private const string SpecMainDefaultName = "Qwen3-1.7B-UD-Q4_K_XL.gguf";
     private const string SpecMainDownloadUrl = "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-UD-Q4_K_XL.gguf";
 
+    // Dedicated embedding model for /v1/embeddings tests. nomic-embed is a
+    // widely-deployed 137M-param BERT-style embedding model with a pooling
+    // head baked into the GGUF, so it exercises the server's embeddings
+    // path end-to-end without relying on a chat model's (nonsense) hidden
+    // states. Q4_K_M at ~80 MB keeps the CI download modest.
+    private const string EmbedEnvVar      = "LLAMACPP_TEST_EMBEDDING_MODEL";
+    private const string EmbedDefaultName = "nomic-embed-text-v1.5.Q4_K_M.gguf";
+    private const string EmbedDownloadUrl = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf";
+
     private static readonly Lazy<string> _path =
         new(Resolve, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -42,6 +51,9 @@ internal static class TestModelProvider
 
     private static readonly Lazy<string?> _specMainPath =
         new(ResolveSpecMain, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private static readonly Lazy<string?> _embedPath =
+        new(ResolveEmbed, LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static string EnsureModelPath() => _path.Value;
 
@@ -64,6 +76,13 @@ internal static class TestModelProvider
     /// <c>LLAMACPP_TEST_SPEC_MAIN_MODEL</c> explicitly.
     /// </summary>
     public static string? TryGetSpeculativeMainModelPath() => _specMainPath.Value;
+
+    /// <summary>
+    /// Returns a path to an embedding GGUF (nomic-embed-text-v1.5 by
+    /// default). Auto-fetched on first use, ~80 MB. Returns null if the
+    /// download fails — tests should skip rather than fail in that case.
+    /// </summary>
+    public static string? TryGetEmbeddingModelPath() => _embedPath.Value;
 
     private static string Resolve()
     {
@@ -161,6 +180,38 @@ internal static class TestModelProvider
             catch (Exception ex)
             {
                 Console.WriteLine($"[TestModelProvider] Speculative main-model download failed: {ex.Message}");
+                return null;
+            }
+        }
+        return dest;
+    }
+
+    private static string? ResolveEmbed()
+    {
+        var env = Environment.GetEnvironmentVariable(EmbedEnvVar);
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            if (!File.Exists(env))
+                throw new FileNotFoundException(
+                    $"{EmbedEnvVar}='{env}' but the file does not exist.", env);
+            return env;
+        }
+
+        var cacheDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".cache", "llama-test-models");
+        Directory.CreateDirectory(cacheDir);
+
+        var dest = Path.Combine(cacheDir, EmbedDefaultName);
+        if (!File.Exists(dest))
+        {
+            try
+            {
+                Download(EmbedDownloadUrl, dest);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TestModelProvider] Embedding-model download failed: {ex.Message}");
                 return null;
             }
         }

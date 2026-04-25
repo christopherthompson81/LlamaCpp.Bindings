@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -373,6 +374,25 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.False(string.IsNullOrWhiteSpace(results[1]));
     }
 
+    // ----- /v1/embeddings: 501 when no embedding model is configured -----
+
+    [Fact]
+    public async Task V1Embeddings_Returns_501_When_Not_Configured()
+    {
+        // The default fixture runs without an embedding model, so the
+        // endpoint should register but respond with 501 Not Implemented.
+        // That's more informative than a 404 — tells the caller the feature
+        // exists but is disabled for this deployment.
+        var client = _factory.CreateClient();
+        var body = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse("\"hello\"").RootElement,
+            Model = "any",
+        };
+        var resp = await client.PostAsJsonAsync("/v1/embeddings", body, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.NotImplemented, resp.StatusCode);
+    }
+
     // ----- fixture -----
 
     public sealed class Factory : WebApplicationFactory<Program>
@@ -536,6 +556,187 @@ public class LlamaServerAuthTests : IClassFixture<LlamaServerAuthTests.AuthFacto
             }
             catch { /* best-effort cleanup */ }
             base.Dispose(disposing);
+        }
+    }
+}
+
+/// <summary>
+/// End-to-end tests for <c>/v1/embeddings</c>. Uses its own factory so a
+/// dedicated embedding model is loaded — nomic-embed-text-v1.5 by
+/// default, auto-fetched on first use. When the download fails (offline)
+/// every test in this class skips gracefully.
+/// </summary>
+public class LlamaEmbeddingsTests : IClassFixture<LlamaEmbeddingsTests.EmbedFactory>
+{
+    private readonly EmbedFactory _factory;
+    public LlamaEmbeddingsTests(EmbedFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Single_Input_Returns_Embedding_Vector()
+    {
+        if (!_factory.EmbedModelAvailable) Assert.Skip("nomic-embed GGUF unavailable; set LLAMACPP_TEST_EMBEDDING_MODEL or allow auto-download.");
+
+        var client = _factory.CreateClient();
+        var body = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse("\"hello, world\"").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync("/v1/embeddings", body, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+
+        var parsed = await resp.Content.ReadFromJsonAsync<EmbeddingsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(parsed);
+        Assert.Equal("list", parsed!.Object);
+        Assert.Single(parsed.Data);
+        Assert.Equal(0, parsed.Data[0].Index);
+        Assert.NotEmpty(parsed.Data[0].Embedding);
+
+        // nomic-embed-text-v1.5 returns 768-dim vectors. Any other dim is
+        // either the wrong model loaded or a silent truncation somewhere.
+        Assert.Equal(768, parsed.Data[0].Embedding.Length);
+
+        // Vector should not be all-zero — an obvious failure mode when the
+        // decode path silently short-circuits. Any real forward pass
+        // produces a vector with non-trivial magnitude.
+        double magnitude = Math.Sqrt(parsed.Data[0].Embedding.Sum(x => (double)x * x));
+        Assert.True(magnitude > 0.01, $"embedding magnitude {magnitude} is too small to be real");
+
+        // Usage should report at least one prompt token.
+        Assert.True(parsed.Usage.PromptTokens > 0);
+        Assert.Equal(parsed.Usage.PromptTokens, parsed.Usage.TotalTokens);
+    }
+
+    [Fact]
+    public async Task Array_Input_Returns_One_Embedding_Per_Entry_With_Correct_Index()
+    {
+        if (!_factory.EmbedModelAvailable) Assert.Skip("nomic-embed GGUF unavailable; set LLAMACPP_TEST_EMBEDDING_MODEL or allow auto-download.");
+
+        var client = _factory.CreateClient();
+        var body = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse("""["alpha","beta","gamma"]""").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync("/v1/embeddings", body, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+
+        var parsed = await resp.Content.ReadFromJsonAsync<EmbeddingsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(parsed);
+        Assert.Equal(3, parsed!.Data.Count);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal(i, parsed.Data[i].Index);
+            Assert.Equal(768, parsed.Data[i].Embedding.Length);
+        }
+        // Three distinct inputs → three distinct vectors. If two come back
+        // identical the endpoint is caching improperly across inputs.
+        Assert.NotEqual(parsed.Data[0].Embedding, parsed.Data[1].Embedding);
+        Assert.NotEqual(parsed.Data[1].Embedding, parsed.Data[2].Embedding);
+    }
+
+    [Fact]
+    public async Task Semantic_Similarity_Is_Higher_For_Related_Texts()
+    {
+        // Sanity: embeddings should put "cat" and "kitten" closer than
+        // "cat" and "spaceship". A broken pooling head produces vectors
+        // whose cosine similarity is essentially random across inputs,
+        // which this test catches.
+        if (!_factory.EmbedModelAvailable) Assert.Skip("nomic-embed GGUF unavailable; set LLAMACPP_TEST_EMBEDDING_MODEL or allow auto-download.");
+
+        var client = _factory.CreateClient();
+        var body = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse("""["cat","kitten","spaceship"]""").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync("/v1/embeddings", body, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var parsed = await resp.Content.ReadFromJsonAsync<EmbeddingsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        double simCatKitten    = Cosine(parsed!.Data[0].Embedding, parsed.Data[1].Embedding);
+        double simCatSpaceship = Cosine(parsed.Data[0].Embedding,  parsed.Data[2].Embedding);
+        Assert.True(simCatKitten > simCatSpaceship,
+            $"expected cat/kitten more similar than cat/spaceship; got {simCatKitten:F3} vs {simCatSpaceship:F3}");
+    }
+
+    [Fact]
+    public async Task Rejects_Unsupported_Encoding_Format()
+    {
+        if (!_factory.EmbedModelAvailable) Assert.Skip("nomic-embed GGUF unavailable.");
+
+        var client = _factory.CreateClient();
+        var body = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse("\"hi\"").RootElement,
+            EncodingFormat = "base64",
+        };
+        var resp = await client.PostAsJsonAsync("/v1/embeddings", body, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Rejects_Null_Input()
+    {
+        if (!_factory.EmbedModelAvailable) Assert.Skip("nomic-embed GGUF unavailable.");
+
+        var client = _factory.CreateClient();
+        // Send "input": null — JsonElement becomes Null kind, handler should 400.
+        var raw = """{"input":null}""";
+        using var content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/v1/embeddings", content, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    private static double Cosine(float[] a, float[] b)
+    {
+        double dot = 0, na = 0, nb = 0;
+        for (int i = 0; i < a.Length; i++)
+        {
+            dot += (double)a[i] * b[i];
+            na  += (double)a[i] * a[i];
+            nb  += (double)b[i] * b[i];
+        }
+        return dot / (Math.Sqrt(na) * Math.Sqrt(nb) + 1e-9);
+    }
+
+    public sealed class EmbedFactory : WebApplicationFactory<Program>
+    {
+        public bool EmbedModelAvailable { get; }
+
+        public EmbedFactory()
+        {
+            var path = TestModelProvider.TryGetEmbeddingModelPath();
+            EmbedModelAvailable = !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+        }
+
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var chatPath  = TestModelProvider.EnsureModelPath();
+            var embedPath = TestModelProvider.TryGetEmbeddingModelPath();
+
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                var settings = new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]          = chatPath,
+                    ["LlamaServer:ContextSize"]        = "512",
+                    ["LlamaServer:MaxSequenceCount"]   = "1",
+                    ["LlamaServer:GpuLayerCount"]      = "0",
+                    ["LlamaServer:OffloadKqv"]         = "false",
+                    ["LlamaServer:MaxOutputTokens"]    = "8",
+                    ["LlamaServer:Urls"]               = "",
+                };
+                if (!string.IsNullOrWhiteSpace(embedPath))
+                {
+                    settings["LlamaServer:EmbeddingModelPath"]     = embedPath;
+                    settings["LlamaServer:EmbeddingContextSize"]   = "512";
+                    settings["LlamaServer:EmbeddingBatchSize"]     = "512";
+                    settings["LlamaServer:EmbeddingGpuLayerCount"] = "0";
+                }
+                cfg.AddInMemoryCollection(settings);
+            });
+            return base.CreateHost(builder);
         }
     }
 }
