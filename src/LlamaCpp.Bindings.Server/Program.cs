@@ -1,3 +1,4 @@
+using System.Security.Cryptography.X509Certificates;
 using LlamaCpp.Bindings.Server.Configuration;
 using LlamaCpp.Bindings.Server.Endpoints;
 using LlamaCpp.Bindings.Server.Models;
@@ -17,6 +18,7 @@ namespace LlamaCpp.Bindings.Server;
 
 public class Program
 {
+
     public static async Task<int> Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
@@ -27,16 +29,41 @@ public class Program
             .Bind(builder.Configuration.GetSection(ServerOptions.Section))
             .ValidateOnStart();
 
-        // Kestrel URLs are the one config value we need BEFORE Build (UseUrls
-        // is a WebHost call). Read it straight from Configuration so it's
-        // consistent with appsettings.json / CLI overrides. Everything else
-        // reads after Build so test-time config hooks
-        // (WebApplicationFactory.ConfigureAppConfiguration) actually apply.
+        // Kestrel URLs + HTTPS cert + CORS origins are the config values we
+        // need BEFORE Build (UseUrls / ConfigureKestrel / AddCors all have
+        // to happen on the pre-Build builder). Everything else reads after
+        // Build via IOptions so test-time overrides
+        // (WebApplicationFactory.ConfigureAppConfiguration) take effect.
         var urls = builder.Configuration[$"{ServerOptions.Section}:Urls"];
         if (!string.IsNullOrWhiteSpace(urls))
         {
             builder.WebHost.UseUrls(urls);
         }
+
+        var certPath = builder.Configuration[$"{ServerOptions.Section}:HttpsCertificatePath"];
+        if (!string.IsNullOrWhiteSpace(certPath))
+        {
+            if (!File.Exists(certPath))
+            {
+                throw new FileNotFoundException(
+                    $"LlamaServer:HttpsCertificatePath='{certPath}' but the file does not exist.", certPath);
+            }
+            var certPass = builder.Configuration[$"{ServerOptions.Section}:HttpsCertificatePassword"];
+            // LoadPkcs12FromFile is the .NET 9+ replacement for the
+            // X509Certificate2(path, password) ctor; keeps the obsoleted
+            // ctor out of the build.
+            var cert = X509CertificateLoader.LoadPkcs12FromFile(certPath, certPass);
+            builder.WebHost.ConfigureKestrel(opts =>
+                opts.ConfigureHttpsDefaults(https => https.ServerCertificate = cert));
+        }
+
+        // CORS service machinery is always registered — cheap, and we
+        // can't know at this point whether the caller wants it (config
+        // overrides from WebApplicationFactory.ConfigureAppConfiguration
+        // aren't visible until Build finalises the config pipeline).
+        // The actual policy is attached below via app.UseCors, by which
+        // time we've resolved ServerOptions via IOptions.
+        builder.Services.AddCors();
 
         builder.Services.AddSingleton<ModelHost>();
         builder.Services.AddSingleton<SessionPool>();
@@ -56,6 +83,38 @@ public class Program
         // no embedding model path is configured, so this is free in the
         // default single-model deployment.
         _ = app.Services.GetRequiredService<EmbeddingHost>();
+
+        // CORS runs BEFORE auth: preflight OPTIONS requests from browsers
+        // don't carry the Authorization header, so they'd otherwise 401
+        // and the actual request would never get sent.
+        if (serverOpts.CorsAllowedOrigins is { Count: > 0 } corsOrigins)
+        {
+            app.UseCors(policy =>
+            {
+                policy.AllowAnyHeader().AllowAnyMethod();
+                bool wildcard = corsOrigins.Contains("*");
+                // Per the CORS spec, Access-Control-Allow-Origin: * is
+                // incompatible with Access-Control-Allow-Credentials: true.
+                // When both are requested we mirror the incoming Origin
+                // instead — same permissive effect, spec-compliant.
+                if (wildcard && !serverOpts.CorsAllowCredentials)
+                {
+                    policy.AllowAnyOrigin();
+                }
+                else if (wildcard)
+                {
+                    policy.SetIsOriginAllowed(_ => true);
+                }
+                else
+                {
+                    policy.WithOrigins(corsOrigins.ToArray());
+                }
+                if (serverOpts.CorsAllowCredentials)
+                {
+                    policy.AllowCredentials();
+                }
+            });
+        }
 
         // Resolve API keys once at startup from the inline list + optional
         // file. Any failure (missing file) throws here rather than on the

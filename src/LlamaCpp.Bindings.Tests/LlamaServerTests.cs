@@ -792,6 +792,23 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.Contains(body!.StopReason, new[] { "stop", "length" });
     }
 
+    // ----- CORS (default fixture: CORS disabled) -----
+
+    [Fact]
+    public async Task CorsHeaders_Absent_When_Not_Configured()
+    {
+        // Baseline: the default fixture doesn't set CorsAllowedOrigins.
+        // The middleware chain therefore shouldn't register CORS, and
+        // responses shouldn't carry Access-Control-Allow-Origin even
+        // when the client includes an Origin header.
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/health");
+        req.Headers.Add("Origin", "https://example.com");
+        using var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        Assert.False(resp.Headers.Contains("Access-Control-Allow-Origin"),
+            "CORS header should not be set when CorsAllowedOrigins is empty.");
+    }
 
     [Fact]
     public async Task Cancelled_Stream_Releases_Pool_Slot()
@@ -1221,6 +1238,92 @@ public class LlamaServerAuthTests : IClassFixture<LlamaServerAuthTests.AuthFacto
             }
             catch { /* best-effort cleanup */ }
             base.Dispose(disposing);
+        }
+    }
+}
+
+/// <summary>
+/// Tests for CORS behaviour when the server is configured with an
+/// origin allow-list. Uses a tiny CPU-only factory so the second
+/// server is cheap to spin up.
+/// </summary>
+public class LlamaServerCorsTests : IClassFixture<LlamaServerCorsTests.CorsFactory>
+{
+    private readonly CorsFactory _factory;
+    public LlamaServerCorsTests(CorsFactory factory) => _factory = factory;
+
+    private const string AllowedOrigin = "https://app.example.com";
+    private const string BlockedOrigin = "https://evil.example.com";
+
+    [Fact]
+    public async Task Allowed_Origin_Gets_AccessControl_Header()
+    {
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/health");
+        req.Headers.Add("Origin", AllowedOrigin);
+        using var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        Assert.True(resp.Headers.TryGetValues("Access-Control-Allow-Origin", out var vals));
+        Assert.Equal(AllowedOrigin, vals.First());
+    }
+
+    [Fact]
+    public async Task Blocked_Origin_Does_Not_Get_AccessControl_Header()
+    {
+        // Non-allow-listed Origin: request still succeeds (CORS policing
+        // is the browser's job) but the Access-Control-Allow-Origin
+        // header is absent, which is what tells the browser to refuse.
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/health");
+        req.Headers.Add("Origin", BlockedOrigin);
+        using var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        Assert.False(resp.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
+    [Fact]
+    public async Task Preflight_Options_Returns_AccessControl_Headers()
+    {
+        // Browsers send an OPTIONS preflight before any "complex" CORS
+        // request (POST with a non-simple Content-Type, custom headers
+        // like Authorization). The preflight must succeed without hitting
+        // the endpoint handler or the real POST never happens.
+        var client = _factory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Options, "/v1/chat/completions");
+        req.Headers.Add("Origin", AllowedOrigin);
+        req.Headers.Add("Access-Control-Request-Method", "POST");
+        req.Headers.Add("Access-Control-Request-Headers", "authorization,content-type");
+        using var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
+
+        Assert.True(
+            resp.StatusCode == System.Net.HttpStatusCode.OK ||
+            resp.StatusCode == System.Net.HttpStatusCode.NoContent,
+            $"preflight status was {resp.StatusCode}; expected 200 or 204");
+        Assert.True(resp.Headers.TryGetValues("Access-Control-Allow-Origin", out var origin));
+        Assert.Equal(AllowedOrigin, origin.First());
+        Assert.True(resp.Headers.Contains("Access-Control-Allow-Methods"));
+    }
+
+    public sealed class CorsFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]            = modelPath,
+                    ["LlamaServer:ContextSize"]          = "512",
+                    ["LlamaServer:MaxSequenceCount"]     = "1",
+                    ["LlamaServer:GpuLayerCount"]        = "0",
+                    ["LlamaServer:OffloadKqv"]           = "false",
+                    ["LlamaServer:MaxOutputTokens"]      = "8",
+                    ["LlamaServer:Urls"]                 = "",
+                    ["LlamaServer:CorsAllowedOrigins:0"] = AllowedOrigin,
+                });
+            });
+            return base.CreateHost(builder);
         }
     }
 }

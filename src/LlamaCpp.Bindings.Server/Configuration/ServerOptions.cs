@@ -47,8 +47,42 @@ public sealed class ServerOptions
 
     // ----- HTTP -----
 
-    /// <summary>Serialized ASP.NET Kestrel URLs, e.g. <c>http://127.0.0.1:8080</c>.</summary>
+    /// <summary>
+    /// Serialized ASP.NET Kestrel URLs, e.g. <c>http://127.0.0.1:8080</c>.
+    /// To enable TLS, prefix with <c>https://</c> and set
+    /// <see cref="HttpsCertificatePath"/>.
+    /// </summary>
     public string Urls { get; set; } = "http://127.0.0.1:8080";
+
+    /// <summary>
+    /// Path to a PKCS#12 (<c>.pfx</c>) certificate file. When set, Kestrel's
+    /// HTTPS default is configured to serve this certificate, and any
+    /// <c>https://</c> URL in <see cref="Urls"/> becomes reachable.
+    /// </summary>
+    public string? HttpsCertificatePath { get; set; }
+
+    /// <summary>Password protecting the PKCS#12 file, if any.</summary>
+    public string? HttpsCertificatePassword { get; set; }
+
+    // ----- CORS (for browser clients) -----
+
+    /// <summary>
+    /// Origins to allow on cross-origin requests. <c>null</c> or empty =
+    /// CORS middleware disabled (default — localhost clients don't need
+    /// it). <c>["*"]</c> = any origin (matches llama-server's default).
+    /// Otherwise an exact-match allow-list of origin strings (e.g.
+    /// <c>"https://chat.example.com"</c>).
+    /// </summary>
+    public List<string>? CorsAllowedOrigins { get; set; }
+
+    /// <summary>
+    /// When true, responses carry <c>Access-Control-Allow-Credentials: true</c>
+    /// so browsers attach cookies / auth headers to cross-origin requests.
+    /// Incompatible with <c>CorsAllowedOrigins = ["*"]</c> per the CORS spec
+    /// — when both are set, the wildcard is silently downgraded to mirror
+    /// the incoming <c>Origin</c> instead.
+    /// </summary>
+    public bool CorsAllowCredentials { get; set; } = false;
 
     /// <summary>
     /// Maximum tokens any single request may generate, regardless of what

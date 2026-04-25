@@ -81,11 +81,15 @@ The OpenAI-compatible surface plus llama-server's native routes.
 - [x] **Host / port binding** — `ServerOptions.Urls` → Kestrel
   `WebHost.UseUrls`. Same shape as
   `--host` / `--port` via URL.
-- [ ] **SSL / TLS** — Kestrel supports it out of the box with cert
-  config; just needs `ServerOptions.CertificatePath` / `CertificatePassword`
-  and `UseHttps`. Small work; essential for non-localhost deployment.
-- [ ] **CORS** — not configured today. The HTTP surface is OpenAI-shaped,
-  and browser-hosted clients need CORS headers. Small.
+- [x] **SSL / TLS** — set `ServerOptions.HttpsCertificatePath` (+
+  `HttpsCertificatePassword`) to a PKCS#12 file; Kestrel's HTTPS
+  defaults are configured to serve that cert. Pair with an
+  `https://` URL in `ServerOptions.Urls` to actually listen on TLS.
+- [x] **CORS** — `ServerOptions.CorsAllowedOrigins` (null/empty = off,
+  `["*"]` = wildcard, otherwise exact-match list) +
+  `ServerOptions.CorsAllowCredentials`. Middleware is ordered before
+  the API-key auth so preflight OPTIONS requests (which don't carry
+  the Authorization header) aren't 401'd.
 - [!] **API-key rotation without restart** — the `ApiKeyAuth.LoadKeys`
   path reads at startup only. Rotate by redeploy. For a local server this
   is fine.
@@ -294,8 +298,8 @@ Features clients expect from the OpenAI chat-completions API.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 36 | shipped, tested |
-| `[ ]` TODO | 20 | binding already exposes; server-side wiring only |
+| `[x]` done | 38 | shipped, tested |
+| `[ ]` TODO | 18 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -306,11 +310,9 @@ Weighed by user-visible impact per unit of work, with the understanding
 that we've already hit the big items (multi-session, prompt caching,
 embeddings, auth, observability, cancellation, extended sampling).
 
-1. **SSL / TLS + CORS** (§2) — unblocks non-localhost deployment and
-   browser-hosted clients.
-2. **Per-request timings + `/metrics`** (§11) — operational visibility as
+1. **Per-request timings + `/metrics`** (§11) — operational visibility as
    the server gets exercised beyond smoke tests.
-3. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
+2. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
    already does the hard part.
 
 Everything under `[~]` is binding-side work of varying size. Speculative
