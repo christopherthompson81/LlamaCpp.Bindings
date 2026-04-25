@@ -13,6 +13,11 @@ public partial class SamplerPanelViewModel : ObservableObject
     [ObservableProperty] private decimal _temperature = 0.7m;
     [ObservableProperty] private decimal _dynaTempRange = 0m;
     [ObservableProperty] private decimal _dynaTempExponent = 1m;
+    // Seed: when RandomSeed is true, snapshot emits null → SamplerFactory
+    // translates to LLAMA_DEFAULT_SEED, llama.cpp draws fresh entropy each
+    // turn. Seed value is preserved while disabled so toggling back doesn't
+    // lose what the user typed.
+    [ObservableProperty] private bool _randomSeed = true;
     [ObservableProperty] private decimal _seed = 0xDEADBEEFu;
 
     // --- Truncation (each has an enable flag for the null/disabled semantics) ---
@@ -128,7 +133,7 @@ public partial class SamplerPanelViewModel : ObservableObject
         Temperature = (float)Temperature,
         DynaTempRange = (float)DynaTempRange,
         DynaTempExponent = (float)DynaTempExponent,
-        Seed = (uint)Seed,
+        Seed = RandomSeed ? null : (uint)Seed,
         TopK = TopKEnabled ? (int)TopK : null,
         TopP = TopPEnabled ? (float)TopP : null,
         MinP = MinPEnabled ? (float)MinP : null,
@@ -167,7 +172,8 @@ public partial class SamplerPanelViewModel : ObservableObject
         Temperature = (decimal)s.Temperature;
         DynaTempRange = (decimal)s.DynaTempRange;
         DynaTempExponent = (decimal)s.DynaTempExponent;
-        Seed = s.Seed;
+        RandomSeed = s.Seed is null;
+        Seed = s.Seed ?? 0xDEADBEEFu;
         TopKEnabled = s.TopK is not null;
         TopK = (decimal)(s.TopK ?? 40);
         TopPEnabled = s.TopP is not null;

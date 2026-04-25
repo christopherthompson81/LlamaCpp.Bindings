@@ -15,7 +15,13 @@ public sealed record SamplerSettings
     public float DynaTempRange { get; init; } = 0f;
     public float DynaTempExponent { get; init; } = 1f;
 
-    public uint Seed { get; init; } = 0xDEADBEEF;
+    /// <summary>
+    /// RNG seed. <c>null</c> means "random per generation" — translated to
+    /// llama.cpp's <c>LLAMA_DEFAULT_SEED</c> (<c>0xFFFFFFFF</c>) sentinel at
+    /// sampler-build time, which causes llama.cpp to draw a fresh seed each
+    /// time the sampler is constructed (we rebuild per turn).
+    /// </summary>
+    public uint? Seed { get; init; } = null;
 
     // --- Truncation stages (null = off) ---
     public int? TopK { get; init; } = 40;

@@ -11,8 +11,14 @@ internal static class SamplerFactory
     ///   (mirostat | distribution).
     /// The caller owns disposal of the returned sampler.
     /// </summary>
+    // Mirror of LLAMA_DEFAULT_SEED — passing this to a seeded llama sampler
+    // tells it to draw a random seed at construction time. Since we rebuild
+    // the sampler per generation, this yields fresh randomness each turn.
+    private const uint LlamaDefaultSeed = 0xFFFFFFFFu;
+
     public static LlamaSampler Build(LlamaModel model, LlamaVocab vocab, SamplerSettings s)
     {
+        var seed = s.Seed ?? LlamaDefaultSeed;
         var b = new LlamaSamplerBuilder();
 
         var hasPenalty = s.PenaltyRepeat != 1.0f || s.PenaltyFrequency != 0.0f || s.PenaltyPresence != 0.0f;
@@ -44,7 +50,7 @@ internal static class SamplerFactory
 
         if (s.XtcProbability is { } xtcProb && xtcProb > 0f)
         {
-            b.WithXtc(xtcProb, s.XtcThreshold, minKeep: 1, seed: s.Seed);
+            b.WithXtc(xtcProb, s.XtcThreshold, minKeep: 1, seed: seed);
         }
 
         // Response-format constraint. Dispatch on the mode to figure out
@@ -70,14 +76,14 @@ internal static class SamplerFactory
         switch (s.Mirostat)
         {
             case MirostatMode.V1:
-                b.WithMirostat(vocabSize: (int)vocab.TokenCount, seed: s.Seed, tau: s.MirostatTau, eta: s.MirostatEta);
+                b.WithMirostat(vocabSize: (int)vocab.TokenCount, seed: seed, tau: s.MirostatTau, eta: s.MirostatEta);
                 break;
             case MirostatMode.V2:
-                b.WithMirostatV2(seed: s.Seed, tau: s.MirostatTau, eta: s.MirostatEta);
+                b.WithMirostatV2(seed: seed, tau: s.MirostatTau, eta: s.MirostatEta);
                 break;
             case MirostatMode.Off:
             default:
-                b.WithDistribution(s.Seed);
+                b.WithDistribution(seed);
                 break;
         }
 

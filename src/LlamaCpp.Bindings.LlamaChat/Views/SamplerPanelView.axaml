@@ -44,9 +44,11 @@
             <NumericUpDown Grid.Column="1" Value="{Binding DynaTempExponent}" Minimum="0" Increment="0.1" FormatString="F2" />
         </Grid>
         <Grid Classes="row" ColumnDefinitions="130,*"
-              ToolTip.Tip="RNG seed for reproducibility. 0 picks a random seed each generation.">
-            <TextBlock Grid.Column="0" Text="Seed" VerticalAlignment="Center" />
-            <NumericUpDown Grid.Column="1" Value="{Binding Seed}" Minimum="0" Increment="1" FormatString="F0" />
+              ToolTip.Tip="RNG seed. Random = fresh seed each generation (non-reproducible). Uncheck to fix the seed for reproducible output.">
+            <CheckBox Grid.Column="0" Content="Random seed" IsChecked="{Binding RandomSeed}" />
+            <NumericUpDown Grid.Column="1" Value="{Binding Seed}" Minimum="0" Maximum="4294967294"
+                           Increment="1" FormatString="F0"
+                           IsEnabled="{Binding !RandomSeed}" />
         </Grid>
 
         <TextBlock Classes="section" Text="Truncation" />
