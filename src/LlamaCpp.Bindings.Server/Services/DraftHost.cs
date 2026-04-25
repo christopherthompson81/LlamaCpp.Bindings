@@ -87,20 +87,8 @@ public sealed class DraftHost : IDisposable
         // which would clobber any concurrent non-speculative request that
         // also happens to be assigned slot 0. Memory cost is one extra
         // KV-cache footprint on the main model — opt-in only.
-        _mainContext = new LlamaContext(mainHost.Model, new LlamaContextParameters
-        {
-            ContextSize       = (uint)Math.Max(0, opts.ContextSize),
-            LogicalBatchSize  = (uint)Math.Max(1, opts.LogicalBatchSize),
-            PhysicalBatchSize = (uint)Math.Max(1, opts.PhysicalBatchSize),
-            MaxSequenceCount  = 1,
-            OffloadKQV        = opts.OffloadKqv,
-            ThreadCount       = opts.ThreadCount,
-            BatchThreadCount  = opts.BatchThreadCount,
-            FlashAttention    = opts.FlashAttention,
-            UseFullSwaCache   = opts.UseFullSwaCache,
-            KvCacheTypeK      = opts.KvCacheTypeK,
-            KvCacheTypeV      = opts.KvCacheTypeV,
-        });
+        _mainContext = new LlamaContext(mainHost.Model,
+            ModelHost.BuildContextParameters(opts, maxSeq: 1));
 
         // Mirror the main host's LoRA attachments onto the speculative
         // main context — adapters bind to the LlamaModel, which both

@@ -83,6 +83,54 @@ public sealed class LlamaContextParameters
     /// </summary>
     public LlamaPoolingType PoolingType { get; set; } = LlamaPoolingType.Unspecified;
 
+    // ----- RoPE / YARN -----
+
+    /// <summary>
+    /// RoPE scaling strategy. <see cref="LlamaRopeScalingType.Unspecified"/>
+    /// (default) reads the model's GGUF metadata; an explicit value
+    /// overrides it. Use <see cref="LlamaRopeScalingType.Yarn"/> to
+    /// enable the YARN-tuning fields below.
+    /// </summary>
+    public LlamaRopeScalingType RopeScalingType { get; set; } = LlamaRopeScalingType.Unspecified;
+
+    /// <summary>
+    /// RoPE base frequency override. <c>0</c> (default) inherits the
+    /// model's metadata; non-zero forces this base — needed for
+    /// extended-context fine-tunes whose GGUF doesn't ship the new
+    /// frequency.
+    /// </summary>
+    public float RopeFreqBase { get; set; } = 0f;
+
+    /// <summary>
+    /// RoPE frequency scale (linear scaling factor). <c>0</c> (default)
+    /// = inherit from model; <c>1.0</c> = no scaling; <c>0.5</c> halves
+    /// frequencies (effectively doubling context). Pairs with
+    /// <see cref="LlamaRopeScalingType.Linear"/>.
+    /// </summary>
+    public float RopeFreqScale { get; set; } = 0f;
+
+    /// <summary>
+    /// YARN extrapolation factor. Negative (default) inherits the
+    /// model's metadata; <c>0..1</c> blends YARN extrapolation; <c>1</c>
+    /// is full extrapolation.
+    /// </summary>
+    public float YarnExtFactor { get; set; } = -1f;
+
+    /// <summary>YARN attention magnitude scaling. Default <c>1.0</c>.</summary>
+    public float YarnAttnFactor { get; set; } = 1f;
+
+    /// <summary>YARN beta_fast correction term. Default <c>32</c>.</summary>
+    public float YarnBetaFast { get; set; } = 32f;
+
+    /// <summary>YARN beta_slow correction term. Default <c>1</c>.</summary>
+    public float YarnBetaSlow { get; set; } = 1f;
+
+    /// <summary>
+    /// Original training context size used by YARN to compute the
+    /// scaling factor. <c>0</c> = inherit from the model.
+    /// </summary>
+    public uint YarnOriginalContext { get; set; } = 0;
+
     internal llama_context_params ToNative()
     {
         var native = NativeMethods.llama_context_default_params();
@@ -100,6 +148,14 @@ public sealed class LlamaContextParameters
         native.type_k = (ggml_type)(int)KvCacheTypeK;
         native.type_v = (ggml_type)(int)KvCacheTypeV;
         native.pooling_type = (llama_pooling_type)(int)PoolingType;
+        native.rope_scaling_type = (llama_rope_scaling_type)(int)RopeScalingType;
+        native.rope_freq_base    = RopeFreqBase;
+        native.rope_freq_scale   = RopeFreqScale;
+        native.yarn_ext_factor   = YarnExtFactor;
+        native.yarn_attn_factor  = YarnAttnFactor;
+        native.yarn_beta_fast    = YarnBetaFast;
+        native.yarn_beta_slow    = YarnBetaSlow;
+        native.yarn_orig_ctx     = YarnOriginalContext;
         return native;
     }
 
@@ -162,6 +218,19 @@ public enum LlamaKvCacheType
 /// the context is configured for embeddings (<see cref="LlamaContextParameters.Embeddings"/>
 /// or <see cref="LlamaContext.SetEmbeddingsMode"/>).
 /// </summary>
+/// <summary>
+/// RoPE scaling strategy. Mirrors <c>llama_rope_scaling_type</c>.
+/// <c>Unspecified</c> defers to the model's GGUF metadata.
+/// </summary>
+public enum LlamaRopeScalingType
+{
+    Unspecified = -1,
+    None        = 0,
+    Linear      = 1,
+    Yarn        = 2,
+    Longrope    = 3,
+}
+
 public enum LlamaPoolingType
 {
     Unspecified = -1,

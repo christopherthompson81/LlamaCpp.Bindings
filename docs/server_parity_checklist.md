@@ -216,9 +216,15 @@ Features clients expect from the OpenAI chat-completions API.
   `true` to match the binding's opinionated default — full SWA lets
   the KV cache be edited (multi-turn chat with retries).
 - [x] **`--check-tensors`** — `ServerOptions.CheckTensors`.
-- [~] **`--rope-scaling`, `--rope-scale`, `--rope-freq-base`, all YARN
-  knobs** — mostly needs managed property on `LlamaContextParameters`
-  (binding row). Load-time-only; no per-request shape.
+- [x] **`--rope-scaling`, `--rope-scale`, `--rope-freq-base`, all YARN
+  knobs** — `LlamaContextParameters` exposes
+  `RopeScalingType` (with the new public `LlamaRopeScalingType` enum:
+  Unspecified / None / Linear / Yarn / Longrope), `RopeFreqBase`,
+  `RopeFreqScale`, `YarnExtFactor`, `YarnAttnFactor`, `YarnBetaFast`,
+  `YarnBetaSlow`, `YarnOriginalContext`. `ServerOptions` mirrors the
+  whole set; `ModelHost` and `DraftHost` route through the same
+  `BuildContextParameters` helper so both contexts pick up identical
+  values. Defaults inherit GGUF metadata.
 - [~] **`-dio, --direct-io`**, **`--numa`**, **`--no-host`**,
   **`--repack`**, **`-dev, --device`**, **`-ts, --tensor-split`**,
   **`-ot, --override-tensor`**, **`--cpu-moe`** — all block on binding
@@ -358,9 +364,9 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 64 | shipped, tested |
+| `[x]` done | 65 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 5 | binding work first |
+| `[~]` needs binding | 4 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
 
@@ -395,9 +401,9 @@ All "binding already exposes" items are now wired. What remains:
 2. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
    probe) and remote-URL image fetch (needs a download manager with
    size caps + content-type sniffing).
-3. **Binding-blocked items** (`[~]`) — RoPE / YARN knobs, NUMA /
-   direct-IO / device pinning, model-URL fetch, control-vector. These
-   wait on binding work.
+3. **Binding-blocked items** (`[~]`) — NUMA / direct-IO / device
+   pinning, model-URL fetch, control-vector. These wait on binding
+   work.
 4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
    rejection-sampling) is the largest remaining feature.
 

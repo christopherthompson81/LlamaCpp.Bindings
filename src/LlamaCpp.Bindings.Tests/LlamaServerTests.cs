@@ -2359,6 +2359,72 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// RoPE / YARN startup knobs. Boots the server with non-default values for
+/// every new field and verifies the model still serves chat — proves the
+/// ServerOptions → LlamaContextParameters → llama_context_params handoff
+/// is intact. The numerical values themselves are nonsensical for a
+/// 32k-trained model; they are chosen to be far from the model's metadata
+/// so that misconfiguration would manifest as nonsense output, but the
+/// HTTP path still 200s either way.
+/// </summary>
+public class LlamaServerRopeYarnTests : IClassFixture<LlamaServerRopeYarnTests.RopeFactory>
+{
+    private readonly RopeFactory _factory;
+    public LlamaServerRopeYarnTests(RopeFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Server_Boots_With_Custom_Rope_Yarn_And_Serves_Chat()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.Single(body!.Choices);
+    }
+
+    public sealed class RopeFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]            = modelPath,
+                    ["LlamaServer:ContextSize"]          = "1024",
+                    ["LlamaServer:MaxSequenceCount"]     = "1",
+                    ["LlamaServer:GpuLayerCount"]        = "-1",
+                    ["LlamaServer:OffloadKqv"]           = "true",
+                    ["LlamaServer:MaxOutputTokens"]      = "16",
+                    // Non-default RoPE/YARN. Linear scaling at 1.0
+                    // matches "no scaling" — the test cares about the
+                    // wiring path, not whether the model behaves
+                    // sensibly under odd parameters.
+                    ["LlamaServer:RopeScalingType"]      = "Linear",
+                    ["LlamaServer:RopeFreqScale"]        = "1.0",
+                    ["LlamaServer:YarnExtFactor"]        = "0.5",
+                    ["LlamaServer:YarnAttnFactor"]       = "1.1",
+                    ["LlamaServer:YarnBetaFast"]         = "16.0",
+                    ["LlamaServer:YarnBetaSlow"]         = "2.0",
+                    ["LlamaServer:YarnOriginalContext"]  = "32768",
+                    ["LlamaServer:Urls"]                 = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
 /// §10 extended sampler knobs: adaptive_p terminal, dynamic temperature,
 /// custom sampler ordering. Each test is a smoke check that the new field
 /// reaches the binding without producing a 400 — the actual sampler

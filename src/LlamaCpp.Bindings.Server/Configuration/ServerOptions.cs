@@ -108,6 +108,37 @@ public sealed class ServerOptions
     /// <summary>Element type for the V component of the KV cache. See <see cref="KvCacheTypeK"/>.</summary>
     public LlamaKvCacheType KvCacheTypeV { get; set; } = LlamaKvCacheType.F16;
 
+    // ----- RoPE / YARN -----
+
+    /// <summary>
+    /// RoPE scaling strategy. <see cref="LlamaRopeScalingType.Unspecified"/>
+    /// (default) inherits the model's GGUF setting; useful only when
+    /// running an extended-context fine-tune that didn't ship the new
+    /// metadata, or when overriding the model's choice.
+    /// </summary>
+    public LlamaRopeScalingType RopeScalingType { get; set; } = LlamaRopeScalingType.Unspecified;
+
+    /// <summary>RoPE base frequency override. <c>0</c> = inherit from model.</summary>
+    public float RopeFreqBase { get; set; } = 0f;
+
+    /// <summary>RoPE linear scale. <c>0</c> = inherit; <c>1.0</c> = no scaling; <c>0.5</c> doubles context.</summary>
+    public float RopeFreqScale { get; set; } = 0f;
+
+    /// <summary>YARN extrapolation blend. Negative (default) = inherit from model; <c>0..1</c> blends, <c>1</c> = full.</summary>
+    public float YarnExtFactor { get; set; } = -1f;
+
+    /// <summary>YARN attention magnitude scaling. Default <c>1.0</c>.</summary>
+    public float YarnAttnFactor { get; set; } = 1f;
+
+    /// <summary>YARN beta_fast correction term. Default <c>32</c>.</summary>
+    public float YarnBetaFast { get; set; } = 32f;
+
+    /// <summary>YARN beta_slow correction term. Default <c>1</c>.</summary>
+    public float YarnBetaSlow { get; set; } = 1f;
+
+    /// <summary>YARN original training context. <c>0</c> = inherit from model.</summary>
+    public uint YarnOriginalContext { get; set; } = 0;
+
     // ----- File I/O -----
 
     public bool UseMmap { get; set; } = true;

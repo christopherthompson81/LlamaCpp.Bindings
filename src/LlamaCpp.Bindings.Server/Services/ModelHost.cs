@@ -61,20 +61,8 @@ public sealed class ModelHost : IDisposable
             CheckTensors  = _opts.CheckTensors,
         });
 
-        Context = new LlamaContext(Model, new LlamaContextParameters
-        {
-            ContextSize       = (uint)Math.Max(0, _opts.ContextSize),
-            LogicalBatchSize  = (uint)Math.Max(1, _opts.LogicalBatchSize),
-            PhysicalBatchSize = (uint)Math.Max(1, _opts.PhysicalBatchSize),
-            MaxSequenceCount  = (uint)Math.Max(1, _opts.MaxSequenceCount),
-            OffloadKQV        = _opts.OffloadKqv,
-            ThreadCount       = _opts.ThreadCount,
-            BatchThreadCount  = _opts.BatchThreadCount,
-            FlashAttention    = _opts.FlashAttention,
-            UseFullSwaCache   = _opts.UseFullSwaCache,
-            KvCacheTypeK      = _opts.KvCacheTypeK,
-            KvCacheTypeV      = _opts.KvCacheTypeV,
-        });
+        Context = new LlamaContext(Model, BuildContextParameters(
+            _opts, maxSeq: (uint)Math.Max(1, _opts.MaxSequenceCount)));
 
         ModelId = !string.IsNullOrWhiteSpace(_opts.ModelAlias)
             ? _opts.ModelAlias!
@@ -124,6 +112,36 @@ public sealed class ModelHost : IDisposable
         _adapters.Clear();
         Model.Dispose();
     }
+
+    /// <summary>
+    /// Build the <see cref="LlamaContextParameters"/> block from operator
+    /// configuration. Centralised so the main context and the speculative
+    /// main context (in <see cref="DraftHost"/>) share the same field
+    /// list — adding a new knob touches one place.
+    /// </summary>
+    internal static LlamaContextParameters BuildContextParameters(ServerOptions opts, uint maxSeq) =>
+        new()
+        {
+            ContextSize         = (uint)Math.Max(0, opts.ContextSize),
+            LogicalBatchSize    = (uint)Math.Max(1, opts.LogicalBatchSize),
+            PhysicalBatchSize   = (uint)Math.Max(1, opts.PhysicalBatchSize),
+            MaxSequenceCount    = maxSeq,
+            OffloadKQV          = opts.OffloadKqv,
+            ThreadCount         = opts.ThreadCount,
+            BatchThreadCount    = opts.BatchThreadCount,
+            FlashAttention      = opts.FlashAttention,
+            UseFullSwaCache     = opts.UseFullSwaCache,
+            KvCacheTypeK        = opts.KvCacheTypeK,
+            KvCacheTypeV        = opts.KvCacheTypeV,
+            RopeScalingType     = opts.RopeScalingType,
+            RopeFreqBase        = opts.RopeFreqBase,
+            RopeFreqScale       = opts.RopeFreqScale,
+            YarnExtFactor       = opts.YarnExtFactor,
+            YarnAttnFactor      = opts.YarnAttnFactor,
+            YarnBetaFast        = opts.YarnBetaFast,
+            YarnBetaSlow        = opts.YarnBetaSlow,
+            YarnOriginalContext = opts.YarnOriginalContext,
+        };
 }
 
 /// <summary>
