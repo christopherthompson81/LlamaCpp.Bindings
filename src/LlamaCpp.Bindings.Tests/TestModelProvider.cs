@@ -26,11 +26,22 @@ internal static class TestModelProvider
     private const string LoraDefaultName = "qwen3-0.6b-lora-test.gguf";
     private const string LoraDownloadUrl = "https://huggingface.co/Chiichen/QWen3-0.6B-Lora-GGUF-Test/resolve/main/Lora-F16-LoRA.gguf";
 
+    // Larger sibling of the default model, used as the "target" in speculative-
+    // decoding pair tests. Shares the Qwen3 tokenizer with the default 0.6B,
+    // so drafts from the 0.6B model produce ids the 1.7B understands without
+    // retokenization. ~1.08 GB — fetched lazily and cached across runs.
+    private const string SpecMainEnvVar      = "LLAMACPP_TEST_SPEC_MAIN_MODEL";
+    private const string SpecMainDefaultName = "Qwen3-1.7B-UD-Q4_K_XL.gguf";
+    private const string SpecMainDownloadUrl = "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-UD-Q4_K_XL.gguf";
+
     private static readonly Lazy<string> _path =
         new(Resolve, LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static readonly Lazy<string?> _loraPath =
         new(ResolveLora, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private static readonly Lazy<string?> _specMainPath =
+        new(ResolveSpecMain, LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static string EnsureModelPath() => _path.Value;
 
@@ -42,6 +53,17 @@ internal static class TestModelProvider
     /// gracefully on null rather than failing.
     /// </summary>
     public static string? TryGetLoraAdapterPath() => _loraPath.Value;
+
+    /// <summary>
+    /// Returns a path to a larger Qwen3 model suitable for use as the "main"
+    /// side of a speculative-decoding pair (with the default 0.6B test model
+    /// as draft). Auto-fetched on first use, reused across runs. Returns
+    /// null when the download fails (offline) or when
+    /// <c>LLAMACPP_TEST_MODEL</c> has been overridden to a non-Qwen3 model
+    /// — in that case the caller must supply
+    /// <c>LLAMACPP_TEST_SPEC_MAIN_MODEL</c> explicitly.
+    /// </summary>
+    public static string? TryGetSpeculativeMainModelPath() => _specMainPath.Value;
 
     private static string Resolve()
     {
@@ -99,6 +121,46 @@ internal static class TestModelProvider
             catch (Exception ex)
             {
                 Console.WriteLine($"[TestModelProvider] LoRA download failed: {ex.Message}");
+                return null;
+            }
+        }
+        return dest;
+    }
+
+    private static string? ResolveSpecMain()
+    {
+        var env = Environment.GetEnvironmentVariable(SpecMainEnvVar);
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            if (!File.Exists(env))
+                throw new FileNotFoundException(
+                    $"{SpecMainEnvVar}='{env}' but the file does not exist.", env);
+            return env;
+        }
+
+        // Only auto-fetch when the draft side is also the default Qwen3-0.6B
+        // — otherwise the vocab won't be compatible and the spec-decoding
+        // constructor will reject the pair anyway.
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EnvVar)))
+        {
+            return null;
+        }
+
+        var cacheDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".cache", "llama-test-models");
+        Directory.CreateDirectory(cacheDir);
+
+        var dest = Path.Combine(cacheDir, SpecMainDefaultName);
+        if (!File.Exists(dest))
+        {
+            try
+            {
+                Download(SpecMainDownloadUrl, dest);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TestModelProvider] Speculative main-model download failed: {ex.Message}");
                 return null;
             }
         }
