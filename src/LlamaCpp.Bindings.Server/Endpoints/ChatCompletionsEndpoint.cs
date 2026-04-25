@@ -12,7 +12,11 @@ namespace LlamaCpp.Bindings.Server.Endpoints;
 /// <c>POST /v1/chat/completions</c> — OpenAI-compatible chat endpoint.
 /// Applies the model's GGUF-stored chat template to the supplied messages,
 /// borrows a session from <see cref="SessionPool"/>, and streams or batches
-/// the generator's output.
+/// the generator's output. Uses the pool's longest-common-prefix matching
+/// so follow-up turns in a stateless OpenAI flow still reuse the KV from
+/// previous turns — the server detects that
+/// <c>messages[0..N-1]</c> is identical to a prior request and only
+/// decodes the new tail.
 /// </summary>
 public static class ChatCompletionsEndpoint
 {
@@ -60,22 +64,31 @@ public static class ChatCompletionsEndpoint
 
         int maxTokens = Math.Clamp(req.MaxTokens ?? opts.MaxOutputTokens, 1, opts.MaxOutputTokens);
 
-        // Lease a session (may queue). Wrap generation + dispose in a try so
-        // the slot always returns to the pool even on client disconnect.
-        using var lease = await pool.LeaseAsync(cancellationToken);
+        // Tokenize up front so the pool can do prefix matching before we
+        // pick a slot.
+        var promptTokens = host.Model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
+
+        // Lease a slot (may queue). The lease carries FirstNewIndex = how
+        // many of these tokens are already in KV from the last request.
+        using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
         using var sampler = BuildSampler(req);
         var generator = new LlamaGenerator(lease.Session, sampler);
+
+        // Prototype observability header — tells callers how many prompt
+        // tokens this request skipped thanks to the cache. llama-server
+        // reports the same thing in its streaming metadata.
+        http.Response.Headers["X-Cached-Tokens"] = lease.CachedTokens.ToString();
 
         string completionId = "chatcmpl-" + Guid.NewGuid().ToString("N");
         long createdUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         if (req.Stream)
         {
-            await StreamSse(http, generator, prompt, maxTokens, host, completionId, createdUnix, cancellationToken);
+            await StreamSse(http, generator, lease, maxTokens, host, completionId, createdUnix, cancellationToken);
         }
         else
         {
-            await WriteSingleJson(http, generator, prompt, maxTokens, host, completionId, createdUnix, cancellationToken);
+            await WriteSingleJson(http, generator, lease, maxTokens, host, completionId, createdUnix, cancellationToken);
         }
     }
 
@@ -98,12 +111,15 @@ public static class ChatCompletionsEndpoint
     // ----- Non-streaming: collect all pieces into one response body. -----
 
     private static async Task WriteSingleJson(
-        HttpContext http, LlamaGenerator gen, string prompt, int maxTokens,
+        HttpContext http, LlamaGenerator gen, SessionLease lease, int maxTokens,
         ModelHost host, string id, long created, CancellationToken ct)
     {
         var buf = new StringBuilder();
         await foreach (var piece in gen.GenerateAsync(
-            prompt, maxTokens: maxTokens, addSpecial: false, parseSpecial: true,
+            lease.PromptTokens,
+            maxTokens: maxTokens,
+            firstNewIndex: lease.FirstNewIndex,
+            onTokenDecoded: lease.OnTokenDecoded,
             cancellationToken: ct))
         {
             buf.Append(piece);
@@ -131,7 +147,7 @@ public static class ChatCompletionsEndpoint
     // ----- Streaming: SSE with OpenAI-style chunks. -----
 
     private static async Task StreamSse(
-        HttpContext http, LlamaGenerator gen, string prompt, int maxTokens,
+        HttpContext http, LlamaGenerator gen, SessionLease lease, int maxTokens,
         ModelHost host, string id, long created, CancellationToken ct)
     {
         http.Response.ContentType = "text/event-stream";
@@ -151,7 +167,10 @@ public static class ChatCompletionsEndpoint
         }, ct);
 
         await foreach (var piece in gen.GenerateAsync(
-            prompt, maxTokens: maxTokens, addSpecial: false, parseSpecial: true,
+            lease.PromptTokens,
+            maxTokens: maxTokens,
+            firstNewIndex: lease.FirstNewIndex,
+            onTokenDecoded: lease.OnTokenDecoded,
             cancellationToken: ct))
         {
             if (string.IsNullOrEmpty(piece)) continue;

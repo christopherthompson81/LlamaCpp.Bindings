@@ -11,6 +11,8 @@ namespace LlamaCpp.Bindings.Server.Endpoints;
 /// <summary>
 /// <c>POST /completion</c> — llama-server's native raw-text endpoint.
 /// No chat templating. The caller is responsible for any prompt framing.
+/// Prefix-caches against prior requests on the same server through the
+/// shared <see cref="SessionPool"/>.
 /// </summary>
 public static class CompletionEndpoint
 {
@@ -32,9 +34,16 @@ public static class CompletionEndpoint
         var opts = options.Value;
         int maxTokens = Math.Clamp(req.MaxTokens ?? opts.MaxOutputTokens, 1, opts.MaxOutputTokens);
 
-        using var lease = await pool.LeaseAsync(cancellationToken);
+        // Tokenize up front — required for the pool's prefix-matching pass.
+        // addSpecial=true mirrors llama-server's --special-tokens behaviour
+        // for raw /completion calls.
+        var promptTokens = host.Model.Vocab.Tokenize(req.Prompt, addSpecial: true, parseSpecial: false);
+
+        using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
         using var sampler = BuildSampler(req);
         var generator = new LlamaGenerator(lease.Session, sampler);
+
+        http.Response.Headers["X-Cached-Tokens"] = lease.CachedTokens.ToString();
 
         if (req.Stream)
         {
@@ -44,7 +53,10 @@ public static class CompletionEndpoint
             feature?.DisableBuffering();
 
             await foreach (var piece in generator.GenerateAsync(
-                req.Prompt, maxTokens: maxTokens, addSpecial: true, parseSpecial: false,
+                lease.PromptTokens,
+                maxTokens: maxTokens,
+                firstNewIndex: lease.FirstNewIndex,
+                onTokenDecoded: lease.OnTokenDecoded,
                 cancellationToken: cancellationToken))
             {
                 if (string.IsNullOrEmpty(piece)) continue;
@@ -59,6 +71,7 @@ public static class CompletionEndpoint
                 stop = true,
                 stop_reason = MapStopReason(generator.LastStopReason),
                 model = host.ModelId,
+                tokens_cached = lease.CachedTokens,
             });
             await http.Response.WriteAsync("data: " + tail + "\n\n", cancellationToken);
         }
@@ -66,7 +79,10 @@ public static class CompletionEndpoint
         {
             var buf = new StringBuilder();
             await foreach (var piece in generator.GenerateAsync(
-                req.Prompt, maxTokens: maxTokens, addSpecial: true, parseSpecial: false,
+                lease.PromptTokens,
+                maxTokens: maxTokens,
+                firstNewIndex: lease.FirstNewIndex,
+                onTokenDecoded: lease.OnTokenDecoded,
                 cancellationToken: cancellationToken))
             {
                 buf.Append(piece);
