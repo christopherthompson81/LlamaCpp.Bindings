@@ -12,13 +12,14 @@ using LlamaCpp.Bindings.LlamaChat.Services.ToolCall;
 namespace LlamaCpp.Bindings.LlamaChat.Services;
 
 /// <summary>
-/// One loaded model + context. Stateless w.r.t. the chat transcript —
-/// callers (ConversationViewModel) own the turn list and pass a snapshot
-/// into <see cref="StreamAssistantReplyAsync"/>. This lets one session
-/// service multiple conversations by swapping transcripts in.
-/// Not thread-safe: UI marshals send/cancel operations serially.
+/// In-process llama.cpp chat session. One loaded model + context. Stateless
+/// w.r.t. the chat transcript — callers (ConversationViewModel) own the turn
+/// list and pass a snapshot into <see cref="StreamAssistantReplyAsync"/>.
+/// This lets one session service multiple conversations by swapping
+/// transcripts in. Not thread-safe: UI marshals send/cancel operations
+/// serially.
 /// </summary>
-public sealed class ChatSession : IDisposable
+public sealed class LocalChatSession : IChatSession
 {
     private readonly LlamaModel _model;
     private readonly LlamaContext _context;
@@ -70,7 +71,7 @@ public sealed class ChatSession : IDisposable
     /// </summary>
     public bool CanGenerateTitles => !(SupportsAudio && !SupportsImages);
 
-    private ChatSession(LlamaModel model, LlamaContext context, MtmdContext? mtmd, string? template)
+    private LocalChatSession(LlamaModel model, LlamaContext context, MtmdContext? mtmd, string? template)
     {
         _model = model;
         _context = context;
@@ -79,7 +80,24 @@ public sealed class ChatSession : IDisposable
         ToolCallFormat = ToolCallFormatRegistry.DetectFromTemplate(template);
     }
 
-    public static ChatSession Load(ModelLoadSettings settings, Action<LlamaLogLevel, string>? logSink = null)
+    /// <summary>GGUF basename without extension. Empty when the model path is unset.</summary>
+    public string DisplayModelName => System.IO.Path.GetFileNameWithoutExtension(_model.ModelPath) ?? string.Empty;
+
+    /// <summary>Tokenize <paramref name="prompt"/> with the model's vocab; never null for local sessions.</summary>
+    public int? EstimatePromptTokens(string prompt)
+    {
+        if (string.IsNullOrEmpty(prompt)) return 0;
+        try
+        {
+            return _model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true).Length;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static LocalChatSession Load(ModelLoadSettings settings, Action<LlamaLogLevel, string>? logSink = null)
     {
         LlamaBackend.Initialize(logSink);
 
@@ -129,7 +147,7 @@ public sealed class ChatSession : IDisposable
 
         var template = model.GetChatTemplate();
         DumpChatTemplate(template);
-        return new ChatSession(model, context, mtmd, template);
+        return new LocalChatSession(model, context, mtmd, template);
     }
 
     /// <summary>

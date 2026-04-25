@@ -60,7 +60,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                                  nameof(UnloadCommand), nameof(ShowModelInfoCommand),
                                  nameof(AttachMediaCommand), nameof(ToggleRecordCommand),
                                  nameof(RegenerateTitleCommand))]
-    private ChatSession? _session;
+    private IChatSession? _session;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanSend), nameof(CanRecordAudio))]
@@ -254,15 +254,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             UserInputTokenCount = 0;
             return;
         }
-        try
-        {
-            var toks = Session.Model.Vocab.Tokenize(UserInput, addSpecial: false, parseSpecial: true);
-            UserInputTokenCount = toks.Length;
-        }
-        catch
-        {
-            UserInputTokenCount = 0;
-        }
+        // Remote sessions have no client-side tokenizer — hide the count.
+        UserInputTokenCount = Session.EstimatePromptTokens(UserInput) ?? 0;
     }
 
     partial void OnSearchTextChanged(string value) => RebuildFilteredConversations();
@@ -311,12 +304,23 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     {
         if (SelectedProfile is null) return;
         var profile = SelectedProfile;
-        var path = profile.ModelPath;
 
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        if (profile.Kind == ProfileKind.Local)
         {
-            StatusText = $"Model file not found: {path}";
-            return;
+            var path = profile.ModelPath;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                StatusText = $"Model file not found: {path}";
+                return;
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(profile.BaseUrl))
+            {
+                StatusText = "Remote profile is missing a base URL.";
+                return;
+            }
         }
 
         IsBusy = true;
@@ -325,15 +329,21 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         try
         {
-            var settings = profile.SnapshotLoad();
-            var session = await Task.Run(() => ChatSession.Load(settings, OnNativeLog));
+            IChatSession session;
+            if (profile.Kind == ProfileKind.Local)
+            {
+                var settings = profile.SnapshotLoad();
+                session = await Task.Run(() => LocalChatSession.Load(settings, OnNativeLog));
+            }
+            else
+            {
+                session = new RemoteChatSession(profile.SnapshotRemote());
+            }
 
             Session = session;
             _activeLoadedProfile = profile;
             ProfileDisplayName = profile.Name;
-            ModelSummary = $"·  {Path.GetFileName(session.Model.ModelPath)}  ·  " +
-                           $"ctx={session.Context.ContextSize}  ·  layers={session.Model.LayerCount}  ·  " +
-                           $"template={(string.IsNullOrEmpty(session.ChatTemplate) ? "(none)" : "embedded")}";
+            ModelSummary = BuildModelSummary(session);
             // Fresh session → no message anchors the new KV cache yet.
             ClearContinueAnchors();
             StatusText = "Loaded.";
@@ -351,6 +361,22 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             IsBusy = false;
         }
+    }
+
+    private static string BuildModelSummary(IChatSession session)
+    {
+        if (session is LocalChatSession local)
+        {
+            return $"·  {Path.GetFileName(local.Model.ModelPath)}  ·  " +
+                   $"ctx={local.Context.ContextSize}  ·  layers={local.Model.LayerCount}  ·  " +
+                   $"template={(string.IsNullOrEmpty(local.ChatTemplate) ? "(none)" : "embedded")}";
+        }
+        if (session is RemoteChatSession)
+        {
+            var name = session.DisplayModelName;
+            return string.IsNullOrEmpty(name) ? "·  remote" : $"·  remote · {name}";
+        }
+        return string.Empty;
     }
 
     private bool CanLoad() => !IsBusy && Session is null && SelectedProfile is not null;
@@ -633,7 +659,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private string? BuildModelLabel()
     {
         if (_activeLoadedProfile is null || Session is null) return null;
-        var file = System.IO.Path.GetFileNameWithoutExtension(Session.Model.ModelPath);
+        var file = Session.DisplayModelName;
         return string.IsNullOrWhiteSpace(file)
             ? _activeLoadedProfile.Name
             : $"{_activeLoadedProfile.Name} · {file}";
@@ -1278,6 +1304,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         if (msg is null || Session is null || _activeLoadedProfile is null) return;
         if (SelectedConversation is null) return;
         if (!msg.IsAssistant) return;
+        // Continuation requires server-side KV state we only have for local
+        // sessions. Remote profiles get a friendly notice instead of an exception.
+        if (Session is not LocalChatSession)
+        {
+            ToastService.Info("Continue", "Continue isn't available for remote profiles.");
+            return;
+        }
         // Only the last message can be continued — older ones don't match KV state.
         var conv = SelectedConversation;
         if (conv.Messages.LastOrDefault() != msg)
@@ -1590,12 +1623,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    [RelayCommand(CanExecute = nameof(IsModelLoaded))]
+    [RelayCommand(CanExecute = nameof(CanShowModelInfo))]
     private async Task ShowModelInfoAsync()
     {
-        if (Session is null) return;
-        await DialogService.ShowModelInfoAsync(Session.Model, _activeLoadedProfile?.Name);
+        if (Session is LocalChatSession local)
+        {
+            await DialogService.ShowModelInfoAsync(local.Model, _activeLoadedProfile?.Name);
+        }
+        else
+        {
+            ToastService.Info("Model info", "Remote model — info not available.");
+        }
     }
+
+    private bool CanShowModelInfo() => Session is LocalChatSession;
 
     [RelayCommand]
     private void Exit()

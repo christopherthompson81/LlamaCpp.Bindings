@@ -1,6 +1,11 @@
+using System;
+using System.Collections.ObjectModel;
+using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using LlamaCpp.Bindings.LlamaChat.Models;
 using LlamaCpp.Bindings.LlamaChat.Services;
+using LlamaCpp.Bindings.LlamaChat.Services.Remote;
 
 namespace LlamaCpp.Bindings.LlamaChat.ViewModels;
 
@@ -13,6 +18,26 @@ public partial class ProfileEditorViewModel : ObservableObject
 {
     [ObservableProperty] private string _name = "New profile";
     [ObservableProperty] private string _systemPrompt = string.Empty;
+
+    // --- Backend selector ---
+    /// <summary>
+    /// Local = in-process llama.cpp (Load section). Remote = HTTP server
+    /// (Remote section). Other-cluster fields stay populated when toggling
+    /// so the user can switch back without losing values.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsLocal), nameof(IsRemote))]
+    private ProfileKind _kind = ProfileKind.Local;
+
+    public bool IsLocal => Kind == ProfileKind.Local;
+    public bool IsRemote => Kind == ProfileKind.Remote;
+
+    // --- Remote settings ---
+    [ObservableProperty] private string _baseUrl = "http://localhost:8080";
+    [ObservableProperty] private string _apiKey = string.Empty;
+    [ObservableProperty] private string _modelId = string.Empty;
+    [ObservableProperty] private string _discoverStatus = string.Empty;
+    public ObservableCollection<string> AvailableModels { get; } = new();
 
     // --- Load settings ---
     [ObservableProperty] private string _modelPath = string.Empty;
@@ -71,7 +96,11 @@ public partial class ProfileEditorViewModel : ObservableObject
     public ProfileEditorViewModel(ModelProfile profile)
     {
         Name = profile.Name;
+        Kind = profile.Kind;
         SystemPrompt = profile.SystemPrompt;
+        BaseUrl = profile.Remote.BaseUrl;
+        ApiKey = profile.Remote.ApiKey ?? string.Empty;
+        ModelId = profile.Remote.ModelId;
         ModelPath = profile.Load.ModelPath;
         MmprojPath = profile.Load.MmprojPath;
         MmprojOnCpu = profile.Load.MmprojOnCpu;
@@ -108,14 +137,59 @@ public partial class ProfileEditorViewModel : ObservableObject
         KvCacheTypeV = KvCacheType,
     };
 
+    public RemoteSettings SnapshotRemote() => new()
+    {
+        BaseUrl = BaseUrl,
+        ApiKey = string.IsNullOrEmpty(ApiKey) ? null : ApiKey,
+        ModelId = ModelId,
+    };
+
     public ModelProfile ToProfile() => new()
     {
         Name = Name,
+        Kind = Kind,
         SystemPrompt = SystemPrompt,
         Load = SnapshotLoad(),
+        Remote = SnapshotRemote(),
         Sampler = SamplerPanel.SnapshotSampler(),
         Generation = SamplerPanel.SnapshotGeneration(),
     };
+
+    /// <summary>
+    /// Hit <c>GET /v1/models</c> against the configured Remote endpoint and
+    /// fill <see cref="AvailableModels"/>. Pre-selects the first id when
+    /// <see cref="ModelId"/> is empty so the user can save immediately.
+    /// </summary>
+    [RelayCommand]
+    private async Task DiscoverRemoteModelsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(BaseUrl))
+        {
+            DiscoverStatus = "Set a base URL first.";
+            return;
+        }
+        DiscoverStatus = "Discovering...";
+        try
+        {
+            using var client = new OpenAiChatClient(BaseUrl, string.IsNullOrEmpty(ApiKey) ? null : ApiKey);
+            var ids = await client.ListModelsAsync().ConfigureAwait(true);
+            AvailableModels.Clear();
+            foreach (var id in ids) AvailableModels.Add(id);
+            if (ids.Count == 0)
+            {
+                DiscoverStatus = "Connected, but the server reported no models.";
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(ModelId)) ModelId = ids[0];
+                DiscoverStatus = $"Found {ids.Count} model(s).";
+            }
+        }
+        catch (Exception ex)
+        {
+            DiscoverStatus = $"Failed: {ex.Message}";
+        }
+    }
 
     /// <summary>Reset the Sampling sub-panel to code defaults. Load settings are preserved.</summary>
     public void ResetSamplerDefaults() =>

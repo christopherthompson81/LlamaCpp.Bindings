@@ -23,6 +23,18 @@
             <TextBlock Grid.Column="0" Text="Profile name" VerticalAlignment="Center" />
             <TextBox Grid.Column="1" Text="{Binding Name}" />
         </Grid>
+        <Grid Classes="row" ColumnDefinitions="130,*">
+            <TextBlock Grid.Column="0" Text="Backend" VerticalAlignment="Center"
+                       ToolTip.Tip="Local: load a GGUF in-process. Remote: connect to an OpenAI-compatible HTTP server (e.g. LlamaCpp.Bindings.Server)." />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                <RadioButton Content="Local" GroupName="ProfileKind"
+                             IsChecked="{Binding IsLocal, Mode=OneWay}"
+                             Click="OnKindLocalClicked" />
+                <RadioButton Content="Remote" GroupName="ProfileKind"
+                             IsChecked="{Binding IsRemote, Mode=OneWay}"
+                             Click="OnKindRemoteClicked" />
+            </StackPanel>
+        </Grid>
 
         <TextBlock Classes="section" Text="System prompt" />
         <TextBox Text="{Binding SystemPrompt}"
@@ -30,6 +42,39 @@
                  MinHeight="80" MaxHeight="240"
                  PlaceholderText="Optional. Prepended as a system-role turn at the start of every reply." />
 
+        <!-- ===== Remote backend ===== -->
+        <StackPanel Spacing="2" IsVisible="{Binding IsRemote}">
+            <TextBlock Classes="section" Text="Server" />
+            <Grid Classes="row" ColumnDefinitions="130,*">
+                <TextBlock Grid.Column="0" Text="Base URL" VerticalAlignment="Center" />
+                <TextBox Grid.Column="1" Text="{Binding BaseUrl}"
+                         PlaceholderText="http://localhost:8080" />
+            </Grid>
+            <Grid Classes="row" ColumnDefinitions="130,*">
+                <TextBlock Grid.Column="0" Text="API key" VerticalAlignment="Center"
+                           ToolTip.Tip="Optional. Sent as 'Authorization: Bearer ...'. Stored plaintext in profiles.json — same convention as the rest of LlamaChat's config." />
+                <TextBox Grid.Column="1" Text="{Binding ApiKey}"
+                         PasswordChar="*"
+                         PlaceholderText="Optional. Sent as Authorization: Bearer ..." />
+            </Grid>
+            <Grid Classes="row" ColumnDefinitions="130,*,Auto">
+                <TextBlock Grid.Column="0" Text="Model id" VerticalAlignment="Center"
+                           ToolTip.Tip="The 'model' field sent with each request. Click Discover to populate from /v1/models." />
+                <ComboBox Grid.Column="1"
+                          ItemsSource="{Binding AvailableModels}"
+                          SelectedItem="{Binding ModelId}"
+                          IsTextSearchEnabled="True"
+                          HorizontalAlignment="Stretch" />
+                <Button Grid.Column="2" Content="Discover" Margin="4,0,0,0"
+                        Command="{Binding DiscoverRemoteModelsCommand}" />
+            </Grid>
+            <TextBlock Classes="xs muted" TextWrapping="Wrap"
+                       Text="{Binding DiscoverStatus}"
+                       IsVisible="{Binding DiscoverStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
+
+        <!-- ===== Local backend ===== -->
+        <StackPanel Spacing="2" IsVisible="{Binding IsLocal}">
         <TextBlock Classes="section" Text="Model" />
         <Grid Classes="row" ColumnDefinitions="130,*,Auto">
             <TextBlock Grid.Column="0" Text="Model path" VerticalAlignment="Center" />
@@ -125,6 +170,8 @@
         <CheckBox Content="mmap" IsChecked="{Binding UseMmap}" />
         <CheckBox Content="mlock" IsChecked="{Binding UseMlock}" />
         <CheckBox Content="offload KQV" IsChecked="{Binding OffloadKQV}" />
+        </StackPanel>
+        <!-- ===== /Local backend ===== -->
 
         <TextBlock Classes="section" Text="Sampling" />
         <v:SamplerPanelView DataContext="{Binding SamplerPanel}" />
