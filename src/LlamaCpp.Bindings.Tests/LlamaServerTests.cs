@@ -2359,6 +2359,102 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// §9 LoRA adapters at startup. Boots the server with a Qwen3-compatible
+/// LoRA attached to the main context and verifies a chat request still
+/// returns a well-formed response. The behavioural delta from "no LoRA"
+/// is exercised in the binding's own LoraAdapterTests; this test only
+/// validates the ServerOptions → ModelHost handoff.
+/// </summary>
+public class LlamaServerLoraTests : IClassFixture<LlamaServerLoraTests.LoraFactory>
+{
+    private readonly LoraFactory _factory;
+    public LlamaServerLoraTests(LoraFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Server_With_Lora_Attached_Serves_Chat()
+    {
+        if (!_factory.IsConfigured) return; // Skip: LoRA download unavailable.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.Single(body!.Choices);
+    }
+
+    [Fact]
+    public void Bad_Lora_Path_Surfaces_During_Startup()
+    {
+        // The host must validate adapter paths eagerly so operators see
+        // the failure at startup, not on the first chat request after
+        // load — that would queue requests behind a doomed load.
+        using var factory = new BadLoraFactory();
+        Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+    }
+
+    public sealed class LoraFactory : WebApplicationFactory<Program>
+    {
+        public bool IsConfigured { get; private set; }
+
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            var loraPath = TestModelProvider.TryGetLoraAdapterPath();
+            IsConfigured = !string.IsNullOrWhiteSpace(loraPath);
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                var settings = new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]        = modelPath,
+                    ["LlamaServer:ContextSize"]      = "1024",
+                    ["LlamaServer:MaxSequenceCount"] = "1",
+                    ["LlamaServer:GpuLayerCount"]    = "-1",
+                    ["LlamaServer:OffloadKqv"]       = "true",
+                    ["LlamaServer:MaxOutputTokens"]  = "16",
+                    ["LlamaServer:Urls"]             = "",
+                };
+                if (IsConfigured)
+                {
+                    settings["LlamaServer:LoraAdapters:0:Path"]  = loraPath;
+                    settings["LlamaServer:LoraAdapters:0:Scale"] = "0.5";
+                }
+                cfg.AddInMemoryCollection(settings);
+            });
+            return base.CreateHost(builder);
+        }
+    }
+
+    public sealed class BadLoraFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]                    = modelPath,
+                    ["LlamaServer:ContextSize"]                  = "1024",
+                    ["LlamaServer:MaxSequenceCount"]             = "1",
+                    ["LlamaServer:GpuLayerCount"]                = "-1",
+                    ["LlamaServer:Urls"]                         = "",
+                    ["LlamaServer:LoraAdapters:0:Path"]          = "/no/such/path/lora.gguf",
+                    ["LlamaServer:LoraAdapters:0:Scale"]         = "1.0",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
 /// §8 speculative decoding wiring. Spins up a server with the 1.7B Qwen3 as
 /// main and the 0.6B as draft (a known-compatible pair from the binding's
 /// existing speculative tests) and asserts that requests with

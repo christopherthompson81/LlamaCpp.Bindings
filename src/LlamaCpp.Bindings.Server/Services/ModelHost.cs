@@ -13,12 +13,21 @@ public sealed class ModelHost : IDisposable
 {
     private readonly ILogger<ModelHost> _log;
     private readonly ServerOptions _opts;
+    private readonly List<LoadedAdapter> _adapters = new();
 
     public LlamaModel Model { get; }
     public LlamaContext Context { get; }
 
     /// <summary>Public name used in OpenAI-style <c>/v1/models</c> responses.</summary>
     public string ModelId { get; }
+
+    /// <summary>
+    /// LoRA adapters loaded at startup, exposed so other services that
+    /// build their own <see cref="LlamaContext"/> over <see cref="Model"/>
+    /// (notably <see cref="DraftHost"/>'s speculative main context) can
+    /// mirror the same attachments.
+    /// </summary>
+    public IReadOnlyList<LoadedAdapter> Adapters => _adapters;
 
     public ModelHost(IOptions<ServerOptions> options, ILogger<ModelHost> log)
     {
@@ -71,13 +80,54 @@ public sealed class ModelHost : IDisposable
             ? _opts.ModelAlias!
             : Path.GetFileNameWithoutExtension(_opts.ModelPath);
 
-        _log.LogInformation("Model loaded. Context sizes: ctx={Ctx}, batch={Batch}, ubatch={Ubatch}, slots={Slots}",
-            Context.ContextSize, Context.LogicalBatchSize, Context.PhysicalBatchSize, Context.MaxSequenceCount);
+        // LoRA adapters: load each and attach with the configured scale.
+        // Bad paths / shape mismatches surface here, at startup, rather
+        // than on the first request.
+        foreach (var entry in _opts.LoraAdapters)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Path))
+            {
+                throw new InvalidOperationException(
+                    "LlamaServer:LoraAdapters entry has empty Path.");
+            }
+            if (!File.Exists(entry.Path))
+            {
+                throw new FileNotFoundException(
+                    $"LoRA adapter file not found: {entry.Path}", entry.Path);
+            }
+            _log.LogInformation("Loading LoRA adapter {Path} (scale={Scale})", entry.Path, entry.Scale);
+            var adapter = LlamaLoraAdapter.LoadFromFile(Model, entry.Path);
+            try
+            {
+                Context.AttachLoraAdapter(adapter, entry.Scale);
+            }
+            catch
+            {
+                adapter.Dispose();
+                throw;
+            }
+            _adapters.Add(new LoadedAdapter(adapter, entry.Scale));
+        }
+
+        _log.LogInformation("Model loaded. Context sizes: ctx={Ctx}, batch={Batch}, ubatch={Ubatch}, slots={Slots}, adapters={Adapters}",
+            Context.ContextSize, Context.LogicalBatchSize, Context.PhysicalBatchSize, Context.MaxSequenceCount, _adapters.Count);
     }
 
     public void Dispose()
     {
+        // Disposal order matters: contexts first (they hold references
+        // into adapters), then adapters, then the model. The binding's
+        // LoRA docs spell this out — disposing the model before its
+        // adapters is undefined behaviour.
         Context.Dispose();
+        foreach (var a in _adapters) a.Adapter.Dispose();
+        _adapters.Clear();
         Model.Dispose();
     }
 }
+
+/// <summary>
+/// A LoRA adapter the server has loaded and attached to <see cref="ModelHost.Context"/>.
+/// Disposed in lifecycle order with the model.
+/// </summary>
+public sealed record LoadedAdapter(LlamaLoraAdapter Adapter, float Scale);

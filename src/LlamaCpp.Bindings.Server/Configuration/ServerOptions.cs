@@ -302,6 +302,24 @@ public sealed class ServerOptions
     /// </summary>
     public int DraftLookahead { get; set; } = 5;
 
+    // ----- LoRA adapters -----
+
+    /// <summary>
+    /// Adapters attached to the main model's context at startup. Each entry
+    /// resolves to a GGUF path + a blend scale (1.0 = full strength). Empty
+    /// list (the default) loads no adapters. Adapters are validated against
+    /// the main model — a shape mismatch fails loading and surfaces during
+    /// startup, not on the first request.
+    /// </summary>
+    /// <remarks>
+    /// Speculative requests inherit the same adapters because the
+    /// dedicated speculative main context shares the underlying
+    /// <see cref="LlamaModel"/>. The draft model is left untouched —
+    /// pairing different LoRA on draft vs main is rarely useful and adds
+    /// configuration surface we don't yet need.
+    /// </remarks>
+    public List<LoraAdapterConfig> LoraAdapters { get; set; } = new();
+
     // ----- Authentication -----
 
     /// <summary>
@@ -319,4 +337,22 @@ public sealed class ServerOptions
     /// source is sufficient. Matches llama-server's <c>--api-key-file</c>.
     /// </summary>
     public string? ApiKeyFile { get; set; }
+}
+
+/// <summary>
+/// Configuration entry for a LoRA adapter loaded at startup. Mirrors
+/// llama-server's <c>--lora</c> / <c>--lora-scaled</c> flags.
+/// </summary>
+public sealed class LoraAdapterConfig
+{
+    /// <summary>Path to the adapter GGUF file. Required.</summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>
+    /// Blend scale. <c>1.0</c> = adapter at full strength (default);
+    /// <c>0.0</c> = effectively detached; values in-between linearly
+    /// interpolate. Negative scales are accepted by the binding but
+    /// rarely useful.
+    /// </summary>
+    public float Scale { get; set; } = 1.0f;
 }

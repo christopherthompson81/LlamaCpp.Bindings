@@ -265,12 +265,18 @@ Features clients expect from the OpenAI chat-completions API.
 
 ## 9. LoRA adapters
 
-- [~] **`--lora` / `--lora-scaled`** — binding has
-  `LlamaLoraAdapter` + `LlamaContext.AttachLoraAdapter`. Server config
-  could accept a list of `{path, scale}` pairs attached at startup.
-  Per-request adapter selection (different LoRA per caller) needs more
-  design — the current binding attaches adapters to the context, not the
-  session, so concurrent requests on one context share adapters.
+- [x] **`--lora` / `--lora-scaled`** —
+  `ServerOptions.LoraAdapters` is a list of `{Path, Scale}` entries
+  loaded against the main model and attached to the shared context at
+  startup. Bad paths / shape mismatches surface eagerly (operators see
+  the failure at boot, not on the first request). Speculative
+  requests inherit the same adapters because the dedicated
+  speculative main context shares the underlying `LlamaModel`. The
+  draft model is intentionally left untouched. Per-request adapter
+  selection (different LoRA per caller) is deferred — the binding
+  attaches adapters to the context, not the session, so concurrent
+  requests on one context share adapters; per-call switching needs
+  more design.
 - [~] **`--control-vector`** — separate binding work.
 
 ## 10. Sampling knobs not yet in chat/completion requests
@@ -345,9 +351,9 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 60 | shipped, tested |
+| `[x]` done | 61 | shipped, tested |
 | `[ ]` TODO | 3 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 6 | binding work first |
+| `[~]` needs binding | 5 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
 
@@ -367,10 +373,19 @@ observability, cancellation, extended sampling, multimodal, tool
 calling, logprobs, rerank) are all shipped. What's left is operator-
 ergonomic polish + binding-blocked features.
 
-1. **LoRA adapters at startup** (§9) — `ServerOptions.LoraAdapters`
-   list, attach during `ModelHost` ctor. Per-request adapter
-   selection is harder (binding attaches to context, not session) and
-   stays deferred.
+All "binding already exposes" items are now wired. What remains:
+
+1. **Small endpoint polish** (§1, §4, §10) — `GET /props`,
+   `cache_prompt` opt-out, adaptive_p / dynatemp / custom sampler
+   ordering. Each is a few lines of glue; together one PR.
+2. **Multimodal follow-ups** (§7) — `--mmproj-auto` (sibling-file
+   probe) and remote-URL image fetch (needs a download manager with
+   size caps + content-type sniffing).
+3. **Binding-blocked items** (`[~]`) — RoPE / YARN knobs, NUMA /
+   direct-IO / device pinning, model-URL fetch, control-vector. These
+   wait on binding work.
+4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
+   rejection-sampling) is the largest remaining feature.
 
 Everything in the GitHub-issues table is queued behind those when its
 scope warrants the work. The biggest is #14 (speculative

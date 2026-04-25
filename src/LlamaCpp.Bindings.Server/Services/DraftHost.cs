@@ -102,6 +102,15 @@ public sealed class DraftHost : IDisposable
             KvCacheTypeV      = opts.KvCacheTypeV,
         });
 
+        // Mirror the main host's LoRA attachments onto the speculative
+        // main context — adapters bind to the LlamaModel, which both
+        // contexts share, so we can attach the same adapter handle to
+        // each context with the same scale.
+        foreach (var loaded in mainHost.Adapters)
+        {
+            _mainContext.AttachLoraAdapter(loaded.Adapter, loaded.Scale);
+        }
+
         _gate = new SemaphoreSlim(1, 1);
 
         _log.LogInformation(
