@@ -471,6 +471,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendAsync()
     {
+        StreamTraceLog.Log("SendAsync:enter");
         if (Session is null || SelectedConversation is null || _activeLoadedProfile is null) return;
         var text = UserInput.Trim();
         if (text.Length == 0) return;
@@ -788,6 +789,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         MessageViewModel assistant,
         Func<CancellationToken, IAsyncEnumerable<StreamEvent>> source)
     {
+        StreamTraceLog.Log("StreamIntoMessageAsync:enter");
         // Batch content + reasoning updates at ~30 fps. We accumulate on the
         // pool thread (the consumer of Session.StreamAssistantReplyAsync runs
         // there thanks to ConfigureAwait(false) below) and only marshal to
@@ -804,6 +806,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         // Drain the pending StringBuilders by posting a UI-thread action that
         // mutates assistant.Content / assistant.Reasoning. Fire-and-forget:
         // the pool thread returns immediately, decode continues.
+        int flushSeq = 0;
         void PostFlush()
         {
             if (pendingContent.Length == 0 && pendingReasoning.Length == 0)
@@ -826,12 +829,19 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 pendingReasoning.Clear();
             }
             lastFlushTicks = Environment.TickCount;
+            int seq = System.Threading.Interlocked.Increment(ref flushSeq);
+            int contentLen = contentSnap?.Length ?? 0;
+            int reasoningLen = reasoningSnap?.Length ?? 0;
+            StreamTraceLog.Log($"PostFlush:queued seq={seq} content={contentLen} reasoning={reasoningLen}");
 
             Dispatcher.UIThread.Post(() =>
             {
+                StreamTraceLog.Log($"PostFlush:UI-thread-fired seq={seq}");
+                var swApply = System.Diagnostics.Stopwatch.StartNew();
                 if (contentSnap is not null) assistant.Content += contentSnap;
                 if (reasoningSnap is not null)
                     assistant.Reasoning = (assistant.Reasoning ?? string.Empty) + reasoningSnap;
+                StreamTraceLog.Log($"PostFlush:UI-thread-done seq={seq} apply_us={(swApply.Elapsed.TotalMilliseconds * 1000.0):F1}");
             }, DispatcherPriority.Background);
         }
 
@@ -883,8 +893,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             // ~0.5-1 ms of Dispatcher-queue latency on hot paths — the
             // suspected source of the 8 tok/s gap vs. llama-server at this
             // workload size.
+            int evtSeq = 0;
+            StreamTraceLog.Log("StreamIntoMessageAsync:before-await-foreach");
             await foreach (var evt in source(_generationCts.Token).ConfigureAwait(false))
             {
+                evtSeq++;
+                if (evtSeq == 1) StreamTraceLog.Log("StreamIntoMessageAsync:first-event");
                 switch (evt)
                 {
                     case StreamEvent.Content c:
@@ -892,6 +906,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                             System.Threading.Interlocked.Exchange(ref liveStartTicks, DateTime.UtcNow.Ticks);
                         System.Threading.Interlocked.Increment(ref liveTokens);
                         pendingContent.Append(c.Text);
+                        if (evtSeq <= 5 || evtSeq % 25 == 0)
+                            StreamTraceLog.Log($"StreamIntoMessageAsync:Content evtSeq={evtSeq} len={c.Text.Length}");
                         TryFlush();
                         break;
                     case StreamEvent.Reasoning r:
@@ -899,6 +915,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                             System.Threading.Interlocked.Exchange(ref liveStartTicks, DateTime.UtcNow.Ticks);
                         System.Threading.Interlocked.Increment(ref liveTokens);
                         pendingReasoning.Append(r.Text);
+                        if (evtSeq <= 5 || evtSeq % 25 == 0)
+                            StreamTraceLog.Log($"StreamIntoMessageAsync:Reasoning evtSeq={evtSeq} len={r.Text.Length}");
                         TryFlush();
                         break;
                     case StreamEvent.Language lang:
@@ -910,14 +928,17 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                             DispatcherPriority.Background);
                         break;
                     case StreamEvent.Done d:
+                        StreamTraceLog.Log($"StreamIntoMessageAsync:Done evtSeq={evtSeq} predicted={d.CompletionTokens} prompt={d.PromptTokens}");
                         // Force-post the final flush, then InvokeAsync the
                         // Done-handler at the same Background priority. FIFO
                         // semantics guarantee the Done handler runs after all
                         // queued flushes have drained.
                         PostFlush();
                         var doneData = d;
+                        StreamTraceLog.Log("Done:before-InvokeAsync");
                         await Dispatcher.UIThread.InvokeAsync(() =>
                         {
+                            StreamTraceLog.Log("Done:UI-handler-fired");
                             assistant.IsStreaming = false;
                             assistant.StopReason = doneData.StopReason;
                             assistant.PromptTokens = doneData.PromptTokens;
@@ -929,7 +950,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                                 ? doneData.CompletionTokens / doneData.GenerationTime.TotalSeconds : 0;
                             assistant.StatsSummary = $"{doneData.CompletionTokens} tok · {tps:F1} tok/s";
                             StatusText = $"Done — {assistant.StatsSummary}";
+                            StreamTraceLog.Log("Done:UI-handler-done");
                         }, DispatcherPriority.Background);
+                        StreamTraceLog.Log("Done:after-InvokeAsync");
                         break;
                 }
             }
@@ -1177,6 +1200,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task RegenerateMessageAsync(MessageViewModel? msg)
     {
+        StreamTraceLog.Log("RegenerateMessageAsync:enter");
         if (msg is null || Session is null || SelectedConversation is null) return;
         var conv = SelectedConversation;
 
@@ -1200,10 +1224,16 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             IsReasoningExpanded = AppSettings.ShowReasoningInProgress,
             ModelLabel = BuildModelLabel(),
         };
+        StreamTraceLog.Log("RegenerateMessageAsync:before AddChildOf");
         conv.AddChildOf(userAnchorId, newAssistant);
+        StreamTraceLog.Log("RegenerateMessageAsync:after AddChildOf");
 
+        StreamTraceLog.Log("RegenerateMessageAsync:before ClearKv");
         Session.ClearKv();
+        StreamTraceLog.Log("RegenerateMessageAsync:after ClearKv");
         await StreamIntoNewAssistantAsync(conv, newAssistant);
+        StreamTraceLog.Log("RegenerateMessageAsync:exit");
+        StreamTraceLog.Flush();
     }
 
     /// <summary>

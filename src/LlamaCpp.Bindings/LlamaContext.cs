@@ -1109,22 +1109,39 @@ public sealed class LlamaContext : IDisposable
     /// for the decode+sample pair so another session's decode can't
     /// overwrite the logits mid-flight.
     /// </summary>
+    /// <remarks>
+    /// The body runs inside <c>Task.Run</c> so the work always lands on the
+    /// thread pool, even when the lock is uncontested (the
+    /// <see cref="System.Threading.SemaphoreSlim"/> WaitAsync completes
+    /// synchronously in that case, which would otherwise leave the body
+    /// running inline on the caller's thread). Without this hop, a
+    /// generator awaited from a UI dispatcher would block the dispatcher
+    /// for the duration of the per-token decode loop — Avalonia /
+    /// WPF callers wouldn't get UI updates until end-of-generation.
+    /// </remarks>
     internal async Task WithDecodeLockAsync(Action action, CancellationToken cancellationToken)
     {
         await _decodeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { action(); }
+        try
+        {
+            await Task.Run(action, cancellationToken).ConfigureAwait(false);
+        }
         finally { _decodeLock.Release(); }
     }
 
     /// <summary>
     /// Typed variant of <see cref="WithDecodeLockAsync(Action, CancellationToken)"/>
     /// for calls that compute a value under the lock (e.g. sample + decode →
-    /// returned token id).
+    /// returned token id). Same pool-thread-hop semantics — see the remarks
+    /// on the <see cref="Action"/> overload.
     /// </summary>
     internal async Task<T> WithDecodeLockAsync<T>(Func<T> action, CancellationToken cancellationToken)
     {
         await _decodeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return action(); }
+        try
+        {
+            return await Task.Run(action, cancellationToken).ConfigureAwait(false);
+        }
         finally { _decodeLock.Release(); }
     }
 
