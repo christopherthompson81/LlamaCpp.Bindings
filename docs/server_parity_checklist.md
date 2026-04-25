@@ -240,10 +240,16 @@ Features clients expect from the OpenAI chat-completions API.
   `LlamaNumaStrategy`. Server-side wiring would be a 3-line
   `Program.cs` call before model load. Skipped here because it's
   process-wide state and trivial; queue separately.
-- [~] **`-ot, --override-tensor`**, **`--cpu-moe`** — both ride on
-  the `tensor_buft_overrides` field. The binding doesn't expose the
-  buffer-type API yet (`ggml_backend_dev_buffer_type`,
-  `ggml_backend_dev_host_buffer_type`); see follow-up.
+- [x] **`-ot, --override-tensor`** —
+  `ServerOptions.TensorBuftOverrides` (list of
+  `{Pattern, Device, Host}`). Resolved at startup against
+  `LlamaHardware.EnumerateDevices`; bad device names fail fast. Pairs
+  with the new public `LlamaBufferType` wrapper +
+  `LlamaTensorBuftOverride` record on the binding side.
+- [x] **`--cpu-moe`** — `ServerOptions.CpuMoe` (bool). Implemented as
+  a preset that appends llama.cpp's canonical regex
+  `\.ffn_(up\|down\|gate\|gate_up)_(ch\|)exps` mapped to the CPU
+  device's primary buft.
 - [~] **`-mu, --model-url`** / **`-hf, --hf-repo`** — download manager.
   Significant design work (resumable, hash-verified, cache directory).
 - [!] **`--embd-gemma-default`, `--fim-qwen-*-default`, etc.** — CLI
@@ -379,9 +385,9 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 70 | shipped, tested |
+| `[x]` done | 72 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
-| `[~]` needs binding | 5 | binding work first |
+| `[~]` needs binding | 4 | binding work first |
 | `[#NN]` tracked | 9 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
 
@@ -417,8 +423,8 @@ All "binding already exposes" items are now wired. What remains:
    probe) and remote-URL image fetch (needs a download manager with
    size caps + content-type sniffing).
 3. **Binding-blocked items** (`[~]`) — `--numa` (trivial Program.cs
-   wiring; skipped only because it's process-wide), override-tensor +
-   cpu-moe (need the buffer-type API), model-URL fetch, control-vector.
+   wiring; skipped only because it's process-wide), model-URL fetch,
+   control-vector.
 4. **Tracked GitHub issues** — see the table above; #14 (DeepMind
    rejection-sampling) is the largest remaining feature.
 

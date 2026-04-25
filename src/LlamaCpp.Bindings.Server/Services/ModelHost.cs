@@ -78,19 +78,27 @@ public sealed class ModelHost : IDisposable
             pinnedDevices = picked;
         }
 
+        // Resolve tensor-buft overrides + the optional --cpu-moe preset.
+        // Both share the same plumbing — the preset just appends a
+        // canonical pattern that routes MoE FFN tensors to the CPU buft.
+        var availableForOverrides = (pinnedDevices ?? (IReadOnlyList<LlamaComputeDevice>?)null)
+            ?? LlamaHardware.EnumerateDevices();
+        var overrides = ResolveTensorBuftOverrides(_opts, availableForOverrides);
+
         Model = new LlamaModel(_opts.ModelPath, new LlamaModelParameters
         {
-            GpuLayerCount  = _opts.GpuLayerCount,
-            MainGpu        = _opts.MainGpu,
-            SplitMode      = _opts.SplitMode,
-            UseMmap        = _opts.UseMmap,
-            UseMlock       = _opts.UseMlock,
-            CheckTensors   = _opts.CheckTensors,
-            UseDirectIo    = _opts.UseDirectIo,
-            NoHost         = _opts.NoHost,
-            UseExtraBufts  = _opts.UseExtraBufts,
-            Devices        = pinnedDevices,
-            TensorSplit    = _opts.TensorSplit,
+            GpuLayerCount       = _opts.GpuLayerCount,
+            MainGpu             = _opts.MainGpu,
+            SplitMode           = _opts.SplitMode,
+            UseMmap             = _opts.UseMmap,
+            UseMlock            = _opts.UseMlock,
+            CheckTensors        = _opts.CheckTensors,
+            UseDirectIo         = _opts.UseDirectIo,
+            NoHost              = _opts.NoHost,
+            UseExtraBufts       = _opts.UseExtraBufts,
+            Devices             = pinnedDevices,
+            TensorSplit         = _opts.TensorSplit,
+            TensorBuftOverrides = overrides.Count > 0 ? overrides : null,
         });
 
         Context = new LlamaContext(Model, BuildContextParameters(
@@ -143,6 +151,77 @@ public sealed class ModelHost : IDisposable
         foreach (var a in _adapters) a.Adapter.Dispose();
         _adapters.Clear();
         Model.Dispose();
+    }
+
+    /// <summary>
+    /// llama.cpp's canonical regex matching MoE expert FFN tensors —
+    /// <c>blk.*.ffn_(up|down|gate|gate_up)_(ch|)exps</c>. Used by
+    /// <see cref="ServerOptions.CpuMoe"/> to route those tensors to CPU
+    /// memory, keeping the dense layers on GPU.
+    /// </summary>
+    private const string CpuMoeRegex = "\\.ffn_(up|down|gate|gate_up)_(ch|)exps";
+
+    /// <summary>
+    /// Resolve operator-supplied tensor-buft overrides + the optional
+    /// <see cref="ServerOptions.CpuMoe"/> preset to a list the binding
+    /// can pin into the load call. Bad device names fail fast with the
+    /// available list spelled out.
+    /// </summary>
+    private static List<LlamaTensorBuftOverride> ResolveTensorBuftOverrides(
+        ServerOptions opts, IReadOnlyList<LlamaComputeDevice> available)
+    {
+        var result = new List<LlamaTensorBuftOverride>();
+
+        foreach (var entry in opts.TensorBuftOverrides)
+        {
+            if (string.IsNullOrEmpty(entry.Pattern))
+            {
+                throw new InvalidOperationException(
+                    "LlamaServer:TensorBuftOverrides entry has empty Pattern.");
+            }
+            if (string.IsNullOrEmpty(entry.Device))
+            {
+                throw new InvalidOperationException(
+                    $"LlamaServer:TensorBuftOverrides entry for pattern '{entry.Pattern}' has empty Device.");
+            }
+            var device = available.FirstOrDefault(d =>
+                string.Equals(d.Name, entry.Device, StringComparison.OrdinalIgnoreCase));
+            if (device is null)
+            {
+                var availList = string.Join(", ", available.Select(d => d.Name));
+                throw new InvalidOperationException(
+                    $"LlamaServer:TensorBuftOverrides device '{entry.Device}' did not match " +
+                    $"any registered compute device. Available: [{availList}].");
+            }
+            var buft = entry.Host
+                ? LlamaBufferType.HostFrom(device)
+                : LlamaBufferType.From(device);
+            if (buft is null)
+            {
+                throw new InvalidOperationException(
+                    $"Device '{entry.Device}' has no host-pinned buffer type — set Host=false " +
+                    "or pick a different device.");
+            }
+            result.Add(new LlamaTensorBuftOverride(entry.Pattern, buft));
+        }
+
+        if (opts.CpuMoe)
+        {
+            // The preset always routes to the CPU device's buft. Walk
+            // every registered device since CPU isn't necessarily in
+            // the operator's pinned-devices list.
+            var allDevices = LlamaHardware.EnumerateDevices();
+            var cpuDevice = allDevices.FirstOrDefault(d => d.Type == LlamaComputeDeviceType.Cpu);
+            if (cpuDevice is null)
+            {
+                throw new InvalidOperationException(
+                    "LlamaServer:CpuMoe is set but no CPU compute device was registered. " +
+                    "Backend plugins may have failed to load.");
+            }
+            result.Add(new LlamaTensorBuftOverride(CpuMoeRegex, LlamaBufferType.From(cpuDevice)));
+        }
+
+        return result;
     }
 
     /// <summary>

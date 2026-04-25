@@ -116,3 +116,67 @@ public static class LlamaHardware
         return total;
     }
 }
+
+/// <summary>
+/// A ggml backend buffer type — the destination for a model tensor. Each
+/// device has a primary buft (used by default) and may have a host-pinned
+/// buft for transfers between CPU and that device. Used as the target of
+/// <see cref="LlamaTensorBuftOverride"/>.
+/// </summary>
+/// <remarks>
+/// Lifetime is owned by ggml; the underlying pointer lives as long as the
+/// backend itself. There is no Dispose — wrappers are cheap value records.
+/// </remarks>
+public sealed record LlamaBufferType(IntPtr Handle, string Name)
+{
+    /// <summary>
+    /// Primary buffer type for <paramref name="device"/> — where tensors
+    /// stored on that device live by default.
+    /// </summary>
+    public static LlamaBufferType From(LlamaComputeDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var buft = NativeMethods.ggml_backend_dev_buffer_type(device.Handle);
+        if (buft == IntPtr.Zero)
+        {
+            throw new LlamaException(
+                nameof(NativeMethods.ggml_backend_dev_buffer_type),
+                $"Device '{device.Name}' has no primary buffer type.");
+        }
+        return Wrap(buft);
+    }
+
+    /// <summary>
+    /// Host-pinned buffer type for <paramref name="device"/> — used for
+    /// CPU↔device transfers (e.g. CUDA's pinned-host allocator). Returns
+    /// <c>null</c> when the device has no host buft.
+    /// </summary>
+    public static LlamaBufferType? HostFrom(LlamaComputeDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var buft = NativeMethods.ggml_backend_dev_host_buffer_type(device.Handle);
+        return buft == IntPtr.Zero ? null : Wrap(buft);
+    }
+
+    private static LlamaBufferType Wrap(IntPtr buft)
+    {
+        var namePtr = NativeMethods.ggml_backend_buft_name(buft);
+        var name = Marshal.PtrToStringUTF8(namePtr) ?? "(unknown)";
+        return new LlamaBufferType(buft, name);
+    }
+}
+
+/// <summary>
+/// Pattern → buffer-type override applied during model load. Tensors whose
+/// names match the regex pattern get loaded into
+/// <see cref="BufferType"/> instead of their default location. llama-server's
+/// <c>--override-tensor</c> and <c>--cpu-moe</c> are both built on this.
+/// </summary>
+/// <remarks>
+/// Patterns are POSIX-style regexes per llama.cpp's tensor matcher
+/// (e.g. <c>"\.ffn_(up|down|gate)_exps"</c>). Multiple overrides are
+/// matched in order; the first match wins. The pattern string is not
+/// retained by llama.cpp past load — we copy it into unmanaged memory
+/// for the load call's duration via <see cref="LlamaModelParameters.Pin"/>.
+/// </remarks>
+public sealed record LlamaTensorBuftOverride(string Pattern, LlamaBufferType BufferType);

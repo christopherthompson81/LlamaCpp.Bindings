@@ -57,6 +57,23 @@ internal static partial class NativeMethods
     [LibraryImport(LibGgml)]
     internal static unsafe partial void ggml_backend_dev_memory(IntPtr device, nuint* free, nuint* total);
 
+    // Resolves the device's primary (default) buffer type — the buft used
+    // for tensors stored on that device. Returned pointer is owned by ggml
+    // and lives as long as the backend; callers must not free it.
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr ggml_backend_dev_buffer_type(IntPtr device);
+
+    // Host-pinned buffer type for a device (e.g. CUDA's pinned-host
+    // allocator). Returns NULL when the device has no host buft. Same
+    // lifetime semantics as the primary buft above.
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr ggml_backend_dev_host_buffer_type(IntPtr device);
+
+    // Diagnostic: human-readable buft name (e.g. "CPU", "CUDA0",
+    // "CUDA_Host"). Returned pointer is a static C string owned by ggml.
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr ggml_backend_buft_name(IntPtr buft);
+
     // Callback: void (*)(ggml_log_level level, const char * text, void * user_data)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void GgmlLogCallback(ggml_log_level level, IntPtr text, IntPtr user_data);
@@ -206,6 +223,11 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibName)]
     internal static partial nuint llama_max_devices();
+
+    // Upper bound on tensor_buft_overrides count llama.cpp will accept
+    // (currently 256; the runtime cap can change across versions).
+    [LibraryImport(LibName)]
+    internal static partial nuint llama_max_tensor_buft_overrides();
 
     // ----- Vocabulary (Phase 2) -----
 

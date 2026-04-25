@@ -2359,6 +2359,94 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
 }
 
 /// <summary>
+/// Tensor-buft overrides + the <c>CpuMoe</c> preset. The default test
+/// model isn't an MoE so the regex matches no tensors, but the load
+/// must still succeed — that's the smoke we care about. The bad-device
+/// test confirms the same fail-fast behaviour as device pinning.
+/// </summary>
+public class LlamaServerOverrideTensorTests : IClassFixture<LlamaServerOverrideTensorTests.OverrideFactory>
+{
+    private readonly OverrideFactory _factory;
+    public LlamaServerOverrideTensorTests(OverrideFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task CpuMoe_Preset_Boots_And_Serves_Chat()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "Hi" } },
+            MaxTokens = 4,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public void Override_With_Bad_Device_Surfaces_During_Startup()
+    {
+        using var factory = new BadOverrideFactory();
+        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        var inner = ex;
+        while (inner is not null)
+        {
+            if (inner.Message.Contains("not-a-real-device", StringComparison.Ordinal))
+            {
+                return;
+            }
+            inner = inner.InnerException;
+        }
+        Assert.Fail($"Expected error referencing the bad device name, got: {ex}");
+    }
+
+    public sealed class OverrideFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]       = modelPath,
+                    ["LlamaServer:ContextSize"]     = "1024",
+                    ["LlamaServer:MaxSequenceCount"] = "1",
+                    ["LlamaServer:GpuLayerCount"]   = "-1",
+                    ["LlamaServer:OffloadKqv"]      = "true",
+                    ["LlamaServer:MaxOutputTokens"] = "16",
+                    ["LlamaServer:CpuMoe"]          = "true",
+                    ["LlamaServer:Urls"]            = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+
+    public sealed class BadOverrideFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]                          = modelPath,
+                    ["LlamaServer:ContextSize"]                        = "1024",
+                    ["LlamaServer:MaxSequenceCount"]                   = "1",
+                    ["LlamaServer:GpuLayerCount"]                      = "-1",
+                    ["LlamaServer:Urls"]                               = "",
+                    ["LlamaServer:TensorBuftOverrides:0:Pattern"]      = "blk\\.0\\..*",
+                    ["LlamaServer:TensorBuftOverrides:0:Device"]       = "not-a-real-device",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
 /// Device pinning + tensor-split + the load-time bool knobs (UseDirectIo,
 /// NoHost, UseExtraBufts). Picks the first available device by name and
 /// verifies the model still loads + serves chat. The bad-name test

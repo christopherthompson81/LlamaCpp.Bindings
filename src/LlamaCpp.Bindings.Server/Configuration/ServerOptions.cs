@@ -99,6 +99,24 @@ public sealed class ServerOptions
     public List<float>? TensorSplit { get; set; }
 
     /// <summary>
+    /// llama-server's <c>--override-tensor</c>. Each entry routes tensors
+    /// whose names match <see cref="TensorBuftOverrideConfig.Pattern"/>
+    /// to a specific device. <see cref="CpuMoe"/> wins precedence when
+    /// both this list and CpuMoe are set: CpuMoe's preset is appended
+    /// after this list.
+    /// </summary>
+    public List<TensorBuftOverrideConfig> TensorBuftOverrides { get; set; } = new();
+
+    /// <summary>
+    /// llama-server's <c>--cpu-moe</c>. Routes Mixture-of-Experts FFN
+    /// tensors (<c>blk.*.ffn_(up|down|gate|gate_up)_(ch|)exps</c>) to
+    /// CPU memory — the canonical knob for fitting a large MoE model
+    /// onto a GPU whose VRAM only holds the dense layers. Implemented
+    /// as a preset over <see cref="TensorBuftOverrides"/>.
+    /// </summary>
+    public bool CpuMoe { get; set; } = false;
+
+    /// <summary>
     /// Threads used for single-token decode (per-token work). <c>-1</c>
     /// = let llama.cpp pick (default). Most chat workloads with a
     /// GPU model don't benefit from raising this; CPU-only deployments
@@ -402,6 +420,32 @@ public sealed class ServerOptions
     /// source is sufficient. Matches llama-server's <c>--api-key-file</c>.
     /// </summary>
     public string? ApiKeyFile { get; set; }
+}
+
+/// <summary>
+/// Configuration entry for a tensor-buft override. Mirrors one
+/// <c>--override-tensor PATTERN=DEVICE</c> argument from llama-server.
+/// </summary>
+public sealed class TensorBuftOverrideConfig
+{
+    /// <summary>
+    /// POSIX-style regex matched against tensor names (e.g.
+    /// <c>"blk\\.0\\.ffn_.*"</c>). Required.
+    /// </summary>
+    public string Pattern { get; set; } = "";
+
+    /// <summary>
+    /// Name of the destination device (resolved against
+    /// <see cref="LlamaHardware.EnumerateDevices"/>). Required.
+    /// </summary>
+    public string Device { get; set; } = "";
+
+    /// <summary>
+    /// When true, route to the device's host-pinned buffer type instead
+    /// of its primary buft. Useful for keeping tensors in CPU memory
+    /// even when the device is a GPU. Default false.
+    /// </summary>
+    public bool Host { get; set; } = false;
 }
 
 /// <summary>

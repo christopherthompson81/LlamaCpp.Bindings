@@ -85,6 +85,20 @@ public sealed class LlamaModelParameters
     /// </summary>
     public IReadOnlyList<float>? TensorSplit { get; set; }
 
+    /// <summary>
+    /// Pattern-driven tensor placement overrides. Each entry routes
+    /// tensors whose names match <see cref="LlamaTensorBuftOverride.Pattern"/>
+    /// to <see cref="LlamaTensorBuftOverride.BufferType"/> instead of
+    /// their default device. Used by llama-server's
+    /// <c>--override-tensor</c> and <c>--cpu-moe</c> presets.
+    /// </summary>
+    /// <remarks>
+    /// The list is capped at <c>llama_max_tensor_buft_overrides()</c>
+    /// (currently 256). Patterns are POSIX-style regex; matches are
+    /// evaluated in list order and the first one wins.
+    /// </remarks>
+    public IReadOnlyList<LlamaTensorBuftOverride>? TensorBuftOverrides { get; set; }
+
     internal llama_model_params ToNative()
     {
         var native = NativeMethods.llama_model_default_params();
@@ -112,6 +126,8 @@ public sealed class LlamaModelParameters
         var native = ToNative();
         IntPtr devicesBuf = IntPtr.Zero;
         IntPtr tensorSplitBuf = IntPtr.Zero;
+        IntPtr overridesBuf = IntPtr.Zero;
+        var overridePatternBufs = new List<IntPtr>();
 
         try
         {
@@ -151,15 +167,69 @@ public sealed class LlamaModelParameters
                 }
                 native.tensor_split = tensorSplitBuf;
             }
+
+            if (TensorBuftOverrides is { Count: > 0 } overrides)
+            {
+                int max = (int)NativeMethods.llama_max_tensor_buft_overrides();
+                if (overrides.Count > max)
+                {
+                    throw new ArgumentException(
+                        $"TensorBuftOverrides has {overrides.Count} entries but " +
+                        $"llama_max_tensor_buft_overrides() reports {max}.",
+                        nameof(TensorBuftOverrides));
+                }
+
+                // Each entry is { const char* pattern; void* buft } — two
+                // pointer-sized fields. The list is NULL-terminated by an
+                // entry whose pattern field is null.
+                int entrySize = IntPtr.Size * 2;
+                int byteCount = (overrides.Count + 1) * entrySize;
+                overridesBuf = Marshal.AllocHGlobal(byteCount);
+
+                for (int i = 0; i < overrides.Count; i++)
+                {
+                    var entry = overrides[i];
+                    if (entry is null)
+                    {
+                        throw new ArgumentException(
+                            $"TensorBuftOverrides[{i}] is null.", nameof(TensorBuftOverrides));
+                    }
+                    if (string.IsNullOrEmpty(entry.Pattern))
+                    {
+                        throw new ArgumentException(
+                            $"TensorBuftOverrides[{i}].Pattern is empty — would terminate the " +
+                            "list early in the native struct layout.", nameof(TensorBuftOverrides));
+                    }
+
+                    // Allocate UTF-8 bytes for the pattern. Patterns are
+                    // typically ASCII regex but we use UTF-8 for
+                    // consistency with the rest of the binding's string
+                    // marshalling. PinnedNative.Dispose frees these.
+                    var patternPtr = Marshal.StringToCoTaskMemUTF8(entry.Pattern);
+                    overridePatternBufs.Add(patternPtr);
+
+                    int slot = i * entrySize;
+                    Marshal.WriteIntPtr(overridesBuf, slot, patternPtr);
+                    Marshal.WriteIntPtr(overridesBuf, slot + IntPtr.Size, entry.BufferType.Handle);
+                }
+                // Terminator
+                int tail = overrides.Count * entrySize;
+                Marshal.WriteIntPtr(overridesBuf, tail, IntPtr.Zero);
+                Marshal.WriteIntPtr(overridesBuf, tail + IntPtr.Size, IntPtr.Zero);
+
+                native.tensor_buft_overrides = overridesBuf;
+            }
         }
         catch
         {
             if (devicesBuf != IntPtr.Zero) Marshal.FreeHGlobal(devicesBuf);
             if (tensorSplitBuf != IntPtr.Zero) Marshal.FreeHGlobal(tensorSplitBuf);
+            if (overridesBuf != IntPtr.Zero) Marshal.FreeHGlobal(overridesBuf);
+            foreach (var p in overridePatternBufs) Marshal.FreeHGlobal(p);
             throw;
         }
 
-        return new PinnedNative(native, devicesBuf, tensorSplitBuf);
+        return new PinnedNative(native, devicesBuf, tensorSplitBuf, overridesBuf, overridePatternBufs);
     }
 
     /// <summary>
@@ -173,13 +243,22 @@ public sealed class LlamaModelParameters
         public llama_model_params Native;
         private IntPtr _devicesBuf;
         private IntPtr _tensorSplitBuf;
+        private IntPtr _overridesBuf;
+        private List<IntPtr>? _overridePatternBufs;
         private bool _disposed;
 
-        public PinnedNative(llama_model_params native, IntPtr devicesBuf, IntPtr tensorSplitBuf)
+        public PinnedNative(
+            llama_model_params native,
+            IntPtr devicesBuf,
+            IntPtr tensorSplitBuf,
+            IntPtr overridesBuf,
+            List<IntPtr>? overridePatternBufs)
         {
             Native = native;
             _devicesBuf = devicesBuf;
             _tensorSplitBuf = tensorSplitBuf;
+            _overridesBuf = overridesBuf;
+            _overridePatternBufs = overridePatternBufs;
         }
 
         public void Dispose()
@@ -188,8 +267,18 @@ public sealed class LlamaModelParameters
             _disposed = true;
             if (_devicesBuf != IntPtr.Zero) Marshal.FreeHGlobal(_devicesBuf);
             if (_tensorSplitBuf != IntPtr.Zero) Marshal.FreeHGlobal(_tensorSplitBuf);
+            if (_overridesBuf != IntPtr.Zero) Marshal.FreeHGlobal(_overridesBuf);
+            if (_overridePatternBufs is not null)
+            {
+                foreach (var p in _overridePatternBufs)
+                {
+                    Marshal.FreeCoTaskMem(p);
+                }
+                _overridePatternBufs = null;
+            }
             _devicesBuf = IntPtr.Zero;
             _tensorSplitBuf = IntPtr.Zero;
+            _overridesBuf = IntPtr.Zero;
         }
     }
 
