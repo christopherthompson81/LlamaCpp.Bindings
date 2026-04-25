@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using LlamaCpp.Bindings.Server.Services;
 
 namespace LlamaCpp.Bindings.Server.Models;
 
@@ -44,6 +45,31 @@ public sealed class ChatCompletionsRequest
     /// </summary>
     [JsonPropertyName("logit_bias")]
     public Dictionary<string, float>? LogitBias { get; set; }
+
+    // ----- Extended sampler knobs (llama-server parity) -----
+
+    [JsonPropertyName("min_p")]              public float? MinP { get; set; }
+    [JsonPropertyName("typical_p")]          public float? TypicalP { get; set; }
+    [JsonPropertyName("top_n_sigma")]        public float? TopNSigma { get; set; }
+
+    [JsonPropertyName("xtc_probability")]    public float? XtcProbability { get; set; }
+    [JsonPropertyName("xtc_threshold")]      public float? XtcThreshold { get; set; }
+
+    [JsonPropertyName("dry_multiplier")]     public float? DryMultiplier { get; set; }
+    [JsonPropertyName("dry_base")]           public float? DryBase { get; set; }
+    [JsonPropertyName("dry_allowed_length")] public int? DryAllowedLength { get; set; }
+    [JsonPropertyName("dry_penalty_last_n")] public int? DryPenaltyLastN { get; set; }
+    [JsonPropertyName("dry_sequence_breakers")] public List<string>? DrySequenceBreakers { get; set; }
+
+    /// <summary>0 = off, 1 = Mirostat v1, 2 = Mirostat v2. When non-zero, overrides truncation + temperature.</summary>
+    [JsonPropertyName("mirostat")]           public int? Mirostat { get; set; }
+    [JsonPropertyName("mirostat_tau")]       public float? MirostatTau { get; set; }
+    [JsonPropertyName("mirostat_eta")]       public float? MirostatEta { get; set; }
+
+    [JsonPropertyName("repeat_penalty")]     public float? RepeatPenalty { get; set; }
+    [JsonPropertyName("frequency_penalty")]  public float? FrequencyPenalty { get; set; }
+    [JsonPropertyName("presence_penalty")]   public float? PresencePenalty { get; set; }
+    [JsonPropertyName("repeat_last_n")]      public int? RepeatLastN { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -155,6 +181,30 @@ public sealed class CompletionRequest
     /// <summary>Per-token logit bias, same semantics as <see cref="ChatCompletionsRequest.LogitBias"/>.</summary>
     [JsonPropertyName("logit_bias")]
     public Dictionary<string, float>? LogitBias { get; set; }
+
+    // ----- Extended sampler knobs (llama-server parity) -----
+
+    [JsonPropertyName("min_p")]              public float? MinP { get; set; }
+    [JsonPropertyName("typical_p")]          public float? TypicalP { get; set; }
+    [JsonPropertyName("top_n_sigma")]        public float? TopNSigma { get; set; }
+
+    [JsonPropertyName("xtc_probability")]    public float? XtcProbability { get; set; }
+    [JsonPropertyName("xtc_threshold")]      public float? XtcThreshold { get; set; }
+
+    [JsonPropertyName("dry_multiplier")]     public float? DryMultiplier { get; set; }
+    [JsonPropertyName("dry_base")]           public float? DryBase { get; set; }
+    [JsonPropertyName("dry_allowed_length")] public int? DryAllowedLength { get; set; }
+    [JsonPropertyName("dry_penalty_last_n")] public int? DryPenaltyLastN { get; set; }
+    [JsonPropertyName("dry_sequence_breakers")] public List<string>? DrySequenceBreakers { get; set; }
+
+    [JsonPropertyName("mirostat")]           public int? Mirostat { get; set; }
+    [JsonPropertyName("mirostat_tau")]       public float? MirostatTau { get; set; }
+    [JsonPropertyName("mirostat_eta")]       public float? MirostatEta { get; set; }
+
+    [JsonPropertyName("repeat_penalty")]     public float? RepeatPenalty { get; set; }
+    [JsonPropertyName("frequency_penalty")]  public float? FrequencyPenalty { get; set; }
+    [JsonPropertyName("presence_penalty")]   public float? PresencePenalty { get; set; }
+    [JsonPropertyName("repeat_last_n")]      public int? RepeatLastN { get; set; }
 }
 
 public sealed class CompletionResponse
@@ -188,4 +238,63 @@ public sealed class ModelEntry
 
     [JsonPropertyName("owned_by")]
     public string OwnedBy { get; set; } = "local";
+}
+
+/// <summary>
+/// Projections from request DTOs to the shared <see cref="SamplerParams"/>.
+/// Keeps the field-by-field copy out of the endpoint handlers.
+/// </summary>
+internal static class SamplerParamsExtensions
+{
+    public static SamplerParams ToSamplerParams(this ChatCompletionsRequest r) => new()
+    {
+        Temperature         = r.Temperature,
+        Seed                = r.Seed,
+        Mirostat            = r.Mirostat,
+        MirostatTau         = r.MirostatTau,
+        MirostatEta         = r.MirostatEta,
+        TopK                = r.TopK,
+        TopP                = r.TopP,
+        MinP                = r.MinP,
+        TypicalP            = r.TypicalP,
+        TopNSigma           = r.TopNSigma,
+        XtcProbability      = r.XtcProbability,
+        XtcThreshold        = r.XtcThreshold,
+        DryMultiplier       = r.DryMultiplier,
+        DryBase             = r.DryBase,
+        DryAllowedLength    = r.DryAllowedLength,
+        DryPenaltyLastN     = r.DryPenaltyLastN,
+        DrySequenceBreakers = r.DrySequenceBreakers,
+        RepeatPenalty       = r.RepeatPenalty,
+        FrequencyPenalty    = r.FrequencyPenalty,
+        PresencePenalty     = r.PresencePenalty,
+        RepeatLastN         = r.RepeatLastN,
+        LogitBias           = r.LogitBias,
+    };
+
+    public static SamplerParams ToSamplerParams(this CompletionRequest r) => new()
+    {
+        Temperature         = r.Temperature,
+        Seed                = r.Seed,
+        Mirostat            = r.Mirostat,
+        MirostatTau         = r.MirostatTau,
+        MirostatEta         = r.MirostatEta,
+        TopK                = r.TopK,
+        TopP                = r.TopP,
+        MinP                = r.MinP,
+        TypicalP            = r.TypicalP,
+        TopNSigma           = r.TopNSigma,
+        XtcProbability      = r.XtcProbability,
+        XtcThreshold        = r.XtcThreshold,
+        DryMultiplier       = r.DryMultiplier,
+        DryBase             = r.DryBase,
+        DryAllowedLength    = r.DryAllowedLength,
+        DryPenaltyLastN     = r.DryPenaltyLastN,
+        DrySequenceBreakers = r.DrySequenceBreakers,
+        RepeatPenalty       = r.RepeatPenalty,
+        FrequencyPenalty    = r.FrequencyPenalty,
+        PresencePenalty     = r.PresencePenalty,
+        RepeatLastN         = r.RepeatLastN,
+        LogitBias           = r.LogitBias,
+    };
 }

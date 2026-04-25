@@ -68,13 +68,12 @@ public static class ChatCompletionsEndpoint
         // pick a slot.
         var promptTokens = host.Model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
 
-        // Build the sampler before taking a slot so malformed logit_bias
-        // entries fail with 400 without holding the pool.
+        // Build the sampler before taking a slot so malformed logit_bias /
+        // mirostat / etc. fail with 400 without holding the pool.
         LlamaSampler sampler;
         try
         {
-            sampler = SamplerFactory.Build(
-                host.Model.Vocab, req.Temperature, req.TopK, req.TopP, req.Seed, req.LogitBias);
+            sampler = SamplerFactory.Build(host.Model, req.ToSamplerParams());
         }
         catch (ArgumentException ex)
         {

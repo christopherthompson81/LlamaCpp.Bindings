@@ -491,6 +491,145 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         Assert.NotEqual(baseText, biased!.Choices[0].Message.Content);
     }
 
+    // ----- Extended sampling knobs (min_p, typical_p, top_n_sigma, xtc, dry, mirostat, penalties) -----
+
+    [Fact]
+    public async Task MinP_And_TypicalP_And_TopNSigma_Are_Accepted()
+    {
+        // These all sit in the truncation stages of the sampler chain.
+        // Semantic verification for each is hard to write as a stable
+        // test (they shape the distribution in subtle ways), so we settle
+        // for "request completes without error and returns non-empty
+        // output" as the signal that the chain actually built.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"short reply {Guid.NewGuid():N}" } },
+            MaxTokens = 4,
+            Temperature = 0.7f,
+            MinP = 0.05f,
+            TypicalP = 0.95f,
+            TopNSigma = 1.5f,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content));
+    }
+
+    [Fact]
+    public async Task Heavy_Repeat_Penalty_Changes_Output_Vs_Baseline()
+    {
+        // Baseline greedy vs. greedy + repeat_penalty=2.0. A large penalty
+        // forces a different token path as soon as any prompt token would
+        // have been a candidate for repetition. This catches a broken
+        // wiring where the penalties stage silently gets dropped from the
+        // chain — the two runs would otherwise be identical.
+        var client = _factory.CreateClient();
+        var marker = Guid.NewGuid().ToString("N");
+        var prompt = $"Repeat: the the the the the the ({marker})";
+
+        var baseline = await PostChat(client, prompt, r => r.Temperature = 0.0f);
+        var penalised = await PostChat(client, prompt, r =>
+        {
+            r.Temperature = 0.0f;
+            r.RepeatPenalty = 2.0f;
+            r.RepeatLastN = 64;
+        });
+
+        Assert.False(string.IsNullOrWhiteSpace(baseline));
+        Assert.False(string.IsNullOrWhiteSpace(penalised));
+        Assert.NotEqual(baseline, penalised);
+    }
+
+    [Fact]
+    public async Task Mirostat_V2_Produces_Output_And_Overrides_Temperature()
+    {
+        // Mirostat terminal replaces temperature + truncation. Smoke: the
+        // request succeeds with non-empty output even though temperature
+        // would normally be required for stochastic sampling. Any throw
+        // from the sampler builder (e.g. a missing terminal) fails hard.
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"Short. {Guid.NewGuid():N}" } },
+            MaxTokens = 6,
+            Mirostat = 2,
+            MirostatTau = 5.0f,
+            MirostatEta = 0.1f,
+            // Deliberately leave Temperature / TopK / TopP unset — mirostat
+            // must supply its own terminal.
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content));
+    }
+
+    [Fact]
+    public async Task Invalid_Mirostat_Value_Rejected_With_400()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = "hi" } },
+            MaxTokens = 2,
+            Mirostat = 7, // only 0/1/2 valid
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Dry_Sampler_Accepts_Custom_Sequence_Breakers()
+    {
+        // DRY has the most moving parts of any sampler knob (multiplier,
+        // base, allowed_length, penalty_last_n, sequence_breakers). The
+        // lift here isn't "does it penalise" — that's a binding-level
+        // test — it's "does the server marshal all five fields through
+        // the chain without tripping over the list-of-strings breakers."
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"short. {Guid.NewGuid():N}" } },
+            MaxTokens = 4,
+            Temperature = 0.0f,
+            DryMultiplier = 0.8f,
+            DryBase = 1.75f,
+            DryAllowedLength = 2,
+            DryPenaltyLastN = 64,
+            DrySequenceBreakers = new() { "\n", ".", "," },
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(string.IsNullOrWhiteSpace(body!.Choices[0].Message.Content));
+    }
+
+    private async Task<string> PostChat(
+        HttpClient client, string userContent, Action<ChatCompletionsRequest> mutate)
+    {
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = userContent } },
+            MaxTokens = 12,
+        };
+        mutate(req);
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        return body!.Choices[0].Message.Content;
+    }
+
     // ----- Client-disconnect cancellation releases the pool slot -----
 
     [Fact]

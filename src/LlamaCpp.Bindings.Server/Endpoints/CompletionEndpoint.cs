@@ -42,8 +42,7 @@ public static class CompletionEndpoint
         LlamaSampler sampler;
         try
         {
-            sampler = SamplerFactory.Build(
-                host.Model.Vocab, req.Temperature, req.TopK, req.TopP, req.Seed, req.LogitBias);
+            sampler = SamplerFactory.Build(host.Model, req.ToSamplerParams());
         }
         catch (ArgumentException ex)
         {

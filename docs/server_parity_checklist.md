@@ -105,11 +105,12 @@ Features clients expect from the OpenAI chat-completions API.
 - [x] **`max_tokens`** — clamped to `ServerOptions.MaxOutputTokens`.
 - [x] **Prompt cache hit** — `X-Cached-Tokens` response header; the
   session pool finds the longest common prefix against idle slots.
-- [ ] **`min_p`**, **`typical`**, **`top_n_sigma`**, **`xtc`**, **`dry`**,
-  **`mirostat`/`mirostat_v2`**, **`penalty_last_n` / `repeat_penalty` /
-  `frequency_penalty` / `presence_penalty`** — all already in
-  `LlamaSamplerBuilder`; just need to widen the DTO and thread through
-  `SamplerFactory`.
+- [x] **`min_p`**, **`typical_p`**, **`top_n_sigma`**, **`xtc_*`**,
+  **`dry_*`**, **`mirostat`/`mirostat_v2`**, **`repeat_penalty` /
+  `frequency_penalty` / `presence_penalty` / `repeat_last_n`** — wired
+  through `SamplerParams` into `SamplerFactory`. Mirostat overrides
+  truncation + temperature (llama-server parity). Invalid mirostat
+  values reject with 400.
 - [ ] **`grammar`** / **`response_format: json_schema`** — `LlamaSampler`
   supports GBNF grammars and the project has a JSON-schema → GBNF
   compiler (`JsonSchemaToGbnf`). Wire the request field through to the
@@ -134,8 +135,9 @@ Features clients expect from the OpenAI chat-completions API.
 ## 4. Completion (`/completion`) request features
 
 - [x] **`prompt`**, **`n_predict`**, **`temperature`**, **`top_p`**,
-  **`top_k`**, **`seed`**, **`logit_bias`** — all covered via the shared
-  `SamplerFactory`.
+  **`top_k`**, **`seed`**, **`logit_bias`**, and the full extended
+  sampling set from §3 (min_p, typical_p, top_n_sigma, XTC, DRY,
+  mirostat, penalties) — all covered via the shared `SamplerFactory`.
 - [x] **Streaming** — SSE with `{content, stop}` chunks; terminates with
   a final `{content: "", stop: true, stop_reason, model, tokens_cached}`.
 - [ ] **`stop` sequences**, **`grammar`**, **`json_schema`** — same as
@@ -229,12 +231,16 @@ Features clients expect from the OpenAI chat-completions API.
 
 ## 10. Sampling knobs not yet in chat/completion requests
 
-Listed here rather than §3/§4 because they're a batch that lands together
-once the sampler factory grows. All already in `LlamaSamplerBuilder`.
-
-- [ ] min_p, typical, top_n_sigma, xtc, dry
-- [ ] mirostat, mirostat_v2, adaptive_p
-- [ ] repeat_penalty / frequency_penalty / presence_penalty, penalty_last_n
+- [x] min_p, typical_p, top_n_sigma, XTC, DRY (§3 / §4)
+- [x] mirostat, mirostat_v2 (§3 / §4)
+- [x] repeat_penalty / frequency_penalty / presence_penalty, repeat_last_n
+- [ ] adaptive_p terminal — binding exposes `WithAdaptiveP`; parity
+  would be a third terminal-selection branch in `SamplerFactory`.
+- [ ] Dynamic temperature (`dynatemp_range`, `dynatemp_exponent`) —
+  binding has `WithExtendedTemperature`; low priority.
+- [ ] Custom sampler ordering (`samplers`, `sampler_seq`) — current
+  builder applies a fixed order; exposing it requires a sampler-
+  builder change.
 
 ## 11. Observability + lifecycle
 
@@ -280,8 +286,8 @@ once the sampler factory grows. All already in `LlamaSamplerBuilder`.
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 28 | shipped, tested |
-| `[ ]` TODO | 25 | binding already exposes; server-side wiring only |
+| `[x]` done | 32 | shipped, tested |
+| `[ ]` TODO | 24 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 14 | binding work first |
 | `[#NN]` tracked | 4 | dedicated issue |
 | `[!]` won't | 6 | explicit non-goal |
@@ -290,22 +296,18 @@ once the sampler factory grows. All already in `LlamaSamplerBuilder`.
 
 Weighed by user-visible impact per unit of work, with the understanding
 that we've already hit the big items (multi-session, prompt caching,
-embeddings, auth, observability, cancellation).
+embeddings, auth, observability, cancellation, extended sampling).
 
-1. **Extended sampling knobs on chat/completion requests** (§3, §4, §10)
-   — `min_p`, penalties, DRY, mirostat, etc. All already in the binding's
-   sampler builder; one batch of DTO + `SamplerFactory` wiring closes a
-   conspicuous compat gap with OpenAI clients that send these fields.
-2. **`stop` sequences** (§3, §4) — ubiquitous in chat clients. Streaming
+1. **`stop` sequences** (§3, §4) — ubiquitous in chat clients. Streaming
    loop match + truncate + early terminate.
-3. **`grammar` / `response_format: json_schema`** (§3) — structured
+2. **`grammar` / `response_format: json_schema`** (§3) — structured
    output is the other half of "is this a serious server." Project
    already has a JSON-schema → GBNF compiler.
-4. **SSL / TLS + CORS** (§2) — unblocks non-localhost deployment and
+3. **SSL / TLS + CORS** (§2) — unblocks non-localhost deployment and
    browser-hosted clients.
-5. **Per-request timings + `/metrics`** (§11) — operational visibility as
+4. **Per-request timings + `/metrics`** (§11) — operational visibility as
    the server gets exercised beyond smoke tests.
-6. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
+5. **Multimodal (§7)** — big feature, unlocks vision chat; the binding
    already does the hard part.
 
 Everything under `[~]` is binding-side work of varying size. Speculative
