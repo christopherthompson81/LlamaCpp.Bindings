@@ -34,6 +34,18 @@ public static class CompletionEndpoint
         var opts = options.Value;
         int maxTokens = Math.Clamp(req.MaxTokens ?? opts.MaxOutputTokens, 1, opts.MaxOutputTokens);
 
+        string[]? stops;
+        try
+        {
+            stops = StopNormalizer.Parse(req.Stop);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
         // Tokenize up front — required for the pool's prefix-matching pass.
         // addSpecial=true mirrors llama-server's --special-tokens behaviour
         // for raw /completion calls.
@@ -51,6 +63,8 @@ public static class CompletionEndpoint
             return;
         }
 
+        var matcher = new StopMatcher(stops);
+
         using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
         using var _ = sampler;
         var generator = new LlamaGenerator(lease.Session, sampler);
@@ -64,6 +78,7 @@ public static class CompletionEndpoint
             var feature = http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>();
             feature?.DisableBuffering();
 
+            bool stoppedOnMatch = false;
             await foreach (var piece in generator.GenerateAsync(
                 lease.PromptTokens,
                 maxTokens: maxTokens,
@@ -71,17 +86,31 @@ public static class CompletionEndpoint
                 onTokenDecoded: lease.OnTokenDecoded,
                 cancellationToken: cancellationToken))
             {
-                if (string.IsNullOrEmpty(piece)) continue;
-                var json = JsonSerializer.Serialize(new { content = piece, stop = false });
-                await http.Response.WriteAsync("data: " + json + "\n\n", cancellationToken);
-                await http.Response.Body.FlushAsync(cancellationToken);
+                var (emit, stopped) = matcher.Offer(piece);
+                if (!string.IsNullOrEmpty(emit))
+                {
+                    var json = JsonSerializer.Serialize(new { content = emit, stop = false });
+                    await http.Response.WriteAsync("data: " + json + "\n\n", cancellationToken);
+                    await http.Response.Body.FlushAsync(cancellationToken);
+                }
+                if (stopped) { stoppedOnMatch = true; break; }
+            }
+            if (!stoppedOnMatch)
+            {
+                var trailing = matcher.Flush();
+                if (!string.IsNullOrEmpty(trailing))
+                {
+                    var json = JsonSerializer.Serialize(new { content = trailing, stop = false });
+                    await http.Response.WriteAsync("data: " + json + "\n\n", cancellationToken);
+                    await http.Response.Body.FlushAsync(cancellationToken);
+                }
             }
 
             var tail = JsonSerializer.Serialize(new
             {
                 content = "",
                 stop = true,
-                stop_reason = MapStopReason(generator.LastStopReason),
+                stop_reason = stoppedOnMatch ? "stop" : MapStopReason(generator.LastStopReason),
                 model = host.ModelId,
                 tokens_cached = lease.CachedTokens,
             });
@@ -90,6 +119,7 @@ public static class CompletionEndpoint
         else
         {
             var buf = new StringBuilder();
+            bool stoppedOnMatch = false;
             await foreach (var piece in generator.GenerateAsync(
                 lease.PromptTokens,
                 maxTokens: maxTokens,
@@ -97,12 +127,16 @@ public static class CompletionEndpoint
                 onTokenDecoded: lease.OnTokenDecoded,
                 cancellationToken: cancellationToken))
             {
-                buf.Append(piece);
+                var (emit, stopped) = matcher.Offer(piece);
+                if (emit.Length > 0) buf.Append(emit);
+                if (stopped) { stoppedOnMatch = true; break; }
             }
+            if (!stoppedOnMatch) buf.Append(matcher.Flush());
+
             var body = new CompletionResponse
             {
                 Content = buf.ToString(),
-                StopReason = MapStopReason(generator.LastStopReason),
+                StopReason = stoppedOnMatch ? "stop" : MapStopReason(generator.LastStopReason),
                 Model = host.ModelId,
             };
             http.Response.ContentType = "application/json";

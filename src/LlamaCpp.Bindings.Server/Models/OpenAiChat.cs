@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using LlamaCpp.Bindings.Server.Services;
 
@@ -70,6 +71,17 @@ public sealed class ChatCompletionsRequest
     [JsonPropertyName("frequency_penalty")]  public float? FrequencyPenalty { get; set; }
     [JsonPropertyName("presence_penalty")]   public float? PresencePenalty { get; set; }
     [JsonPropertyName("repeat_last_n")]      public int? RepeatLastN { get; set; }
+
+    /// <summary>
+    /// OpenAI-style stop strings. Accepts either a single string or an
+    /// array of up to 4 strings (we enforce the 4-stop cap to match
+    /// OpenAI's limit — stops past the fourth are ignored by the official
+    /// API and callers sometimes rely on that). Generation halts the
+    /// moment the emitted text ends with any stop string; the stop itself
+    /// is stripped from the returned content.
+    /// </summary>
+    [JsonPropertyName("stop")]
+    public JsonElement? Stop { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -205,6 +217,10 @@ public sealed class CompletionRequest
     [JsonPropertyName("frequency_penalty")]  public float? FrequencyPenalty { get; set; }
     [JsonPropertyName("presence_penalty")]   public float? PresencePenalty { get; set; }
     [JsonPropertyName("repeat_last_n")]      public int? RepeatLastN { get; set; }
+
+    /// <summary>Stop strings, same semantics as <see cref="ChatCompletionsRequest.Stop"/>.</summary>
+    [JsonPropertyName("stop")]
+    public JsonElement? Stop { get; set; }
 }
 
 public sealed class CompletionResponse
@@ -238,6 +254,56 @@ public sealed class ModelEntry
 
     [JsonPropertyName("owned_by")]
     public string OwnedBy { get; set; } = "local";
+}
+
+/// <summary>
+/// Normalise the polymorphic <c>stop</c> field into a <c>string[]</c>.
+/// Shared between chat and completion endpoints.
+/// </summary>
+internal static class StopNormalizer
+{
+    /// <summary>Max number of stop strings honoured per request (OpenAI parity).</summary>
+    public const int MaxStops = 4;
+
+    /// <summary>
+    /// Returns the parsed stop array, or null/empty when the field is
+    /// absent. Throws <see cref="ArgumentException"/> on malformed input
+    /// (non-string array entries, object/number/boolean values).
+    /// </summary>
+    public static string[]? Parse(JsonElement? element)
+    {
+        if (element is not JsonElement el) return null;
+        switch (el.ValueKind)
+        {
+            case JsonValueKind.Undefined:
+            case JsonValueKind.Null:
+                return null;
+            case JsonValueKind.String:
+            {
+                var s = el.GetString();
+                return string.IsNullOrEmpty(s) ? null : new[] { s };
+            }
+            case JsonValueKind.Array:
+            {
+                var list = new List<string>();
+                foreach (var item in el.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String)
+                    {
+                        throw new ArgumentException(
+                            $"stop array entries must be strings (got {item.ValueKind}).");
+                    }
+                    var s = item.GetString();
+                    if (!string.IsNullOrEmpty(s)) list.Add(s);
+                    if (list.Count >= MaxStops) break;
+                }
+                return list.Count == 0 ? null : list.ToArray();
+            }
+            default:
+                throw new ArgumentException(
+                    $"stop must be a string or array of strings (got {el.ValueKind}).");
+        }
+    }
 }
 
 /// <summary>

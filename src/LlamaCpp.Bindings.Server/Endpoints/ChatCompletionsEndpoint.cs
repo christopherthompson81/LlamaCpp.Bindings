@@ -64,6 +64,20 @@ public static class ChatCompletionsEndpoint
 
         int maxTokens = Math.Clamp(req.MaxTokens ?? opts.MaxOutputTokens, 1, opts.MaxOutputTokens);
 
+        // Parse stop strings up front — malformed inputs reject before we
+        // take a pool slot.
+        string[]? stops;
+        try
+        {
+            stops = StopNormalizer.Parse(req.Stop);
+        }
+        catch (ArgumentException ex)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new { error = ex.Message }, cancellationToken);
+            return;
+        }
+
         // Tokenize up front so the pool can do prefix matching before we
         // pick a slot.
         var promptTokens = host.Model.Vocab.Tokenize(prompt, addSpecial: false, parseSpecial: true);
@@ -82,6 +96,8 @@ public static class ChatCompletionsEndpoint
             return;
         }
 
+        var matcher = new StopMatcher(stops);
+
         // Lease a slot (may queue). The lease carries FirstNewIndex = how
         // many of these tokens are already in KV from the last request.
         using var lease = await pool.LeaseAsync(promptTokens, cancellationToken);
@@ -98,21 +114,23 @@ public static class ChatCompletionsEndpoint
 
         if (req.Stream)
         {
-            await StreamSse(http, generator, lease, maxTokens, host, completionId, createdUnix, cancellationToken);
+            await StreamSse(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, cancellationToken);
         }
         else
         {
-            await WriteSingleJson(http, generator, lease, maxTokens, host, completionId, createdUnix, cancellationToken);
+            await WriteSingleJson(http, generator, lease, matcher, maxTokens, host, completionId, createdUnix, cancellationToken);
         }
     }
 
     // ----- Non-streaming: collect all pieces into one response body. -----
 
     private static async Task WriteSingleJson(
-        HttpContext http, LlamaGenerator gen, SessionLease lease, int maxTokens,
+        HttpContext http, LlamaGenerator gen, SessionLease lease,
+        StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created, CancellationToken ct)
     {
         var buf = new StringBuilder();
+        bool stoppedOnMatch = false;
         await foreach (var piece in gen.GenerateAsync(
             lease.PromptTokens,
             maxTokens: maxTokens,
@@ -120,8 +138,11 @@ public static class ChatCompletionsEndpoint
             onTokenDecoded: lease.OnTokenDecoded,
             cancellationToken: ct))
         {
-            buf.Append(piece);
+            var (emit, stopped) = matcher.Offer(piece);
+            if (emit.Length > 0) buf.Append(emit);
+            if (stopped) { stoppedOnMatch = true; break; }
         }
+        if (!stoppedOnMatch) buf.Append(matcher.Flush());
 
         var response = new ChatCompletionsResponse
         {
@@ -133,7 +154,7 @@ public static class ChatCompletionsEndpoint
                 new() {
                     Index = 0,
                     Message = new ChatMessageDto { Role = "assistant", Content = buf.ToString() },
-                    FinishReason = MapFinishReason(gen.LastStopReason),
+                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason),
                 },
             },
         };
@@ -145,7 +166,8 @@ public static class ChatCompletionsEndpoint
     // ----- Streaming: SSE with OpenAI-style chunks. -----
 
     private static async Task StreamSse(
-        HttpContext http, LlamaGenerator gen, SessionLease lease, int maxTokens,
+        HttpContext http, LlamaGenerator gen, SessionLease lease,
+        StopMatcher matcher, int maxTokens,
         ModelHost host, string id, long created, CancellationToken ct)
     {
         http.Response.ContentType = "text/event-stream";
@@ -164,6 +186,7 @@ public static class ChatCompletionsEndpoint
             },
         }, ct);
 
+        bool stoppedOnMatch = false;
         await foreach (var piece in gen.GenerateAsync(
             lease.PromptTokens,
             maxTokens: maxTokens,
@@ -171,15 +194,35 @@ public static class ChatCompletionsEndpoint
             onTokenDecoded: lease.OnTokenDecoded,
             cancellationToken: ct))
         {
-            if (string.IsNullOrEmpty(piece)) continue;
-            await WriteChunk(http, new ChatCompletionsChunk
+            var (emit, stopped) = matcher.Offer(piece);
+            if (!string.IsNullOrEmpty(emit))
             {
-                Id = id, Created = created, Model = host.ModelId,
-                Choices = new()
+                await WriteChunk(http, new ChatCompletionsChunk
                 {
-                    new() { Index = 0, Delta = new() { Content = piece }, FinishReason = null },
-                },
-            }, ct);
+                    Id = id, Created = created, Model = host.ModelId,
+                    Choices = new()
+                    {
+                        new() { Index = 0, Delta = new() { Content = emit }, FinishReason = null },
+                    },
+                }, ct);
+            }
+            if (stopped) { stoppedOnMatch = true; break; }
+        }
+
+        if (!stoppedOnMatch)
+        {
+            var tail = matcher.Flush();
+            if (!string.IsNullOrEmpty(tail))
+            {
+                await WriteChunk(http, new ChatCompletionsChunk
+                {
+                    Id = id, Created = created, Model = host.ModelId,
+                    Choices = new()
+                    {
+                        new() { Index = 0, Delta = new() { Content = tail }, FinishReason = null },
+                    },
+                }, ct);
+            }
         }
 
         // Final chunk: empty delta + finish_reason.
@@ -188,7 +231,8 @@ public static class ChatCompletionsEndpoint
             Id = id, Created = created, Model = host.ModelId,
             Choices = new()
             {
-                new() { Index = 0, Delta = new(), FinishReason = MapFinishReason(gen.LastStopReason) },
+                new() { Index = 0, Delta = new(),
+                    FinishReason = stoppedOnMatch ? "stop" : MapFinishReason(gen.LastStopReason) },
             },
         }, ct);
 

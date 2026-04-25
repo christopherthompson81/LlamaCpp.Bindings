@@ -630,7 +630,168 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
         return body!.Choices[0].Message.Content;
     }
 
-    // ----- Client-disconnect cancellation releases the pool slot -----
+    // ----- stop sequences -----
+
+    [Fact]
+    public async Task Stop_Array_Accepts_Multiple_And_First_Hit_Wins()
+    {
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"Count: 1 2 3 4 5 6 ({Guid.NewGuid():N})" } },
+            MaxTokens = 30,
+            Temperature = 0.0f,
+            Stop = JsonDocument.Parse("""["\"4\"", " 4 ", "4 5"]""").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        var text = body!.Choices[0].Message.Content;
+
+        // Whichever stop fires, none of the three should appear in the
+        // returned text — the stop is always stripped.
+        Assert.DoesNotContain(" 4 ", text);
+        Assert.DoesNotContain("4 5", text);
+    }
+
+    [Fact]
+    public async Task Stop_Rejects_Non_String_Array_Entries_With_400()
+    {
+        var client = _factory.CreateClient();
+        // Array with a number entry — not valid per our parse rules.
+        var raw = """
+            {"messages":[{"role":"user","content":"hi"}],"max_tokens":4,"stop":["ok",123]}
+            """;
+        using var content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/v1/chat/completions", content, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Stop_String_Truncates_Output_And_Sets_Finish_Reason()
+    {
+        // Generation should halt the moment the emitted text ends with
+        // the stop string, and the stop itself must be absent from the
+        // returned content. We pick a prompt that's very likely to emit
+        // "Human" early (a classic chat-style follow-up).
+        var client = _factory.CreateClient();
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"Continue: 'A B C D E F G H'. Then stop. ({Guid.NewGuid():N})" } },
+            MaxTokens = 40,
+            Temperature = 0.0f,
+            Stop = JsonDocument.Parse("\" C \"").RootElement, // stop after "A B"
+        };
+        var resp = await client.PostAsJsonAsync(
+            "/v1/chat/completions", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ChatCompletionsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        var text = body!.Choices[0].Message.Content;
+        Assert.DoesNotContain(" C ", text);
+        // The model should at minimum emit something before the stop fires;
+        // empty output means the first token was already the stop (odd but
+        // legal) — either way finish_reason must report "stop".
+        Assert.Equal("stop", body.Choices[0].FinishReason);
+    }
+
+    [Fact]
+    public async Task Streaming_With_Stop_Emits_Stop_Finish_Reason_In_Final_Chunk()
+    {
+        var client = _factory.CreateClient();
+        // Stop on a single period — guaranteed to appear in any
+        // multi-sentence answer. The test isn't checking "does the model
+        // echo a specific phrase" (that's flaky on GPU because cached KV
+        // shifts the argmax) — only that the stop hooks into the
+        // streaming path and reports finish_reason="stop".
+        var req = new ChatCompletionsRequest
+        {
+            Messages = new() { new() { Role = "user", Content = $"Write two short sentences about rain. ({Guid.NewGuid():N})" } },
+            MaxTokens = 80,
+            Temperature = 0.0f,
+            Stream = true,
+            Stop = JsonDocument.Parse("\".\"").RootElement,
+        };
+
+        using var httpReq = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent.Create(req),
+        };
+        using var resp = await client.SendAsync(
+            httpReq, HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+
+        using var stream = await resp.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken);
+        using var reader = new StreamReader(stream);
+
+        var accumulated = new StringBuilder();
+        string? finalFinishReason = null;
+
+        while (!reader.EndOfStream)
+        {
+            var line = await reader.ReadLineAsync(TestContext.Current.CancellationToken);
+            if (line is null) break;
+            if (!line.StartsWith("data: ")) continue;
+            var payload = line["data: ".Length..];
+            if (payload == "[DONE]") break;
+
+            using var doc = JsonDocument.Parse(payload);
+            var choice = doc.RootElement.GetProperty("choices")[0];
+            if (choice.GetProperty("delta").TryGetProperty("content", out var c) &&
+                c.ValueKind == JsonValueKind.String)
+            {
+                accumulated.Append(c.GetString());
+            }
+            if (choice.TryGetProperty("finish_reason", out var fr) &&
+                fr.ValueKind == JsonValueKind.String)
+            {
+                finalFinishReason = fr.GetString();
+            }
+        }
+
+        Assert.Equal("stop", finalFinishReason);
+        Assert.DoesNotContain(".", accumulated.ToString());
+    }
+
+    [Fact]
+    public async Task Completion_Endpoint_Also_Honours_Stop_Strings()
+    {
+        // Spot-check that /completion — not just /v1/chat/completions —
+        // is wired through the same StopMatcher. Regressions here tend
+        // to be caused by a divergence between the two endpoints'
+        // generator-loop bodies. We use a very common substring (the
+        // literal word "the") as the stop, so the match is almost
+        // guaranteed to fire within the 40-token budget regardless of
+        // what the raw-text continuation happens to be.
+        var client = _factory.CreateClient();
+        // Four punctuation stops — any English continuation hits at least
+        // one within a few tokens. Using multiples makes the test robust
+        // against GPU KV-state-driven output variance between runs (a
+        // single-stop test flaked on "." not appearing in one particular
+        // 100-token continuation).
+        var req = new CompletionRequest
+        {
+            Prompt = $"Once upon a time, in a distant land ({Guid.NewGuid():N}) ",
+            MaxTokens = 100,
+            Temperature = 0.0f,
+            Stop = JsonDocument.Parse("""[".", ",", "\n", ";"]""").RootElement,
+        };
+        var resp = await client.PostAsJsonAsync("/completion", req, TestContext.Current.CancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<CompletionResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("stop", body!.StopReason);
+        // None of the four stops should appear in the returned content.
+        Assert.DoesNotContain(".", body.Content);
+        Assert.DoesNotContain(",", body.Content);
+        Assert.DoesNotContain("\n", body.Content);
+        Assert.DoesNotContain(";", body.Content);
+    }
+
 
     [Fact]
     public async Task Cancelled_Stream_Releases_Pool_Slot()
