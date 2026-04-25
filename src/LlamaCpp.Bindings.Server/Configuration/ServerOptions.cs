@@ -279,6 +279,23 @@ public sealed class ServerOptions
     /// </summary>
     public int ShutdownDrainSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// Mount the Prometheus <c>/metrics</c> endpoint. Default <c>true</c>
+    /// — operators usually want it. Disable in deployments where
+    /// metrics are scraped via a sidecar instead, or where exposing
+    /// per-endpoint counters to the same auth surface as inference
+    /// would leak rate / pattern information.
+    /// </summary>
+    public bool ExposeMetricsEndpoint { get; set; } = true;
+
+    /// <summary>
+    /// Mount the <c>/slots</c> snapshot endpoint. Default <c>true</c>.
+    /// Disable when the per-slot KV-cache token counts would reveal too
+    /// much about other callers' prompts (multi-tenant servers fronted
+    /// by a TLS-terminating proxy).
+    /// </summary>
+    public bool ExposeSlotsEndpoint { get; set; } = true;
+
     // ----- Multimodal (optional mmproj) -----
 
     /// <summary>

@@ -25,6 +25,23 @@ public sealed class EmbeddingsRequest
     public string? EncodingFormat { get; set; }
 
     /// <summary>
+    /// llama-server's <c>embd_normalize</c>. Controls vector normalisation:
+    /// <c>2</c> (default) = L2 norm, <c>1</c> = L1 norm, <c>0</c> = no
+    /// normalisation, <c>-1</c> = let the model decide. Accepts negative
+    /// values; behaviour for unrecognised positives is L2.
+    /// </summary>
+    [JsonPropertyName("embd_normalize")]
+    public int? EmbdNormalize { get; set; }
+
+    /// <summary>
+    /// TEI-format compatibility: when <c>true</c>, each entry in the
+    /// response carries the original input text alongside the embedding.
+    /// Default <c>false</c> — OpenAI clients don't expect the field.
+    /// </summary>
+    [JsonPropertyName("return_text")]
+    public bool? ReturnText { get; set; }
+
+    /// <summary>
     /// Resolve <see cref="Input"/> to an array of strings. Throws
     /// <see cref="ArgumentException"/> for malformed input.
     /// </summary>
@@ -80,6 +97,15 @@ public sealed class EmbeddingEntry
 
     [JsonPropertyName("embedding")]
     public float[] Embedding { get; set; } = Array.Empty<float>();
+
+    /// <summary>
+    /// Original input text — populated only when the request set
+    /// <see cref="EmbeddingsRequest.ReturnText"/> = true (TEI-format).
+    /// Omitted from the JSON otherwise.
+    /// </summary>
+    [JsonPropertyName("text")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Text { get; set; }
 }
 
 public sealed class EmbeddingUsage

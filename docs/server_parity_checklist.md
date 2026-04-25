@@ -80,6 +80,34 @@ The OpenAI-compatible surface plus llama-server's native routes.
   for a local runtime. Our position: tool-calling schema support in chat
   completions (so _client-side_ tool code works) is in scope; running
   tools inside the server is not.
+- [x] **`POST /tokenize`** — text → token IDs using the loaded vocab.
+  Optional `with_pieces` returns each token's rendered text alongside
+  its id (useful for debug UIs).
+- [x] **`POST /detokenize`** — token IDs → text. Round-trips
+  `/tokenize` output.
+- [#28] **`POST /v1/audio/transcriptions`** — Whisper-compatible audio
+  transcription. Tracked as GH #28; needs multipart parsing + audio
+  mmproj integration.
+- [#29] **`POST /infill`** — code-completion fill-in-the-middle for
+  Qwen-Coder / DeepSeek-Coder / similar. Tracked as GH #29; reuses
+  the existing completion pipeline once the FIM prompt is formatted.
+- [!] **`POST /v1/messages`** (Anthropic) and
+  **`POST /v1/responses`** (OpenAI Responses) — both convert to chat-
+  completions internally upstream. Adding two more polymorphic-DTO
+  layers for what's effectively the same generation call isn't worth
+  the surface area; clients already use `/v1/chat/completions`.
+- [!] **`GET /cors-proxy`** — experimental upstream feature for the
+  bundled web UI's MCP support. Won't ship.
+- [!] **`POST /apply-template`** — render a chat template against a
+  given message list and return the prompt text. Niche debug tool;
+  the same data is one chat-completions call away.
+- [!] **`GET/POST /lora-adapters`** — runtime LoRA hotswap. We
+  attach LoRA at startup; per-request adapter selection is a separate
+  binding-design concern (the binding attaches LoRA to the context,
+  not the session).
+- [!] **`POST /slots/{id}`** — runtime save/load of slot KV state to
+  disk. Niche; conflicts with our SessionPool's transparent prefix-
+  matching design.
 
 ## 2. Authentication / transport
 
@@ -159,6 +187,22 @@ Features clients expect from the OpenAI chat-completions API.
   in §7. The text-only multipart path works regardless of mmproj
   availability (it flattens to a plain string); image parts require
   mmproj and otherwise reject with 400.
+- [#30] **`t_max_predict_ms`** — per-request generation timeout
+  separate from the global `RequestTimeoutSeconds`. Tracked as GH #30.
+- [#31] **`logprobs` as integer** — llama-server accepts both the
+  OpenAI boolean form and an integer `n_probs` alias. Our DTO is
+  boolean-only. Tracked as GH #31.
+- [!] **`return_progress`, `response_fields`, `n_indent`,
+  `n_cache_reuse`, `post_sampling_probs`, `backend_sampling`,
+  `return_tokens`** — niche per-request knobs surfaced by the code-
+  audit; declined as not worth the DTO surface unless a real client
+  asks. Each is independently trivial to add later if needed.
+- [!] **Per-request `lora`, per-request `speculative.*`** — both ride
+  on context-level state in the binding. Per-request adapter
+  selection has known design surface (binding attaches at context,
+  not session); per-request speculative tuning would need extending
+  `LlamaSpeculativeGenerator` to take per-call lookahead. Both
+  deferred behind concrete use cases.
 - [!] **`n > 1`** — multiple completions per request. Low priority; any
   client can issue N concurrent requests to the same endpoint and get
   the same result with better use of the session pool.
@@ -196,6 +240,17 @@ Features clients expect from the OpenAI chat-completions API.
 - [#17] **`dimensions` truncation** — tracked in GH #17. OpenAI-style
   Matryoshka truncation + L2 renormalise.
 - [x] **`/v1/rerank`** — shipped (§1).
+- [x] **`embd_normalize`** — request-time vector normalisation: <c>2</c>
+  (default L2), <c>1</c> (L1), <c>0</c> (off / preserve encoder
+  output), negative (defer to encoder).
+- [x] **`return_text`** — TEI-format compat: when <c>true</c>, each
+  embedding entry carries the original input string. Backwards-
+  compatible extension to the OpenAI shape (clients ignore unknown
+  fields).
+- [#32] **TEI-format rerank** (`texts` request field, bare-array
+  response, `score` instead of `relevance_score`) — tracked in GH #32.
+  Our current rerank speaks Cohere/Jina shape; full TEI compat needs
+  response-shape switching.
 
 ## 6. Model loading
 
@@ -375,6 +430,12 @@ Features clients expect from the OpenAI chat-completions API.
   method + path + status + duration on every request.
 - [!] **Built-in dashboard / web UI** — LlamaChat exists; it can be
   pointed at this server. Not duplicating that inside the server binary.
+- [x] **`--endpoint-metrics` / `--no-slots`** —
+  `ServerOptions.ExposeMetricsEndpoint` and `ExposeSlotsEndpoint`,
+  both default `true`. Operators running multi-tenant deployments
+  behind a TLS-terminating proxy that doesn't forward the API key
+  can disable these so per-slot cache state and request counters
+  aren't visible to unauthenticated observers.
 
 ## 12. Server-side safety / ops
 
@@ -410,16 +471,21 @@ dependency) to deserve its own thread:
 | 25 | Server: render assistant tool_calls in history through the chat template directly | §3 |
 | 26 | Server: tool_choice="required" (any-tool) needs GBNF union across schemas | §3 |
 | 27 | Server: remote-URL image fetch for /v1/chat/completions | §7 |
+| 28 | Server: /v1/audio/transcriptions endpoint (Whisper-compatible) | §1 |
+| 29 | Server: POST /infill endpoint (FIM code completion) | §1 |
+| 30 | Server: per-request t_max_predict_ms timeout | §3 |
+| 31 | Server: accept logprobs as integer (n_probs alias) | §3 |
+| 32 | Server: TEI response shape on /v1/rerank | §5 |
 
 ## Summary counts
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 76 | shipped, tested |
+| `[x]` done | 84 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 0 | binding work first |
-| `[#NN]` tracked | 10 | dedicated issue |
-| `[!]` won't | 9 | explicit non-goal |
+| `[#NN]` tracked | 15 | dedicated issue |
+| `[!]` won't | 14 | explicit non-goal |
 
 ## Remaining `[ ]` TODO items
 
@@ -440,10 +506,20 @@ calling, logprobs, rerank) are all shipped. What's left is operator-
 ergonomic polish + binding-blocked features.
 
 Every row outside the dedicated-issue and won't-implement columns is
-shipped. The only remaining work lives under tracked GH issues; #14
-(DeepMind rejection-sampling for speculative) is the largest, #22
-(SSL e2e test) the smallest, and #27 (remote-URL image fetch) carries
-the most design surface for new code.
+shipped. The current set of tracked issues is the result of two
+complementary surveys: the original `--help`-derived checklist
+captured the documented surface, and a follow-up code-level audit of
+`tools/server/` caught endpoints (audio transcription, /infill,
+/tokenize, /detokenize) and request fields (`embd_normalize`,
+`return_text`, integer-form `logprobs`, `t_max_predict_ms`) that
+weren't in `--help`. The audit's findings are split across rows in
+this checklist and dedicated GH issues #28-#32.
+
+Largest remaining items: #14 (DeepMind rejection-sampling for
+speculative), #28 (audio transcriptions, needs binding work for the
+multipart + audio mmproj path), #27 (remote-URL image fetch with SSRF
+hardening). Smallest: #22 (SSL e2e test), #30 (per-request timeout).
 
 Parity, in the sense of "any feature llama-server has that we don't
-deliberately decline," is done.
+deliberately decline," is done at the surface layer; the open issues
+are scope-limited follow-ups rather than gaps.

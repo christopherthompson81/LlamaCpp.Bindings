@@ -163,13 +163,13 @@ public class Program
         var validKeys = ApiKeyAuth.LoadKeys(serverOpts.ApiKeys, serverOpts.ApiKeyFile, authLogger);
         app.UseApiKeyAuth(validKeys);
 
-        MapEndpoints(app);
+        MapEndpoints(app, serverOpts);
 
         await app.RunAsync();
         return 0;
     }
 
-    internal static void MapEndpoints(WebApplication app)
+    internal static void MapEndpoints(WebApplication app, ServerOptions serverOpts)
     {
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
@@ -189,13 +189,35 @@ public class Program
         // seq_id maps to which slot. Subject to the same API-key auth
         // gate as everything else — the snapshot reveals cache state
         // which could leak info about what other callers have asked.
-        app.MapGet("/slots", (SessionPool pool) => pool.Snapshot());
+        // Disable via LlamaServer:ExposeSlotsEndpoint=false in production
+        // when the snapshot would be too informative for unauthenticated
+        // observers (e.g., behind a TLS-terminating proxy that's not
+        // forwarding our API key).
+        if (serverOpts.ExposeSlotsEndpoint)
+        {
+            app.MapGet("/slots", (SessionPool pool) => pool.Snapshot());
+        }
 
         // Prometheus scrape target. Counters are incremented by the
         // request-logging middleware + the generator loops; slot gauges
         // are snapshotted from the pool on each scrape.
-        app.MapGet("/metrics", (ServerMetrics metrics, SessionPool pool) =>
-            Results.Content(metrics.Render(pool), "text/plain; version=0.0.4; charset=utf-8"));
+        if (serverOpts.ExposeMetricsEndpoint)
+        {
+            app.MapGet("/metrics", (ServerMetrics metrics, SessionPool pool) =>
+                Results.Content(metrics.Render(pool), "text/plain; version=0.0.4; charset=utf-8"));
+        }
+
+        // llama-server-compatible POST /tokenize and /detokenize. Useful
+        // for clients that want to count tokens before sending a request
+        // or display per-token breakdowns in debug UIs.
+        app.MapPost("/tokenize", async (HttpContext ctx, TokenizeRequest req, ModelHost host, CancellationToken ct) =>
+        {
+            await TokenizeEndpoint.Handle(ctx, req, host, ct);
+        });
+        app.MapPost("/detokenize", async (HttpContext ctx, DetokenizeRequest req, ModelHost host, CancellationToken ct) =>
+        {
+            await DetokenizeEndpoint.Handle(ctx, req, host, ct);
+        });
 
         app.MapPost("/v1/chat/completions", async (
             HttpContext ctx,

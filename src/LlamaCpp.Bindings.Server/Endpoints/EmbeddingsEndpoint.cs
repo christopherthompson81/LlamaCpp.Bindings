@@ -71,15 +71,24 @@ public static class EmbeddingsEndpoint
             Model = embeddings.ModelId ?? "",
         };
 
+        // embd_normalize: 2 (default) = L2, 1 = L1, 0 = none.
+        // -1 means "let the model decide" — for our binding the model has
+        // already L2-normalised by default, so we treat -1 as a no-op
+        // (don't re-normalise) the same way upstream does.
+        int normalize = req.EmbdNormalize ?? 2;
+        bool returnText = req.ReturnText ?? false;
+
         int totalTokens = 0;
         for (int i = 0; i < inputs.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var (vec, tokenCount) = await embeddings.EncodeAsync(inputs[i], cancellationToken);
+            ApplyNormalization(vec, normalize);
             response.Data.Add(new EmbeddingEntry
             {
                 Index = i,
                 Embedding = vec,
+                Text = returnText ? inputs[i] : null,
             });
             totalTokens += tokenCount;
         }
@@ -92,5 +101,33 @@ public static class EmbeddingsEndpoint
 
         http.Response.ContentType = "application/json";
         await http.Response.WriteAsJsonAsync(response, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Apply the requested normalisation to <paramref name="vec"/> in
+    /// place. <c>2</c> = L2 (Euclidean), <c>1</c> = L1 (sum-of-abs),
+    /// <c>0</c> or negative = no rescaling. Zero-norm vectors are left
+    /// untouched to avoid divide-by-zero.
+    /// </summary>
+    private static void ApplyNormalization(float[] vec, int mode)
+    {
+        if (mode <= 0) return;
+
+        double norm = 0;
+        if (mode == 1)
+        {
+            for (int j = 0; j < vec.Length; j++) norm += Math.Abs(vec[j]);
+        }
+        else
+        {
+            // Default L2 path — also covers any positive mode we don't
+            // recognise, matching upstream's permissive behaviour.
+            for (int j = 0; j < vec.Length; j++) norm += vec[j] * vec[j];
+            norm = Math.Sqrt(norm);
+        }
+
+        if (norm <= 0) return;
+        float scale = (float)(1.0 / norm);
+        for (int j = 0; j < vec.Length; j++) vec[j] *= scale;
     }
 }

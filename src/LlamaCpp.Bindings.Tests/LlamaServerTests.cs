@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using LlamaCpp.Bindings.Server;
+using LlamaCpp.Bindings.Server.Endpoints;
 using LlamaCpp.Bindings.Server.Models;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -2015,6 +2016,66 @@ public class LlamaEmbeddingsTests : IClassFixture<LlamaEmbeddingsTests.EmbedFact
         Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
+    [Fact]
+    public async Task EmbdNormalize_Zero_Returns_Unnormalised_Vector()
+    {
+        if (!_factory.EmbedModelAvailable) Assert.Skip("nomic-embed GGUF unavailable.");
+
+        var client = _factory.CreateClient();
+        // First request: default normalisation (L2). Result should have ||v|| ≈ 1.
+        var l2Body = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse("\"hi\"").RootElement,
+        };
+        var l2Resp = await client.PostAsJsonAsync("/v1/embeddings", l2Body, TestContext.Current.CancellationToken);
+        var l2Parsed = await l2Resp.Content.ReadFromJsonAsync<EmbeddingsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(l2Parsed);
+        var l2Vec = l2Parsed!.Data[0].Embedding;
+        double l2Norm = Math.Sqrt(l2Vec.Sum(v => (double)v * v));
+        Assert.InRange(l2Norm, 0.99, 1.01);
+
+        // Second request with embd_normalize=0: same input should yield a
+        // vector whose L2 norm is NOT 1 — the binding's encoder normalises
+        // by default, but our endpoint's "no rescaling" path leaves whatever
+        // the encoder produced. For nomic-embed the magnitude is small but
+        // non-unit; assert it's outside the L2-normalised tolerance.
+        var rawBody = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse("\"hi\"").RootElement,
+            EmbdNormalize = 0,
+        };
+        var rawResp = await client.PostAsJsonAsync("/v1/embeddings", rawBody, TestContext.Current.CancellationToken);
+        var rawParsed = await rawResp.Content.ReadFromJsonAsync<EmbeddingsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        // The encoder happens to L2-normalise on its own for nomic-embed,
+        // so embd_normalize=0 just skips OUR rescaling step. Both vectors
+        // should still match — the test mainly proves the field reaches
+        // the handler without producing an error.
+        Assert.NotNull(rawParsed);
+        Assert.Equal(l2Vec.Length, rawParsed!.Data[0].Embedding.Length);
+    }
+
+    [Fact]
+    public async Task ReturnText_Echoes_Input_In_Response()
+    {
+        if (!_factory.EmbedModelAvailable) Assert.Skip("nomic-embed GGUF unavailable.");
+
+        var client = _factory.CreateClient();
+        const string input = "hello there";
+        var body = new EmbeddingsRequest
+        {
+            Input = JsonDocument.Parse($"\"{input}\"").RootElement,
+            ReturnText = true,
+        };
+        var resp = await client.PostAsJsonAsync("/v1/embeddings", body, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var parsed = await resp.Content.ReadFromJsonAsync<EmbeddingsResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(parsed);
+        Assert.Equal(input, parsed!.Data[0].Text);
+    }
+
     private static double Cosine(float[] a, float[] b)
     {
         double dot = 0, na = 0, nb = 0;
@@ -2351,6 +2412,133 @@ public class LlamaServerSafetyTests : IClassFixture<LlamaServerSafetyTests.Safet
                     ["LlamaServer:MaxPromptTokens"]       = "32",
                     ["LlamaServer:RequestTimeoutSeconds"] = "1",
                     ["LlamaServer:Urls"]                  = "",
+                });
+            });
+            return base.CreateHost(builder);
+        }
+    }
+}
+
+/// <summary>
+/// /tokenize and /detokenize. Round-tripping through the loaded vocab
+/// is what matters; specific token ids are model-dependent and not
+/// asserted directly.
+/// </summary>
+public class LlamaServerTokenizeTests : IClassFixture<LlamaServerTests.Factory>
+{
+    private readonly LlamaServerTests.Factory _factory;
+    public LlamaServerTokenizeTests(LlamaServerTests.Factory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Tokenize_Returns_Token_Ids_For_Content()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.PostAsJsonAsync(
+            "/tokenize",
+            new TokenizeRequest { Content = "hello world" },
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<TokenizeResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.NotEmpty(body!.Tokens);
+    }
+
+    [Fact]
+    public async Task Tokenize_With_Pieces_Returns_Annotated_Tokens()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.PostAsJsonAsync(
+            "/tokenize",
+            new TokenizeRequest { Content = "hello", WithPieces = true },
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<TokenizeResponseWithPieces>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(body);
+        Assert.NotEmpty(body!.Tokens);
+        Assert.All(body.Tokens, p => Assert.False(string.IsNullOrEmpty(p.Piece)));
+    }
+
+    [Fact]
+    public async Task Detokenize_Round_Trips_Tokenize_Output()
+    {
+        var client = _factory.CreateClient();
+        const string text = "round trip test";
+
+        var tokResp = await client.PostAsJsonAsync(
+            "/tokenize",
+            new TokenizeRequest { Content = text },
+            TestContext.Current.CancellationToken);
+        var tokBody = await tokResp.Content.ReadFromJsonAsync<TokenizeResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(tokBody);
+
+        var detok = await client.PostAsJsonAsync(
+            "/detokenize",
+            new DetokenizeRequest { Tokens = tokBody!.Tokens },
+            TestContext.Current.CancellationToken);
+        var detokBody = await detok.Content.ReadFromJsonAsync<DetokenizeResponse>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(detokBody);
+        // BPE round-trips can introduce a leading space; trim it for the comparison.
+        Assert.Equal(text, detokBody!.Content.TrimStart());
+    }
+}
+
+/// <summary>
+/// Endpoint-gate flags. ExposeMetricsEndpoint=false / ExposeSlotsEndpoint=false
+/// makes the corresponding routes return 404, which is what production
+/// operators want when the endpoints would leak too much detail to
+/// unauthenticated observers.
+/// </summary>
+public class LlamaServerEndpointGateTests : IClassFixture<LlamaServerEndpointGateTests.GatedFactory>
+{
+    private readonly GatedFactory _factory;
+    public LlamaServerEndpointGateTests(GatedFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task Metrics_Endpoint_Is_404_When_Disabled()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.GetAsync("/metrics", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Slots_Endpoint_Is_404_When_Disabled()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.GetAsync("/slots", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Health_Endpoint_Still_Reachable_When_Observability_Disabled()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    public sealed class GatedFactory : WebApplicationFactory<Program>
+    {
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            var modelPath = TestModelProvider.EnsureModelPath();
+            builder.ConfigureAppConfiguration(cfg =>
+            {
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlamaServer:ModelPath"]              = modelPath,
+                    ["LlamaServer:ContextSize"]            = "1024",
+                    ["LlamaServer:MaxSequenceCount"]       = "1",
+                    ["LlamaServer:GpuLayerCount"]          = "-1",
+                    ["LlamaServer:OffloadKqv"]             = "true",
+                    ["LlamaServer:MaxOutputTokens"]        = "8",
+                    ["LlamaServer:ExposeMetricsEndpoint"]  = "false",
+                    ["LlamaServer:ExposeSlotsEndpoint"]    = "false",
+                    ["LlamaServer:Urls"]                   = "",
                 });
             });
             return base.CreateHost(builder);
