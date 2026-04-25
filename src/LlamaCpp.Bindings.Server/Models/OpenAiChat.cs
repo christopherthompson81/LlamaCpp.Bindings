@@ -603,6 +603,17 @@ public sealed class CompletionRequest
     /// <summary>llama-server's <c>cache_prompt</c>. Default true; same semantics as the chat endpoint.</summary>
     [JsonPropertyName("cache_prompt")]
     public bool? CachePrompt { get; set; }
+
+    /// <summary>
+    /// llama-server's <c>multimodal_data</c>. Each entry is a
+    /// <c>data:image/&lt;type&gt;;base64,&lt;payload&gt;</c> URL. The
+    /// caller is responsible for putting the mmproj's media marker
+    /// (typically <c>&lt;__media__&gt;</c>) at the position in the
+    /// prompt where each image should be spliced — one marker per
+    /// image, in order.
+    /// </summary>
+    [JsonPropertyName("multimodal_data")]
+    public List<string>? MultimodalData { get; set; }
 }
 
 public sealed class CompletionResponse

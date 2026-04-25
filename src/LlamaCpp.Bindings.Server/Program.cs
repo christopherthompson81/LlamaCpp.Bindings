@@ -241,9 +241,11 @@ public class Program
             SessionPool pool,
             IOptions<ServerOptions> options,
             ServerMetrics metrics,
+            MmprojHost mmproj,
+            ILoggerFactory loggers,
             CancellationToken ct) =>
         {
-            await CompletionEndpoint.Handle(ctx, req, host, pool, options, metrics, ct);
+            await CompletionEndpoint.Handle(ctx, req, host, pool, options, metrics, mmproj, loggers, ct);
         });
 
         app.MapPost("/v1/embeddings", async (

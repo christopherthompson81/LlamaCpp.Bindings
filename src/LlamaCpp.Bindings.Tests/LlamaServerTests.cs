@@ -1172,6 +1172,23 @@ public class LlamaServerTests : IClassFixture<LlamaServerTests.Factory>
     }
 
     [Fact]
+    public async Task Completion_Rejects_Multimodal_Data_With_400_When_Mmproj_Not_Configured()
+    {
+        // Default fixture has no MmprojPath set. multimodal_data on
+        // /completion should 400 the same way image_url does on
+        // chat-completions — tells the caller the feature is disabled.
+        var client = _factory.CreateClient();
+        const string TinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        string raw =
+            "{\"prompt\":\"Describe <__media__>\"," +
+            "\"multimodal_data\":[\"" + TinyPng + "\"]," +
+            "\"max_tokens\":4}";
+        using var content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/completion", content, TestContext.Current.CancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task Chat_Rejects_Image_Part_With_400_When_Mmproj_Not_Configured()
     {
         // Default fixture has no MmprojPath set. An image_url part should

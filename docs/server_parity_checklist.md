@@ -237,9 +237,13 @@ Features clients expect from the OpenAI chat-completions API.
   forces match=0 across all free slots and tiebreaks to LRU, so the
   request runs against the coldest available slot and `X-Cached-Tokens`
   reports 0. Useful for determinism testing.
-- [~] **`image_data`** — multimodal side of `/completion`. V1 ships
-  images through the chat endpoint only; the raw `/completion` path
-  has no template to splice a media marker into. Lower priority.
+- [x] **`multimodal_data`** — multimodal side of `/completion`.
+  Accepts a list of `data:image/...;base64,...` URLs paired with the
+  caller-placed media markers (typically `<__media__>`) in the prompt.
+  Mirrors the chat-completions multimodal branch: leases a fresh slot,
+  clears KV, runs `MtmdContext.EvalPromptAsync` for image+text prefill,
+  then streams from the context's current state. Returns 400 when no
+  mmproj is loaded.
 
 ## 5. Embeddings (`/v1/embeddings`)
 
@@ -496,7 +500,7 @@ dependency) to deserve its own thread:
 
 | State | Count | Meaning |
 |---|---|---|
-| `[x]` done | 84 | shipped, tested |
+| `[x]` done | 85 | shipped, tested |
 | `[ ]` TODO | 0 | binding already exposes; server-side wiring only |
 | `[~]` needs binding | 0 | binding work first |
 | `[#NN]` tracked | 18 | dedicated issue |

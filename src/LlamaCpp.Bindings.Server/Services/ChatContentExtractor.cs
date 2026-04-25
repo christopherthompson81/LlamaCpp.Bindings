@@ -93,7 +93,14 @@ public static class ChatContentExtractor
         return result;
     }
 
-    private static byte[] DecodeImageUrl(string url)
+    /// <summary>
+    /// Decode a <c>data:image/...;base64,...</c> URL into raw bytes.
+    /// Public so the <c>/completion</c> endpoint can reuse the same parser
+    /// for its <c>multimodal_data</c> field. Throws
+    /// <see cref="ArgumentException"/> on non-data URLs, malformed
+    /// payloads, or oversize images.
+    /// </summary>
+    public static byte[] DecodeImageUrl(string url)
     {
         const string DataPrefix = "data:";
         if (!url.StartsWith(DataPrefix, StringComparison.OrdinalIgnoreCase))
