@@ -2,6 +2,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/LlamaChat.Cli/LlamaChat.Cli.csproj" />
     <Project Path="samples/LlamaChat/LlamaChat.csproj" />
+    <Project Path="samples/SensitivitySweep.Cli/SensitivitySweep.Cli.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/LlamaCpp.Bindings.GGUFLab/LlamaCpp.Bindings.GGUFLab.csproj" />

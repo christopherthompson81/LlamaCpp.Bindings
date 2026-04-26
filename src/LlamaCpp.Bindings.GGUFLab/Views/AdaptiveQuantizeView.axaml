@@ -114,8 +114,11 @@
         <ScrollViewer>
             <StackPanel Spacing="14" MaxWidth="900" HorizontalAlignment="Stretch">
 
-                <!-- File pickers -->
-                <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
+                <!-- File pickers. Base ftype lives in the post-sweep panel
+                     because it doesn't affect scoring or recipe building —
+                     it's only used at Apply time as the fallback for
+                     tensors the recipe doesn't cover. -->
+                <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Input GGUF" VerticalAlignment="Top" Margin="0,6,0,0" />
                     <StackPanel Grid.Row="0" Grid.Column="1" Spacing="0">
                         <TextBox Text="{Binding InputPath}"
@@ -136,17 +139,10 @@
                               VerticalAlignment="Top"
                               Click="OnBrowseImatrix" />
 
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Base ftype" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="2" Grid.Column="1"
-                              ItemsSource="{Binding AvailableFileTypes}"
-                              SelectedItem="{Binding BaseFileType, Mode=TwoWay}"
-                              HorizontalAlignment="Stretch"
-                              ToolTip.Tip="Fallback ftype for tensors the recipe doesn't cover (1-D norms, etc.)" />
-
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Output GGUF" VerticalAlignment="Center" />
-                    <TextBox  Grid.Row="3" Grid.Column="1" Text="{Binding OutputPath}"
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Output GGUF" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="2" Grid.Column="1" Text="{Binding OutputPath}"
                               PlaceholderText="Leave blank to derive from input + threshold" />
-                    <Button   Grid.Row="3" Grid.Column="2" Content="Browse…"
+                    <Button   Grid.Row="2" Grid.Column="2" Content="Browse…"
                               Click="OnBrowseOutput" />
                 </Grid>
 
@@ -167,13 +163,15 @@
                             IsEnabled="{Binding IsIdle}" />
                 </StackPanel>
 
-                <!-- Threshold slider + recipe summary -->
+                <!-- Threshold slider, base ftype, recipe summary. All
+                     three drive the recipe and are only meaningful once
+                     scores exist, so the panel hides until then. -->
                 <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
                         BorderThickness="1"
                         CornerRadius="4"
                         Padding="12"
                         IsVisible="{Binding HasScores}">
-                    <StackPanel Spacing="8">
+                    <StackPanel Spacing="10">
                         <Grid ColumnDefinitions="120,*,80,Auto" ColumnSpacing="10">
                             <TextBlock Grid.Column="0" Text="Threshold τ" VerticalAlignment="Center" />
                             <Slider   Grid.Column="1"
@@ -188,6 +186,14 @@
                                        VerticalAlignment="Center"
                                        Margin="12,0,0,0"
                                        FontFamily="Cascadia Mono, Menlo, Consolas, monospace" />
+                        </Grid>
+                        <Grid ColumnDefinitions="120,*" ColumnSpacing="10">
+                            <TextBlock Grid.Column="0" Text="Base ftype" VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding AvailableFileTypes}"
+                                      SelectedItem="{Binding BaseFileType, Mode=TwoWay}"
+                                      HorizontalAlignment="Stretch"
+                                      ToolTip.Tip="Used only when Apply runs. Three jobs: (1) sets the GGUF's general.file_type label so tools display this as a Q4_K_M / Q5_K_M / etc. variant; (2) provides the fallback per-category quant for any tensor the recipe doesn't cover (1-D norms, anything with a NaN score); (3) decides what happens to embeddings/output if they fall outside the recipe. The recipe overrides the base ftype on every tensor it scored, so picking a different base typically only changes the file label and a handful of edge-case tensors." />
                         </Grid>
                         <TextBlock FontSize="11" Opacity="0.7">
                             <Run Text="{Binding RecipeRows.Count}" />
