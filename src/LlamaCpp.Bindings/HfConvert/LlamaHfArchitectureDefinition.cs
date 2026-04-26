@@ -55,14 +55,7 @@ public sealed class LlamaHfArchitectureDefinition
         get
         {
             if (!string.IsNullOrEmpty(HfArchitecture)) yield return HfArchitecture;
-            // System.Text.Json source-gen leaves init-only properties at
-            // their type default rather than running C# field
-            // initializers when the JSON omits the field, so the list
-            // can be null for definitions without aliases.
-            if (HfArchitectureAliases is { } aliases)
-            {
-                foreach (var a in aliases) yield return a;
-            }
+            foreach (var a in HfArchitectureAliases) yield return a;
         }
     }
 
@@ -151,7 +144,7 @@ public sealed class LlamaHfArchitectureDefinition
 
     public static LlamaHfArchitectureDefinition FromJson(string json)
     {
-        var def = JsonSerializer.Deserialize(json, ArchitectureJsonContext.Default.LlamaHfArchitectureDefinition)
+        var def = JsonSerializer.Deserialize<LlamaHfArchitectureDefinition>(json, JsonOptions)
             ?? throw new InvalidDataException("Architecture definition JSON deserialized to null.");
         if (string.IsNullOrEmpty(def.HfArchitecture))
             throw new InvalidDataException("Architecture definition is missing hf_architecture.");
@@ -159,6 +152,23 @@ public sealed class LlamaHfArchitectureDefinition
             throw new InvalidDataException("Architecture definition is missing gguf_arch.");
         return def;
     }
+
+    /// <summary>
+    /// Deserialization options shared by this type and its child entries.
+    /// We use reflection-based deserialization rather than a source-gen
+    /// context: source-gen skips C# field initializers when the JSON
+    /// omits a property, so init defaults like
+    /// <c>= "config:vocab_size"</c> were silently dropped — biting us
+    /// with subtle "string came back empty" bugs that needed null-checks
+    /// at every read site. Reflection runs the parameterless ctor, the
+    /// initializers fire, then JSON values overwrite — so defaults stick.
+    /// </summary>
+    internal static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
 }
 
 /// <summary>
@@ -232,9 +242,3 @@ public sealed class TensorMappingEntry
     public bool OptionalWhenTied { get; init; }
 }
 
-[JsonSerializable(typeof(LlamaHfArchitectureDefinition))]
-[JsonSourceGenerationOptions(
-    PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
-    ReadCommentHandling = JsonCommentHandling.Skip,
-    AllowTrailingCommas = true)]
-internal partial class ArchitectureJsonContext : JsonSerializerContext { }

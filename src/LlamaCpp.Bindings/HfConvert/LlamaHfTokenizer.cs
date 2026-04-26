@@ -157,8 +157,12 @@ public sealed class LlamaHfTokenizer
         }
 
         // Chat template + special token defaults from sibling files.
+        // The resolver needs the full assembled tokens[] (BPE + added)
+        // because tokenizer_config.json's bos/eos/pad fields commonly
+        // refer to specials in added_tokens (e.g. Qwen3's
+        // eos_token = "<|im_end|>") that aren't in the BPE vocab proper.
         string? chatTemplate = TryReadChatTemplate(dir);
-        var specials = ResolveSpecialTokenIds(dir, vocab);
+        var specials = ResolveSpecialTokenIds(dir, tokens);
 
         return new LlamaHfTokenizer(tokens, types, merges, chatTemplate, specials);
     }
@@ -190,17 +194,32 @@ public sealed class LlamaHfTokenizer
         return null;
     }
 
-    private static IReadOnlyDictionary<string, uint> ResolveSpecialTokenIds(string dir, JsonElement vocab)
+    private static IReadOnlyDictionary<string, uint> ResolveSpecialTokenIds(string dir, IReadOnlyList<string> tokens)
     {
         // tokenizer_config.json holds bos_token / eos_token / pad_token
         // / unk_token as either a string (the raw token text) or an
-        // object {"content": "<|...|>", ...}. Map each to its id by
-        // looking up the token string in the BPE vocab.
+        // object {"content": "<|...|>", ...}. Resolve each by walking
+        // the assembled tokens[] (BPE + added) for an exact match — the
+        // vocab-only path missed chat models whose bos/eos live in
+        // added_tokens (Qwen3's "<|im_end|>" is the classic case).
         var result = new Dictionary<string, uint>(StringComparer.Ordinal);
         var tc = Path.Combine(dir, "tokenizer_config.json");
         if (!File.Exists(tc)) return result;
         using var d = JsonDocument.Parse(File.ReadAllText(tc));
         var r = d.RootElement;
+
+        // Build a one-pass content → id reverse map. Most BPE vocabs
+        // are 50K-200K entries; building once and reusing for the four
+        // lookups beats a per-lookup linear scan.
+        var byContent = new Dictionary<string, int>(tokens.Count, StringComparer.Ordinal);
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            // First-write-wins: BPE vocab entries are written before
+            // added_tokens overrides at the same id, but the override's
+            // string is now the slot's content — so we still get the
+            // right id for either form.
+            byContent.TryAdd(tokens[i], i);
+        }
 
         Resolve("bos_token", "bos_token_id");
         Resolve("eos_token", "eos_token_id");
@@ -219,7 +238,7 @@ public sealed class LlamaHfTokenizer
                 _ => null,
             };
             if (string.IsNullOrEmpty(content)) return;
-            if (vocab.TryGetProperty(content, out var idNode) && idNode.TryGetInt32(out var id) && id >= 0)
+            if (byContent.TryGetValue(content, out var id) && id >= 0)
             {
                 result[ggufSuffix] = (uint)id;
             }

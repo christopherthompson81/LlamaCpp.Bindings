@@ -138,16 +138,13 @@ public static class LlamaHfConverter
             progress?.Report(new LlamaHfConvertProgress(i + 1, planned.Count, entry.GgufName));
 
             // V1: only "passthrough" transform — read source bytes,
-            // dtype-convert to the chosen output type, write. Empty /
-            // null in the JSON is treated as "passthrough" so most
-            // tensor entries can omit the field.
-            var transform = string.IsNullOrEmpty(entry.Mapping.Transform)
-                ? "passthrough"
-                : entry.Mapping.Transform;
-            if (transform != "passthrough")
+            // dtype-convert to the chosen output type, write. The
+            // definition default is "passthrough"; tensor entries can
+            // omit the field entirely.
+            if (entry.Mapping.Transform != "passthrough")
             {
                 throw new NotSupportedException(
-                    $"Tensor transform '{transform}' is not in V1's library. Add it to LlamaHfTensorTransforms.");
+                    $"Tensor transform '{entry.Mapping.Transform}' is not in V1's library. Add it to LlamaHfTensorTransforms.");
             }
 
             var srcInfo = safetensors.Get(entry.HfName);
@@ -248,11 +245,11 @@ public static class LlamaHfConverter
     private static int ResolveVocabAnchor(
         string anchor, LlamaHfConfig config, LlamaSafetensorsFile safetensors, int fallback)
     {
-        // Treat empty as the documented default, since System.Text.Json
-        // source-gen drops the field initializer when the JSON omits the
-        // field — leaving the property at the type default ("") rather
-        // than at "config:vocab_size" as written on the C# property.
-        if (string.IsNullOrEmpty(anchor)) anchor = "config:vocab_size";
+        // Definition's init default is "config:vocab_size" — reflection-
+        // based deserialization runs the field initializer, so anchor is
+        // never empty for a well-formed definition. Defensive guard
+        // anyway: a hand-edited definition could pass an empty string.
+        if (string.IsNullOrEmpty(anchor)) return fallback;
         if (anchor.StartsWith("config:", StringComparison.Ordinal))
         {
             var path = anchor["config:".Length..];
