@@ -216,4 +216,11 @@ public sealed partial class KlDivergenceViewModel : ToolPageViewModel
         _cts?.Cancel();
         StatusLine = "Cancellation requested.";
     }
+
+    public override void ApplyActiveModel(string? path)
+    {
+        // KL has two slots; the active model is the candidate being
+        // judged against the reference, so it lands in TestModelPath.
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(TestModelPath)) TestModelPath = path;
+    }
 }

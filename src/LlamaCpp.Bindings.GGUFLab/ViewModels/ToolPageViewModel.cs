@@ -15,4 +15,13 @@ public abstract partial class ToolPageViewModel : ObservableObject
 
     /// <summary>One-line subtitle shown under the page header.</summary>
     public abstract string Description { get; }
+
+    /// <summary>
+    /// Called by the main window when the active model changes, or when
+    /// this tool becomes the selected page. Default is a no-op; tools
+    /// that take a GGUF path override and copy <paramref name="path"/>
+    /// into their input field — but only when the field is currently
+    /// empty so a typed-in path is never silently overwritten.
+    /// </summary>
+    public virtual void ApplyActiveModel(string? path) { }
 }

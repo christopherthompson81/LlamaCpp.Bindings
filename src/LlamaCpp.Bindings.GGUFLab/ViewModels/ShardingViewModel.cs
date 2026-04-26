@@ -234,6 +234,11 @@ public sealed partial class ShardingViewModel : ToolPageViewModel
             _cts = null;
         }
     }
+
+    public override void ApplyActiveModel(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(SplitInputPath)) SplitInputPath = path;
+    }
 }
 
 public enum SplitLimit

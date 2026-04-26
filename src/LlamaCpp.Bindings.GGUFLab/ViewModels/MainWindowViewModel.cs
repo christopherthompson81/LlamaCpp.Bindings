@@ -17,12 +17,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private ToolPageViewModel _selectedTool;
 
     public NativeLogBus LogBus { get; } = new();
+    public WorkspaceSettings Settings { get; }
+    public ActiveModel ActiveModel { get; } = new();
 
     public MainWindowViewModel()
     {
         // One-time backend init wired up to the log bus so every page can
         // observe native log output without re-registering.
         LlamaBackend.Initialize((lvl, msg) => LogBus.Publish(lvl, msg));
+
+        Settings = WorkspaceSettings.Load();
 
         var quantize = new QuantizeViewModel(LogBus);
         var adaptiveQuantize = new AdaptiveQuantizeViewModel(LogBus);
@@ -52,5 +56,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
         };
 
         _selectedTool = quantize;
+
+        // Push the active model into the visible tool whenever either
+        // changes. Tools that don't take a GGUF path inherit the
+        // base no-op and ignore it.
+        ActiveModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(Services.ActiveModel.Path))
+                SelectedTool?.ApplyActiveModel(ActiveModel.Path);
+        };
+    }
+
+    /// <summary>
+    /// Re-target the active model when the user picks one in the HF
+    /// Browser or Local Models tool. Hooked to the active-model strip
+    /// so all tools see the change immediately.
+    /// </summary>
+    public void SetActiveModel(string? path) => ActiveModel.Set(path);
+
+    partial void OnSelectedToolChanged(ToolPageViewModel value)
+    {
+        // Newly-focused tool gets a fresh shot at the active model
+        // (only if its input is empty — the override guards that).
+        value?.ApplyActiveModel(ActiveModel.Path);
     }
 }

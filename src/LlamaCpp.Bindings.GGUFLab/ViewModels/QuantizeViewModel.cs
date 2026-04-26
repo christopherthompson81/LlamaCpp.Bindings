@@ -179,4 +179,9 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
             ? "Cancellation requested — will take effect at the next checkpoint."
             : StatusLine;
     }
+
+    public override void ApplyActiveModel(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(InputPath)) InputPath = path;
+    }
 }

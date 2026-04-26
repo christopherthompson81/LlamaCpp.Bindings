@@ -348,6 +348,11 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         OnPropertyChanged(nameof(ExceededCount));
     }
 
+    public override void ApplyActiveModel(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(InputPath)) InputPath = path;
+    }
+
     public sealed record RecipeRow(
         string TensorName,
         string ChosenType,

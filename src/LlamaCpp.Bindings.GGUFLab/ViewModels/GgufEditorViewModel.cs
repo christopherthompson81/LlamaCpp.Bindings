@@ -273,6 +273,11 @@ public sealed partial class GgufEditorViewModel : ToolPageViewModel
         if (text is "false" or "0" or "no" or "") return false;
         throw new FormatException($"'{text}' is not a valid bool. Use true/false.");
     }
+
+    public override void ApplyActiveModel(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(SourcePath)) SourcePath = path;
+    }
 }
 
 /// <summary>One row in the metadata table — wraps a mutable entry and exposes display cells.</summary>

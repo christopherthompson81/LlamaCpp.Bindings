@@ -54,6 +54,9 @@
             <MenuItem Header="_File">
                 <MenuItem Header="E_xit" Click="OnExitClicked" />
             </MenuItem>
+            <MenuItem Header="_Settings">
+                <MenuItem Header="_Preferences..." Click="OnPreferencesClicked" />
+            </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_About..." Click="OnAboutClicked" />
             </MenuItem>
@@ -92,10 +95,35 @@
             </DockPanel>
         </Border>
 
-        <!-- Content host. The implicit DataTemplates above pick the right view
-             for the SelectedTool VM (QuantizeViewModel → QuantizeView, etc.). -->
-        <ContentControl Grid.Column="1"
-                        Content="{Binding SelectedTool}"
+        <!-- Content host with active-model strip on top. The strip is
+             always visible so the HF Browser / Local Models picks
+             follow the user across tools. -->
+        <DockPanel Grid.Column="1">
+            <Border DockPanel.Dock="Top"
+                    Background="{DynamicResource SystemListLowColor}"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="0,0,0,1"
+                    Padding="14,6"
+                    IsVisible="{Binding ActiveModel.HasModel}">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+                    <TextBlock Grid.Column="0"
+                               Text="Active model:"
+                               Opacity="0.65"
+                               FontSize="12"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding ActiveModel.DisplayName}"
+                               FontWeight="Medium"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding ActiveModel.Path}" />
+                    <Button   Grid.Column="3"
+                              Content="Clear"
+                              Padding="8,2"
+                              Click="OnClearActiveModelClicked" />
+                </Grid>
+            </Border>
+        <ContentControl Content="{Binding SelectedTool}"
                         Margin="0">
             <ContentControl.DataTemplates>
                 <DataTemplate DataType="vm:QuantizeViewModel">
@@ -136,6 +164,7 @@
                 </DataTemplate>
             </ContentControl.DataTemplates>
         </ContentControl>
+        </DockPanel>
     </Grid>
     </DockPanel>
 </Window>

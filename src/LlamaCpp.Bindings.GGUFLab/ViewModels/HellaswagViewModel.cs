@@ -178,4 +178,9 @@ public sealed partial class HellaswagViewModel : ToolPageViewModel
         _cts?.Cancel();
         StatusLine = "Cancellation requested.";
     }
+
+    public override void ApplyActiveModel(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(ModelPath)) ModelPath = path;
+    }
 }

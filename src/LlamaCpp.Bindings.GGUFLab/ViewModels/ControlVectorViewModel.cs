@@ -239,4 +239,9 @@ public sealed partial class ControlVectorViewModel : ToolPageViewModel
             .Where(l => l.Length > 0)
             .ToArray();
     }
+
+    public override void ApplyActiveModel(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(ModelPath)) ModelPath = path;
+    }
 }

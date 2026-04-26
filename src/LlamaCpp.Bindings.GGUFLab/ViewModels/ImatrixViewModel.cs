@@ -240,4 +240,9 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
         _cts?.Cancel();
         StatusLine = "Cancellation requested — will take effect at the next chunk boundary.";
     }
+
+    public override void ApplyActiveModel(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(ModelPath)) ModelPath = path;
+    }
 }
