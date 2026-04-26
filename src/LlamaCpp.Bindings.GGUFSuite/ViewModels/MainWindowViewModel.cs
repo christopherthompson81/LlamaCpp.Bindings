@@ -27,6 +27,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var quantize = new QuantizeViewModel(LogBus);
         var perplexity = new PerplexityViewModel(LogBus);
         var klDivergence = new KlDivergenceViewModel(LogBus);
+        var hellaswag = new HellaswagViewModel(LogBus);
         var imatrix = new ImatrixViewModel(LogBus);
         var controlVectors = new ControlVectorViewModel(LogBus);
         var ggufEditor = new GgufEditorViewModel();
@@ -38,6 +39,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             quantize,
             perplexity,
             klDivergence,
+            hellaswag,
             ggufEditor,
             sharding,
             imatrix,

@@ -18,6 +18,9 @@
         <DataTemplate x:Key="KlDivergenceTemplate" DataType="vm:KlDivergenceViewModel">
             <v:KlDivergenceView />
         </DataTemplate>
+        <DataTemplate x:Key="HellaswagTemplate" DataType="vm:HellaswagViewModel">
+            <v:HellaswagView />
+        </DataTemplate>
         <DataTemplate x:Key="ImatrixTemplate" DataType="vm:ImatrixViewModel">
             <v:ImatrixView />
         </DataTemplate>
@@ -85,6 +88,9 @@
                 </DataTemplate>
                 <DataTemplate DataType="vm:KlDivergenceViewModel">
                     <v:KlDivergenceView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:HellaswagViewModel">
+                    <v:HellaswagView />
                 </DataTemplate>
                 <DataTemplate DataType="vm:ImatrixViewModel">
                     <v:ImatrixView />
