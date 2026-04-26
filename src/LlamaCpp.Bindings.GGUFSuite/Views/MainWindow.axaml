@@ -12,6 +12,9 @@
         <DataTemplate x:Key="QuantizeTemplate" DataType="vm:QuantizeViewModel">
             <v:QuantizeView />
         </DataTemplate>
+        <DataTemplate x:Key="AdaptiveQuantizeTemplate" DataType="vm:AdaptiveQuantizeViewModel">
+            <v:AdaptiveQuantizeView />
+        </DataTemplate>
         <DataTemplate x:Key="PerplexityTemplate" DataType="vm:PerplexityViewModel">
             <v:PerplexityView />
         </DataTemplate>
@@ -85,6 +88,9 @@
             <ContentControl.DataTemplates>
                 <DataTemplate DataType="vm:QuantizeViewModel">
                     <v:QuantizeView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:AdaptiveQuantizeViewModel">
+                    <v:AdaptiveQuantizeView />
                 </DataTemplate>
                 <DataTemplate DataType="vm:PerplexityViewModel">
                     <v:PerplexityView />

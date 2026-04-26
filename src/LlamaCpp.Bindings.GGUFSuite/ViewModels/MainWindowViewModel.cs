@@ -25,6 +25,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         LlamaBackend.Initialize((lvl, msg) => LogBus.Publish(lvl, msg));
 
         var quantize = new QuantizeViewModel(LogBus);
+        var adaptiveQuantize = new AdaptiveQuantizeViewModel(LogBus);
         var perplexity = new PerplexityViewModel(LogBus);
         var klDivergence = new KlDivergenceViewModel(LogBus);
         var hellaswag = new HellaswagViewModel(LogBus);
@@ -38,6 +39,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Tools = new ToolPageViewModel[]
         {
             quantize,
+            adaptiveQuantize,
             perplexity,
             klDivergence,
             hellaswag,
