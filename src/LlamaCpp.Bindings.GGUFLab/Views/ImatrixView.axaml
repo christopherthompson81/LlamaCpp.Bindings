@@ -11,9 +11,26 @@
             <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
         </StackPanel>
 
-        <!-- Footer: status + timing, progress, params snapshot, result, log -->
-        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto,Auto,Auto,*" Margin="0,12,0,0">
-            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="14" Margin="0,0,0,4">
+        <!-- Footer: action buttons (sticky), status + timing, progress,
+             params snapshot, result, log. All rows are Auto-sized and the
+             log Border has an explicit height so the form ScrollViewer
+             above gets the rest of the window. Without this, the * row
+             ate all available space and the buttons disappeared. -->
+        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,12,0,0">
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+                <Button Content="Run"
+                        Command="{Binding RunCommand}"
+                        IsEnabled="{Binding IsIdle}"
+                        Classes="accent" />
+                <Button Content="Cancel"
+                        Command="{Binding CancelCommand}"
+                        IsEnabled="{Binding IsRunning}" />
+                <Button Content="Save log…"
+                        Click="OnSaveLog"
+                        IsEnabled="{Binding HasFullLog}"
+                        ToolTip.Tip="Save the un-deduped, un-truncated log of the last run." />
+            </StackPanel>
+            <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="14" Margin="0,0,0,4">
                 <TextBlock Grid.Column="0"
                            Text="{Binding StatusLine}"
                            Opacity="0.85"
@@ -28,12 +45,12 @@
                     </TextBlock>
                 </StackPanel>
             </Grid>
-            <ProgressBar Grid.Row="1"
+            <ProgressBar Grid.Row="2"
                          Value="{Binding ProgressFraction}"
                          Minimum="0" Maximum="1"
                          Height="4"
                          Margin="0,0,0,8" />
-            <Border Grid.Row="2"
+            <Border Grid.Row="3"
                     BorderBrush="{DynamicResource SystemBaseLowColor}"
                     BorderThickness="1"
                     CornerRadius="4"
@@ -45,7 +62,7 @@
                                      FontSize="12"
                                      Opacity="0.85" />
             </Border>
-            <Border Grid.Row="3"
+            <Border Grid.Row="4"
                     BorderBrush="{DynamicResource SystemAccentColorLight2}"
                     BorderThickness="1"
                     CornerRadius="4"
@@ -56,11 +73,11 @@
                                      FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
                                      FontSize="13" />
             </Border>
-            <Border Grid.Row="4"
+            <Border Grid.Row="5"
                     BorderBrush="{DynamicResource SystemBaseLowColor}"
                     BorderThickness="1"
                     CornerRadius="4"
-                    MinHeight="160"
+                    Height="220"
                     Background="{DynamicResource SystemAltLowColor}">
                 <ScrollViewer>
                     <SelectableTextBlock Text="{Binding LogText}"
@@ -142,19 +159,6 @@
                     </StackPanel>
                 </Expander>
 
-                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
-                    <Button Content="Run"
-                            Command="{Binding RunCommand}"
-                            IsEnabled="{Binding IsIdle}"
-                            Classes="accent" />
-                    <Button Content="Cancel"
-                            Command="{Binding CancelCommand}"
-                            IsEnabled="{Binding IsRunning}" />
-                    <Button Content="Save log…"
-                            Click="OnSaveLog"
-                            IsEnabled="{Binding HasFullLog}"
-                            ToolTip.Tip="Save the un-deduped, un-truncated log of the last run." />
-                </StackPanel>
             </StackPanel>
         </ScrollViewer>
     </DockPanel>
