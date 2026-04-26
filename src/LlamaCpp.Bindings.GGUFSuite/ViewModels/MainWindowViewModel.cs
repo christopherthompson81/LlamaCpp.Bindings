@@ -29,6 +29,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var imatrix = new ImatrixViewModel(LogBus);
         var controlVectors = new ControlVectorViewModel(LogBus);
         var ggufEditor = new GgufEditorViewModel();
+        var sharding = new ShardingViewModel(LogBus);
         var hfConvert = new HfConvertViewModel(LogBus);
 
         Tools = new ToolPageViewModel[]
@@ -36,6 +37,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             quantize,
             perplexity,
             ggufEditor,
+            sharding,
             imatrix,
             hfConvert,
             controlVectors,

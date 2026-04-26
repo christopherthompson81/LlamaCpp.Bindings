@@ -24,6 +24,9 @@
         <DataTemplate x:Key="GgufEditorTemplate" DataType="vm:GgufEditorViewModel">
             <v:GgufEditorView />
         </DataTemplate>
+        <DataTemplate x:Key="ShardingTemplate" DataType="vm:ShardingViewModel">
+            <v:ShardingView />
+        </DataTemplate>
         <DataTemplate x:Key="HfConvertTemplate" DataType="vm:HfConvertViewModel">
             <v:HfConvertView />
         </DataTemplate>
@@ -85,6 +88,9 @@
                 </DataTemplate>
                 <DataTemplate DataType="vm:GgufEditorViewModel">
                     <v:GgufEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:ShardingViewModel">
+                    <v:ShardingView />
                 </DataTemplate>
                 <DataTemplate DataType="vm:HfConvertViewModel">
                     <v:HfConvertView />
