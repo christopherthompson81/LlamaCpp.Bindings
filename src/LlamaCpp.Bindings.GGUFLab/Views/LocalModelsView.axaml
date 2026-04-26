@@ -1,0 +1,101 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             x:Class="LlamaCpp.Bindings.GGUFLab.Views.LocalModelsView"
+             x:DataType="vm:LocalModelsViewModel">
+
+    <DockPanel Margin="24,18">
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,14">
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Status -->
+        <Grid DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <TextBlock Text="{Binding StatusLine}" Opacity="0.85" />
+        </Grid>
+
+        <!-- Toolbar -->
+        <Grid DockPanel.Dock="Top"
+              ColumnDefinitions="*,Auto"
+              Margin="0,0,0,12">
+            <TextBlock Grid.Column="0"
+                       Opacity="0.65"
+                       FontSize="12"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis">
+                <Run Text="Workspace:" />
+                <Run Text="{Binding WorkspaceRoot}" FontFamily="Cascadia Mono, Menlo, Consolas, monospace" />
+            </TextBlock>
+            <Button Grid.Column="1"
+                    Content="Refresh"
+                    Command="{Binding RefreshCommand}" />
+        </Grid>
+
+        <!-- Header row -->
+        <Grid DockPanel.Dock="Top"
+              ColumnDefinitions="*,90,140,Auto"
+              ColumnSpacing="14"
+              Margin="14,0,14,4">
+            <TextBlock Grid.Column="0" Text="File"          FontWeight="SemiBold" Opacity="0.7" FontSize="11" />
+            <TextBlock Grid.Column="1" Text="Size"          FontWeight="SemiBold" Opacity="0.7" FontSize="11" HorizontalAlignment="Right" />
+            <TextBlock Grid.Column="2" Text="Modified"      FontWeight="SemiBold" Opacity="0.7" FontSize="11" />
+            <TextBlock Grid.Column="3" Text="Actions"       FontWeight="SemiBold" Opacity="0.7" FontSize="11" Margin="20,0,0,0" />
+        </Grid>
+
+        <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                BorderThickness="1"
+                CornerRadius="4">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:LocalModelsViewModel+LocalModelRow">
+                            <Grid ColumnDefinitions="*,90,140,Auto"
+                                  ColumnSpacing="14"
+                                  Margin="14,4">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding DisplayName}"
+                                           FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                           FontSize="12"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding Path}" />
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding DisplaySize}"
+                                           FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                           FontSize="12"
+                                           Opacity="0.7"
+                                           HorizontalAlignment="Right"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="2"
+                                           Text="{Binding DisplayDate}"
+                                           FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                           FontSize="12"
+                                           Opacity="0.7"
+                                           VerticalAlignment="Center" />
+                                <StackPanel Grid.Column="3"
+                                            Orientation="Horizontal"
+                                            Spacing="6"
+                                            Margin="20,0,0,0">
+                                    <Button Content="Set active"
+                                            Padding="8,2"
+                                            Click="OnSetActive"
+                                            Tag="{Binding}" />
+                                    <Button Content="Reveal"
+                                            Padding="8,2"
+                                            Click="OnReveal"
+                                            Tag="{Binding}" />
+                                    <Button Content="Delete"
+                                            Padding="8,2"
+                                            Click="OnDelete"
+                                            Tag="{Binding}" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</UserControl>

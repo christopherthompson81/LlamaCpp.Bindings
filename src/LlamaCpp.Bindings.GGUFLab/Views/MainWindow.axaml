@@ -13,6 +13,9 @@
         <DataTemplate x:Key="HfBrowserTemplate" DataType="vm:HfBrowserViewModel">
             <v:HfBrowserView />
         </DataTemplate>
+        <DataTemplate x:Key="LocalModelsTemplate" DataType="vm:LocalModelsViewModel">
+            <v:LocalModelsView />
+        </DataTemplate>
         <DataTemplate x:Key="QuantizeTemplate" DataType="vm:QuantizeViewModel">
             <v:QuantizeView />
         </DataTemplate>
@@ -131,6 +134,9 @@
             <ContentControl.DataTemplates>
                 <DataTemplate DataType="vm:HfBrowserViewModel">
                     <v:HfBrowserView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:LocalModelsViewModel">
+                    <v:LocalModelsView />
                 </DataTemplate>
                 <DataTemplate DataType="vm:QuantizeViewModel">
                     <v:QuantizeView />
