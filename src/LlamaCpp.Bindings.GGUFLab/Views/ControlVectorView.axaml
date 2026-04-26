@@ -1,0 +1,149 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             x:Class="LlamaCpp.Bindings.GGUFLab.Views.ControlVectorView"
+             x:DataType="vm:ControlVectorViewModel">
+
+    <DockPanel Margin="24,18">
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,18">
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Footer: status, progress, result, log -->
+        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto,Auto,*" Margin="0,12,0,0">
+            <TextBlock Grid.Row="0"
+                       Text="{Binding StatusLine}"
+                       Margin="0,0,0,4"
+                       Opacity="0.85" />
+            <ProgressBar Grid.Row="1"
+                         Value="{Binding ProgressFraction}"
+                         Minimum="0" Maximum="1"
+                         Height="4"
+                         Margin="0,0,0,8" />
+            <Border Grid.Row="2"
+                    BorderBrush="{DynamicResource SystemAccentColorLight2}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="14,10"
+                    Margin="0,0,0,8"
+                    IsVisible="{Binding ResultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <SelectableTextBlock Text="{Binding ResultText}"
+                                     FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                     FontSize="13" />
+            </Border>
+            <Border Grid.Row="3"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    MinHeight="140"
+                    Background="{DynamicResource SystemAltLowColor}">
+                <ScrollViewer>
+                    <SelectableTextBlock Text="{Binding LogText}"
+                                         FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                         FontSize="12"
+                                         Padding="10,8"
+                                         TextWrapping="NoWrap" />
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- Form -->
+        <ScrollViewer>
+            <StackPanel Spacing="14" MaxWidth="780" HorizontalAlignment="Stretch">
+                <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto" RowSpacing="10" ColumnSpacing="10">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Model GGUF" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="0" Grid.Column="1" Text="{Binding ModelPath}"
+                              PlaceholderText="Path to a .gguf model" />
+                    <Button   Grid.Row="0" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseModel" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Output GGUF" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding OutputPath}"
+                              PlaceholderText="Leave blank to derive from model name" />
+                    <Button   Grid.Row="1" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseOutput" />
+                </Grid>
+
+                <!-- Paired prompt editors -->
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <StackPanel Grid.Column="0" Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Positive prompts (one per line)"
+                                       Opacity="0.85" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Content="Load…"
+                                    Click="OnLoadPositive"
+                                    Padding="8,2" />
+                        </Grid>
+                        <TextBox Text="{Binding PositivePromptsText, Mode=TwoWay}"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 MinHeight="180"
+                                 MaxHeight="320"
+                                 FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                 FontSize="12"
+                                 PlaceholderText="One positive prompt per line. Equal count to negative side." />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Negative prompts (one per line)"
+                                       Opacity="0.85" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Content="Load…"
+                                    Click="OnLoadNegative"
+                                    Padding="8,2" />
+                        </Grid>
+                        <TextBox Text="{Binding NegativePromptsText, Mode=TwoWay}"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 MinHeight="180"
+                                 MaxHeight="320"
+                                 FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                 FontSize="12"
+                                 PlaceholderText="One negative prompt per line. Equal count to positive side." />
+                    </StackPanel>
+                </Grid>
+
+                <Expander Header="Advanced options">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <Grid ColumnDefinitions="160,*" ColumnSpacing="10" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Method" VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="0" Grid.Column="1"
+                                      ItemsSource="{Binding AvailableMethods}"
+                                      SelectedItem="{Binding Method, Mode=TwoWay}"
+                                      Width="140" HorizontalAlignment="Left" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="PCA iterations" VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="1" Grid.Column="1"
+                                           Value="{Binding PcaIterations, Mode=TwoWay}"
+                                           Minimum="16" Maximum="10000" Increment="100"
+                                           FormatString="0" Width="140" HorizontalAlignment="Left" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="GPU layers (-1 = all)" VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="2" Grid.Column="1"
+                                           Value="{Binding GpuLayerCount, Mode=TwoWay}"
+                                           Minimum="-1" Maximum="999" Increment="1"
+                                           FormatString="0" Width="140" HorizontalAlignment="Left" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Threads (-1 = default)" VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Row="3" Grid.Column="1"
+                                           Value="{Binding ThreadCount, Mode=TwoWay}"
+                                           Minimum="-1" Maximum="256" Increment="1"
+                                           FormatString="0" Width="140" HorizontalAlignment="Left" />
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button Content="Run"
+                            Command="{Binding RunCommand}"
+                            IsEnabled="{Binding IsIdle}"
+                            Classes="accent" />
+                    <Button Content="Cancel"
+                            Command="{Binding CancelCommand}"
+                            IsEnabled="{Binding IsRunning}" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

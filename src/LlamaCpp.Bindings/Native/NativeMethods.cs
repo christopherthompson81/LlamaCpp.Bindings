@@ -232,7 +232,7 @@ internal static partial class NativeMethods
     internal static unsafe partial int llama_model_meta_val_str_by_index(
         IntPtr model, int i, byte* buf, nuint buf_size);
 
-    // ----- Model quantization (GGUFSuite) -----
+    // ----- Model quantization (GGUFLab) -----
 
     // Returns a default-initialised llama_model_quantize_params by value.
     // Defaults reflect the CLI's "do nothing surprising" baseline:

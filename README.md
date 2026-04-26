@@ -11,7 +11,7 @@ The goal is **complete coverage of the llama.cpp surface that real applications 
 | **`LlamaCpp.Bindings`** | The core binding library. P/Invokes, struct mirrors, SafeHandles, and idiomatic `IDisposable` wrappers: `LlamaModel`, `LlamaContext`, `LlamaSampler`, `LlamaGenerator`, `LlamaLoraAdapter`, `LlamaControlVector`, `LlamaSpeculativeGenerator`, `MtmdContext` (multimodal), `LlamaHardware` (device enumeration). |
 | **`LlamaCpp.Bindings.Server`** | OpenAI-compatible HTTP server with near-feature-complete `llama-server` parity. Chat / completions / embeddings / rerank / tokenize / detokenize, streaming SSE, tool calling, multimodal, multi-session prefix caching, speculative decoding, LoRA + control vectors at startup, Prometheus metrics, API-key auth, TLS, NUMA / device pinning / tensor-buft overrides. See [`docs/server_parity_checklist.md`](docs/server_parity_checklist.md) for the full surface. |
 | **`LlamaCpp.Bindings.LlamaChat`** | Avalonia MVVM desktop reference app. Multi-conversation chat, per-conversation exports (Markdown / HTML / PDF / DOCX / XLSX / JSON / TXT), auto-configure heuristics for sizing context against detected VRAM, sampler-profile database, LoRA + speculative-draft selection, state save/load. |
-| **`LlamaCpp.Bindings.GGUFSuite`** *(in development)* | The model-prep side of the loop. HuggingFace → GGUF conversion, quantization, control-vector training, perplexity testing — so users can prep a model and immediately serve or chat with it without leaving the C# stack. |
+| **`LlamaCpp.Bindings.GGUFLab`** *(in development)* | The model-prep side of the loop. HuggingFace → GGUF conversion, quantization, control-vector training, perplexity testing — so users can prep a model and immediately serve or chat with it without leaving the C# stack. |
 | **`LlamaCpp.Bindings.Tests`** | 375 xUnit tests covering struct layout, tokenization, generation, multi-turn chat, speculative decoding, multimodal, every server endpoint, sampler chains, LoRA, control vectors, embeddings, rerank, NUMA, device pinning. |
 
 ## Status
@@ -19,7 +19,7 @@ The goal is **complete coverage of the llama.cpp surface that real applications 
 - **Core binding** — every native API the inference + deployment surface needs is wired. Training and `ggml`-graph manipulation are out of scope by design.
 - **Server** — 85 features done, 18 tracked under dedicated GitHub issues, 11 declined as explicit non-goals. Remaining items are scope-bounded follow-ups, not gaps. See the [parity checklist](docs/server_parity_checklist.md).
 - **LlamaChat desktop app** — usable for daily multi-conversation work.
-- **GGUFSuite** — in design. Slot reserved at `src/LlamaCpp.Bindings.GGUFSuite/`.
+- **GGUFLab** — in design. Slot reserved at `src/LlamaCpp.Bindings.GGUFLab/`.
 
 The pinned llama.cpp version lives in [`third_party/llama.cpp/VERSION`](third_party/llama.cpp/VERSION). Bumping it is usually a guided diff produced by `tools/check-for-updates.sh`, not archaeology.
 
@@ -86,7 +86,7 @@ src/
     Services/                    ModelHost, SessionPool, MmprojHost, DraftHost, ...
     Configuration/               ServerOptions
   LlamaCpp.Bindings.LlamaChat/   Avalonia desktop reference app
-  LlamaCpp.Bindings.GGUFSuite/   (planned) HF→GGUF, quantize, cvec training, perplexity
+  LlamaCpp.Bindings.GGUFLab/   (planned) HF→GGUF, quantize, cvec training, perplexity
   LlamaCpp.Bindings.Tests/       xUnit suite (375 facts)
 
 third_party/

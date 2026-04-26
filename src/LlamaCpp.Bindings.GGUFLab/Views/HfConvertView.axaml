@@ -1,0 +1,100 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             x:Class="LlamaCpp.Bindings.GGUFLab.Views.HfConvertView"
+             x:DataType="vm:HfConvertViewModel">
+
+    <DockPanel Margin="24,18">
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,18">
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding SupportedArchitecturesText, StringFormat='Supported architectures: {0}'}"
+                       Opacity="0.55" FontSize="11" Margin="0,4,0,0" />
+        </StackPanel>
+
+        <!-- Footer: status, progress, result, log -->
+        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto,Auto,*" Margin="0,12,0,0">
+            <TextBlock Grid.Row="0"
+                       Text="{Binding StatusLine}"
+                       Margin="0,0,0,4"
+                       Opacity="0.85" />
+            <ProgressBar Grid.Row="1"
+                         Value="{Binding ProgressFraction}"
+                         Minimum="0" Maximum="1"
+                         Height="4"
+                         Margin="0,0,0,8" />
+            <Border Grid.Row="2"
+                    BorderBrush="{DynamicResource SystemAccentColorLight2}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="14,10"
+                    Margin="0,0,0,8"
+                    IsVisible="{Binding ResultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <SelectableTextBlock Text="{Binding ResultText}"
+                                     FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                     FontSize="13" />
+            </Border>
+            <Border Grid.Row="3"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    MinHeight="160"
+                    Background="{DynamicResource SystemAltLowColor}">
+                <ScrollViewer>
+                    <SelectableTextBlock Text="{Binding LogText}"
+                                         FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                         FontSize="12"
+                                         Padding="10,8"
+                                         TextWrapping="NoWrap" />
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- Form -->
+        <ScrollViewer>
+            <StackPanel Spacing="14" MaxWidth="780" HorizontalAlignment="Stretch">
+                <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="HF model dir" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="0" Grid.Column="1" Text="{Binding HfDirectory}"
+                              PlaceholderText="Folder containing config.json + tokenizer.json + model.safetensors" />
+                    <Button   Grid.Row="0" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseHfDirectory" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Output GGUF" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding OutputPath}"
+                              PlaceholderText="Leave blank to derive from HF folder name" />
+                    <Button   Grid.Row="1" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseOutput" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Output type" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="2" Grid.Column="1"
+                              ItemsSource="{Binding AvailableOutputTypes}"
+                              SelectedItem="{Binding OutputType, Mode=TwoWay}"
+                              HorizontalAlignment="Left" Width="160" />
+                </Grid>
+
+                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                        BorderThickness="1" CornerRadius="4" Padding="14,10">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Notes" FontWeight="SemiBold" Opacity="0.75" />
+                        <TextBlock TextWrapping="Wrap" Opacity="0.75" FontSize="12">
+                            <Run Text="V1 supports single-file unsharded safetensors and BPE tokenizers (Qwen3 family). " />
+                            <Run Text="The output is an F16/BF16/F32 GGUF — to ship at smaller sizes, run Quantize on the result." />
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button Content="Run"
+                            Command="{Binding RunCommand}"
+                            IsEnabled="{Binding IsIdle}"
+                            Classes="accent" />
+                    <Button Content="Cancel"
+                            Command="{Binding CancelCommand}"
+                            IsEnabled="{Binding IsRunning}" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>
