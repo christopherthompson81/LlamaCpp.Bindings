@@ -28,6 +28,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Settings = WorkspaceSettings.Load();
 
+        var hfBrowser = new HfBrowserViewModel(Settings, ActiveModel);
         var quantize = new QuantizeViewModel(LogBus);
         var adaptiveQuantize = new AdaptiveQuantizeViewModel(LogBus);
         var perplexity = new PerplexityViewModel(LogBus);
@@ -42,6 +43,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Tools = new ToolPageViewModel[]
         {
+            hfBrowser,
             quantize,
             adaptiveQuantize,
             perplexity,

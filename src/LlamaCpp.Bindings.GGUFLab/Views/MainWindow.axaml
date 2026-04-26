@@ -10,6 +10,9 @@
         MinWidth="780" MinHeight="520">
 
     <Window.Resources>
+        <DataTemplate x:Key="HfBrowserTemplate" DataType="vm:HfBrowserViewModel">
+            <v:HfBrowserView />
+        </DataTemplate>
         <DataTemplate x:Key="QuantizeTemplate" DataType="vm:QuantizeViewModel">
             <v:QuantizeView />
         </DataTemplate>
@@ -126,6 +129,9 @@
         <ContentControl Content="{Binding SelectedTool}"
                         Margin="0">
             <ContentControl.DataTemplates>
+                <DataTemplate DataType="vm:HfBrowserViewModel">
+                    <v:HfBrowserView />
+                </DataTemplate>
                 <DataTemplate DataType="vm:QuantizeViewModel">
                     <v:QuantizeView />
                 </DataTemplate>

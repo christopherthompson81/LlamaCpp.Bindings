@@ -1,0 +1,149 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             xmlns:svc="using:LlamaCpp.Bindings.GGUFLab.Services"
+             x:Class="LlamaCpp.Bindings.GGUFLab.Views.HfBrowserView"
+             x:DataType="vm:HfBrowserViewModel">
+
+    <DockPanel Margin="24,18">
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,14">
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Status + progress at the bottom -->
+        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto" Margin="0,12,0,0">
+            <ProgressBar Grid.Row="0"
+                         Minimum="0" Maximum="1"
+                         Value="{Binding DownloadProgressFraction}"
+                         IsVisible="{Binding IsBusy}"
+                         Height="4"
+                         Margin="0,0,0,4" />
+            <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <TextBlock Grid.Column="0"
+                           Text="{Binding StatusLine}"
+                           Opacity="0.85" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding DownloadProgressText}"
+                           Opacity="0.65"
+                           FontFamily="Cascadia Mono, Menlo, Consolas, monospace" />
+            </Grid>
+        </Grid>
+
+        <!-- Search form (top of remaining area) -->
+        <Grid DockPanel.Dock="Top"
+              ColumnDefinitions="*,140,160,Auto,Auto"
+              ColumnSpacing="10"
+              Margin="0,0,0,12">
+            <TextBox Grid.Column="0"
+                     Text="{Binding Query, Mode=TwoWay}"
+                     PlaceholderText="Search query (e.g. qwen3, llama-3.1-8b, bartowski)" />
+            <ComboBox Grid.Column="1"
+                      ItemsSource="{Binding AvailableLibraries}"
+                      SelectedItem="{Binding Library, Mode=TwoWay}"
+                      HorizontalAlignment="Stretch" />
+            <ComboBox Grid.Column="2"
+                      ItemsSource="{Binding AvailableSorts}"
+                      SelectedItem="{Binding SortKey, Mode=TwoWay}"
+                      HorizontalAlignment="Stretch" />
+            <Button Grid.Column="3"
+                    Content="Search"
+                    Command="{Binding SearchCommand}"
+                    IsEnabled="{Binding IsIdle}"
+                    Classes="accent" />
+            <Button Grid.Column="4"
+                    Content="Cancel"
+                    Command="{Binding CancelCommand}"
+                    IsEnabled="{Binding IsBusy}" />
+        </Grid>
+
+        <!-- Two-pane content: results | repo files -->
+        <Grid ColumnDefinitions="*,12,1.4*">
+            <Border Grid.Column="0"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <ListBox ItemsSource="{Binding Results}"
+                         SelectedItem="{Binding SelectedRepo, Mode=TwoWay}"
+                         SelectionChanged="OnRepoSelectionChanged"
+                         Background="Transparent"
+                         BorderThickness="0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="svc:HfModelSummary">
+                            <StackPanel Margin="2,4" Spacing="2">
+                                <TextBlock Text="{Binding Id}"
+                                           FontWeight="Medium"
+                                           TextTrimming="CharacterEllipsis" />
+                                <Grid ColumnDefinitions="Auto,8,Auto,8,Auto,8,*" ColumnSpacing="0">
+                                    <TextBlock Grid.Column="0" Text="{Binding DisplayLibrary}" Opacity="0.55" FontSize="11" />
+                                    <TextBlock Grid.Column="2" Text="{Binding DisplayDownloads, StringFormat='⬇ {0}'}" Opacity="0.55" FontSize="11" />
+                                    <TextBlock Grid.Column="4" Text="{Binding DisplayLikes,     StringFormat='♥ {0}'}" Opacity="0.55" FontSize="11" />
+                                    <TextBlock Grid.Column="6" Text="{Binding DisplayUpdated}"  Opacity="0.55" FontSize="11"
+                                               HorizontalAlignment="Right" />
+                                </Grid>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <Border Grid.Column="2"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <DockPanel>
+                    <!-- Repo header -->
+                    <Border DockPanel.Dock="Top"
+                            Padding="12,8"
+                            BorderBrush="{DynamicResource SystemBaseLowColor}"
+                            BorderThickness="0,0,0,1"
+                            IsVisible="{Binding HasSelectedRepo}">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="{Binding SelectedRepo.Id}" FontWeight="SemiBold" />
+                            <Button Content="Open on huggingface.co ↗"
+                                    Click="OnOpenRepoLink"
+                                    Padding="0"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Foreground="{DynamicResource SystemAccentColor}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- File list -->
+                    <ScrollViewer>
+                        <ItemsControl ItemsSource="{Binding SelectedRepoFiles}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="svc:HfModelFile">
+                                    <Grid ColumnDefinitions="*,90,Auto"
+                                          ColumnSpacing="10"
+                                          Margin="12,3">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding Path}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="12"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding Path}" />
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding DisplaySize}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="12"
+                                                   Opacity="0.7"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="2"
+                                                Content="Download"
+                                                Padding="8,2"
+                                                Click="OnDownloadClicked"
+                                                Tag="{Binding}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
+</UserControl>
