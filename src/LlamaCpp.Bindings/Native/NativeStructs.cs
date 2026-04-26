@@ -478,6 +478,37 @@ internal unsafe struct ggml_tensor
     public const int ExpectedSize = 336;
 }
 
+// ggml_type_traits — per-type metadata + dequantize/requantize function
+// pointers. Used by the quantization-sensitivity sweep to round-trip a
+// tensor through a candidate quant and measure reconstruction error
+// without re-running llama_model_quantize per candidate.
+//
+// Layout (56 bytes on 64-bit): pointer + i64 + i64 + size_t + bool +
+// 7-byte pad + two function pointers. The 1-byte bool followed by
+// 7 bytes of padding before the next 8-aligned field is reproduced by
+// LayoutKind.Sequential at default Pack=8.
+[StructLayout(LayoutKind.Sequential)]
+internal struct ggml_type_traits
+{
+    // 0  | const char * type_name
+    public IntPtr type_name;
+    // 8  | int64_t blck_size
+    public long blck_size;
+    // 16 | int64_t blck_size_interleave — interleave count for blocked layouts (0 if none)
+    public long blck_size_interleave;
+    // 24 | size_t type_size
+    public nuint type_size;
+    // 32 | bool is_quantized — true for any block-quant; false for F32/F16/BF16/I*
+    [MarshalAs(UnmanagedType.I1)] public bool is_quantized;
+    // 33..39 | (7 bytes pad before the next pointer-aligned field)
+    // 40 | ggml_to_float_t to_float — void(*)(const void* x, float* y, int64_t k)
+    public IntPtr to_float;
+    // 48 | ggml_from_float_t from_float_ref — reference impl; production paths use ggml_quantize_chunk
+    public IntPtr from_float_ref;
+
+    public const int ExpectedSize = 56;
+}
+
 /// <summary>
 /// Mirror of <c>gguf_init_params</c>. The 1-byte bool is followed by 7 bytes
 /// of padding before the pointer; <see cref="LayoutKind.Sequential"/> with
@@ -522,6 +553,7 @@ internal static class NativeLayout
         Check<llama_model_tensor_override>(llama_model_tensor_override.ExpectedSize);
         Check<llama_model_kv_override>(llama_model_kv_override.ExpectedSize);
         Check<ggml_tensor>(ggml_tensor.ExpectedSize);
+        Check<ggml_type_traits>(ggml_type_traits.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct

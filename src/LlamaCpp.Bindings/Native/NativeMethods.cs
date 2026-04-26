@@ -89,6 +89,36 @@ internal static partial class NativeMethods
     internal static unsafe partial void ggml_backend_tensor_get(
         IntPtr tensor, void* data, nuint offset, nuint size);
 
+    // ----- Per-tensor quantize / dequantize (used by the
+    // quantization-sensitivity sweep) -----
+    //
+    // Lower-level entry points than llama_model_quantize: these operate
+    // on raw float buffers, so we can quantize a single tensor through
+    // a candidate ftype, dequantize back, and measure reconstruction
+    // error without writing a whole GGUF per measurement.
+
+    // Quantize <nrows> rows of <n_per_row> floats from <src> into <dst>
+    // using the given <type>. <imatrix> is an optional column-importance
+    // weighting (length n_per_row); pass NULL for unweighted. Returns
+    // the byte count written. Implements ikawrakow's quantization
+    // kernels — DO NOT re-implement on the C# side; this is the
+    // canonical path the production quantizer uses.
+    [LibraryImport(LibGgml)]
+    internal static unsafe partial nuint ggml_quantize_chunk(
+        ggml_type type,
+        float* src,
+        void* dst,
+        long start,
+        long nrows,
+        long n_per_row,
+        float* imatrix);
+
+    // Pointer to a ggml_type_traits struct owned by ggml. Lifetime
+    // matches the ggml backend; safe to dereference for the duration of
+    // the process. Used to obtain a type's `to_float` dequantize fn.
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr ggml_get_type_traits(ggml_type type);
+
     // Callback: void (*)(ggml_log_level level, const char * text, void * user_data)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void GgmlLogCallback(ggml_log_level level, IntPtr text, IntPtr user_data);

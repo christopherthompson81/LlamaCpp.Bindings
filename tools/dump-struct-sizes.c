@@ -211,6 +211,16 @@ int main(void) {
     ENUMV(GGML_OP_MUL_MAT);
     ENUMV(GGML_OP_MUL_MAT_ID);
 
+    // ----- ggml_type_traits (used by the quantization-sensitivity sweep) -----
+    SZ(struct ggml_type_traits);
+    OFF(struct ggml_type_traits, type_name);
+    OFF(struct ggml_type_traits, blck_size);
+    OFF(struct ggml_type_traits, blck_size_interleave);
+    OFF(struct ggml_type_traits, type_size);
+    OFF(struct ggml_type_traits, is_quantized);
+    OFF(struct ggml_type_traits, to_float);
+    OFF(struct ggml_type_traits, from_float_ref);
+
     // Terminator to keep JSON valid without worrying about trailing comma.
     printf("    \"_end\": 0\n");
     printf("}\n");

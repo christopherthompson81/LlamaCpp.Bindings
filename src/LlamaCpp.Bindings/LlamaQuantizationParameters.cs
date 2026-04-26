@@ -158,6 +158,41 @@ public sealed class LlamaQuantizationParameters
     public bool DryRun { get; set; } = false;
 
     /// <summary>
+    /// Per-tensor type overrides applied by name pattern. Each entry
+    /// pins matching tensors to a specific element type, regardless
+    /// of <see cref="FileType"/>'s default for that role. Patterns
+    /// are <strong>ECMAScript regular expressions</strong> matched
+    /// against the GGUF tensor name via substring search; the first
+    /// matching entry wins.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>Important:</strong> upstream gates the override path
+    /// behind <c>!Pure</c> — if <see cref="Pure"/> is <c>true</c>, the
+    /// override list is ignored. Set <see cref="Pure"/> to <c>false</c>
+    /// (the default) when using overrides.
+    /// </para>
+    /// <para>
+    /// Patterns are regex, not globs. A pattern like
+    /// <c>"blk.0.attn_q.weight"</c> treats every <c>.</c> as
+    /// "any character" — it would also match <c>"blkX0Yattn_q_weight"</c>.
+    /// Escape literal dots and anchor when intent is exact:
+    /// <c>"^blk\.0\.attn_q\.weight$"</c>. Per-layer-group patterns
+    /// like <c>"blk\.\d+\.attn_q\.weight"</c> are the natural form.
+    /// </para>
+    /// <para>
+    /// This is the "recipe" channel for the Adaptive Quantization
+    /// pipeline: a per-tensor sensitivity sweep computes a
+    /// {tensor → ftype} map, and the recipe-applier passes it through
+    /// here. It's also useful standalone — pin
+    /// <c>output.weight</c> at <c>Q8_0</c> to keep the LM head higher
+    /// precision than the body, or pin a specific layer's attention
+    /// QKV at a different type than the rest.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<KeyValuePair<string, LlamaTensorType>>? TensorTypeOverrides { get; set; }
+
+    /// <summary>
     /// Snapshot of the native defaults as a managed parameters object.
     /// </summary>
     public static LlamaQuantizationParameters Default()

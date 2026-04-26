@@ -193,6 +193,25 @@ public class StructLayoutTests
     }
 
     [Fact]
+    public void GgmlTypeTraits_Size_Matches_Pinned()
+    {
+        Assert.Equal(56, Unsafe.SizeOf<ggml_type_traits>());
+    }
+
+    [Theory]
+    [InlineData(nameof(ggml_type_traits.type_name),             0)]
+    [InlineData(nameof(ggml_type_traits.blck_size),             8)]
+    [InlineData(nameof(ggml_type_traits.blck_size_interleave), 16)]
+    [InlineData(nameof(ggml_type_traits.type_size),            24)]
+    [InlineData(nameof(ggml_type_traits.is_quantized),         32)]
+    [InlineData(nameof(ggml_type_traits.to_float),             40)]
+    [InlineData(nameof(ggml_type_traits.from_float_ref),       48)]
+    public void GgmlTypeTraits_Field_Offsets_Match_Pinned(string field, int expected)
+    {
+        Assert.Equal(expected, Marshal.OffsetOf<ggml_type_traits>(field).ToInt32());
+    }
+
+    [Fact]
     public void GgmlOp_Values_Match_Pinned_Header()
     {
         // If a header bump shifts these, the imatrix collector will look

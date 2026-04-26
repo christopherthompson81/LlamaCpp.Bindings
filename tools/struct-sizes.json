@@ -148,5 +148,13 @@
     "offsetof_struct ggml_tensor__extra": 320,
     "enumvalue_GGML_OP_MUL_MAT": 29,
     "enumvalue_GGML_OP_MUL_MAT_ID": 30,
+    "sizeof_struct ggml_type_traits": 56,
+    "offsetof_struct ggml_type_traits__type_name": 0,
+    "offsetof_struct ggml_type_traits__blck_size": 8,
+    "offsetof_struct ggml_type_traits__blck_size_interleave": 16,
+    "offsetof_struct ggml_type_traits__type_size": 24,
+    "offsetof_struct ggml_type_traits__is_quantized": 32,
+    "offsetof_struct ggml_type_traits__to_float": 40,
+    "offsetof_struct ggml_type_traits__from_float_ref": 48,
     "_end": 0
 }
