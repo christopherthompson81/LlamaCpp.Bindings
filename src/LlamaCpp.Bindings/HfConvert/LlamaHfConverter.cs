@@ -91,7 +91,7 @@ public static class LlamaHfConverter
         var def = SelectDefinition(config.ArchitectureNames)
             ?? throw new NotSupportedException(
                 $"No architecture definition matches HF architectures {{{string.Join(", ", config.ArchitectureNames)}}}. " +
-                $"Available: {{{string.Join(", ", AvailableArchitectures())}}}.");
+                $"Available:\n{FormatAvailableArchitectures()}");
 
         var safetensorsPath = Path.Combine(hfDirectory, "model.safetensors");
         if (!File.Exists(safetensorsPath))
@@ -123,8 +123,9 @@ public static class LlamaHfConverter
         // expected vocab dim, so the two must agree.
         int paddedVocabSize = Math.Max(
             tokenizer.Tokens.Count,
-            (int)(config.GetUInt32("vocab_size") ?? (uint)tokenizer.Tokens.Count));
-        WriteTokenizerMetadata(writer, def, tokenizer, paddedVocabSize);
+            ResolveVocabAnchor(def.VocabAnchor, config, safetensors, tokenizer.Tokens.Count));
+        var tokenTypes = ApplyForceControlTokenPatterns(tokenizer, def);
+        WriteTokenizerMetadata(writer, def, tokenizer, tokenTypes, paddedVocabSize);
 
         // ----- tensors -----
         var blockCount = ResolveBlockCount(def, config);
@@ -137,11 +138,16 @@ public static class LlamaHfConverter
             progress?.Report(new LlamaHfConvertProgress(i + 1, planned.Count, entry.GgufName));
 
             // V1: only "passthrough" transform — read source bytes,
-            // dtype-convert to the chosen output type, write.
-            if (entry.Mapping.Transform != "passthrough")
+            // dtype-convert to the chosen output type, write. Empty /
+            // null in the JSON is treated as "passthrough" so most
+            // tensor entries can omit the field.
+            var transform = string.IsNullOrEmpty(entry.Mapping.Transform)
+                ? "passthrough"
+                : entry.Mapping.Transform;
+            if (transform != "passthrough")
             {
                 throw new NotSupportedException(
-                    $"Tensor transform '{entry.Mapping.Transform}' is not in V1's library. Add it to LlamaHfTensorTransforms.");
+                    $"Tensor transform '{transform}' is not in V1's library. Add it to LlamaHfTensorTransforms.");
             }
 
             var srcInfo = safetensors.Get(entry.HfName);
@@ -191,19 +197,21 @@ public static class LlamaHfConverter
 
     private static int ResolveBlockCount(LlamaHfArchitectureDefinition def, LlamaHfConfig config)
     {
-        // Find the metadata entry that maps to "block_count" — its HF
-        // path tells us where to look. Required for tensor-template
-        // expansion of {i}.
+        // Find the metadata entry whose resolved gguf key is
+        // "${arch}.block_count" — its HF path tells us where to look.
+        // Required for tensor-template expansion of {i}.
+        var target = $"{def.GgufArchitecture}.block_count";
         foreach (var m in def.MetadataMap)
         {
-            if (m.Gguf == "block_count")
+            var resolvedGguf = m.Gguf.Replace("${arch}", def.GgufArchitecture, StringComparison.Ordinal);
+            if (resolvedGguf == target)
             {
                 var v = config.GetUInt32(m.Hf);
                 if (v.HasValue) return (int)v.Value;
             }
         }
         throw new InvalidDataException(
-            $"Architecture definition '{def.GgufArchitecture}' has no metadata entry mapping to 'block_count'.");
+            $"Architecture definition '{def.GgufArchitecture}' has no metadata entry mapping to '{target}'.");
     }
 
     private static void WriteArchitectureMetadata(
@@ -211,14 +219,101 @@ public static class LlamaHfConverter
     {
         foreach (var m in def.MetadataMap)
         {
-            var key = $"{def.GgufArchitecture}.{m.Gguf}";
+            // ${arch} substitution: definitions write the FULL gguf key
+            // with ${arch} as a placeholder (e.g. "${arch}.context_length"
+            // or "general.author"). The substitution-token form lets a
+            // single map handle both per-arch keys and global ones,
+            // symmetric with {i} in tensor templates.
+            var key = m.Gguf.Replace("${arch}", def.GgufArchitecture, StringComparison.Ordinal);
             if (!TryReadAndWrite(writer, key, m, config) && !m.Optional)
             {
                 throw new InvalidDataException(
-                    $"config.json is missing required field '{m.Hf}' for arch '{def.GgufArchitecture}'.");
+                    $"config.json is missing required field '{m.Hf}' for arch '{def.GgufArchitecture}' (gguf key '{key}').");
             }
         }
     }
+
+    /// <summary>
+    /// Resolve the configured <c>vocab_anchor</c> to an integer row count.
+    /// </summary>
+    /// <remarks>
+    /// Format: <c>"config:&lt;dotted_path&gt;"</c> reads from
+    /// <c>config.json</c>; <c>"tensor:&lt;name&gt;:dim&lt;N&gt;"</c> reads
+    /// dimension N (0-indexed) of a safetensors tensor's shape. We fall
+    /// back to <paramref name="fallback"/> if the anchor is missing —
+    /// rather than throw — so a model with neither config.vocab_size nor
+    /// the named tensor still converts (the engine just emits no
+    /// padding, which is correct when there's nothing to pad to).
+    /// </remarks>
+    private static int ResolveVocabAnchor(
+        string anchor, LlamaHfConfig config, LlamaSafetensorsFile safetensors, int fallback)
+    {
+        // Treat empty as the documented default, since System.Text.Json
+        // source-gen drops the field initializer when the JSON omits the
+        // field — leaving the property at the type default ("") rather
+        // than at "config:vocab_size" as written on the C# property.
+        if (string.IsNullOrEmpty(anchor)) anchor = "config:vocab_size";
+        if (anchor.StartsWith("config:", StringComparison.Ordinal))
+        {
+            var path = anchor["config:".Length..];
+            return (int)(config.GetUInt32(path) ?? (uint)fallback);
+        }
+        if (anchor.StartsWith("tensor:", StringComparison.Ordinal))
+        {
+            // Format: tensor:<name>:dim<N>
+            var rest = anchor["tensor:".Length..];
+            int sep = rest.LastIndexOf(":dim", StringComparison.Ordinal);
+            if (sep < 0) return fallback;
+            var name = rest[..sep];
+            if (!int.TryParse(rest[(sep + ":dim".Length)..], out int dim)) return fallback;
+            if (!safetensors.Contains(name)) return fallback;
+            var shape = safetensors.Get(name).Shape;
+            return dim >= 0 && dim < shape.Length ? (int)shape[dim] : fallback;
+        }
+        return fallback;
+    }
+
+    /// <summary>
+    /// Build a token-types array that copies <see cref="LlamaHfTokenizer.TokenTypes"/>
+    /// and overrides matching entries to <see cref="LlamaTokenTypeId.Control"/>.
+    /// Returning a fresh array keeps the tokenizer immutable from the
+    /// engine's perspective.
+    /// </summary>
+    private static int[] ApplyForceControlTokenPatterns(LlamaHfTokenizer tokenizer, LlamaHfArchitectureDefinition def)
+    {
+        var types = new int[tokenizer.TokenTypes.Count];
+        for (int i = 0; i < types.Length; i++) types[i] = tokenizer.TokenTypes[i];
+
+        var patterns = def.ForceControlTokenPatterns
+            ?? LlamaHfArchitectureDefinition.DefaultControlTokenPatterns;
+        if (patterns.Count == 0) return types;
+
+        for (int i = 0; i < tokenizer.Tokens.Count; i++)
+        {
+            var tok = tokenizer.Tokens[i];
+            // Cheap fast-path: only check tokens that look at all
+            // control-shaped (start with '<' or '['). Most BPE vocab
+            // entries are plain word fragments and skip the matcher.
+            if (tok.Length == 0 || (tok[0] != '<' && tok[0] != '[')) continue;
+            foreach (var p in patterns)
+            {
+                if (GlobMatches(tok, p))
+                {
+                    types[i] = LlamaTokenTypeId.Control;
+                    break;
+                }
+            }
+        }
+        return types;
+    }
+
+    /// <summary>
+    /// Simple glob match supporting <c>*</c> and <c>?</c> wildcards.
+    /// Uses <see cref="System.IO.Enumeration.FileSystemName.MatchesSimpleExpression"/>
+    /// — battle-tested glob semantics shared with the file-system APIs.
+    /// </summary>
+    private static bool GlobMatches(string value, string pattern) =>
+        System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(pattern, value);
 
     private static bool TryReadAndWrite(LlamaGgufWriter writer, string ggufKey, MetadataMappingEntry m, LlamaHfConfig config)
     {
@@ -257,7 +352,7 @@ public static class LlamaHfConverter
 
     private static void WriteTokenizerMetadata(
         LlamaGgufWriter writer, LlamaHfArchitectureDefinition def, LlamaHfTokenizer tokenizer,
-        int paddedVocabSize)
+        int[] tokenTypes, int paddedVocabSize)
     {
         // V1 supports only "bpe-gpt2" tokenizer family. Architecture
         // definitions can declare other families; we'll add readers as
@@ -275,14 +370,15 @@ public static class LlamaHfConverter
         }
 
         // Pad tokens + token_types up to paddedVocabSize so they match
-        // the embedding tensor's row count.
+        // the embedding tensor's row count. Token types come from the
+        // possibly-overridden array passed in by the caller.
         int n = Math.Max(tokenizer.Tokens.Count, paddedVocabSize);
         var paddedTokens = new string[n];
         var paddedTypes = new int[n];
         for (int i = 0; i < tokenizer.Tokens.Count; i++)
         {
             paddedTokens[i] = tokenizer.Tokens[i];
-            paddedTypes[i]  = tokenizer.TokenTypes[i];
+            paddedTypes[i]  = tokenTypes[i];
         }
         for (int i = tokenizer.Tokens.Count; i < n; i++)
         {
@@ -301,6 +397,31 @@ public static class LlamaHfConverter
         {
             writer.SetMetadata($"tokenizer.ggml.{suffix}", id);
         }
+
+        // End-of-turn token: resolve the configured string against the
+        // padded vocab and emit its id. llama.cpp adds eot to its
+        // end-of-generation set, so chat models stop at turn boundaries.
+        if (!string.IsNullOrEmpty(def.EotToken))
+        {
+            int eotId = -1;
+            for (int i = 0; i < paddedTokens.Length; i++)
+            {
+                if (string.Equals(paddedTokens[i], def.EotToken, StringComparison.Ordinal))
+                {
+                    eotId = i;
+                    break;
+                }
+            }
+            if (eotId >= 0)
+            {
+                writer.SetMetadata("tokenizer.ggml.eot_token_id", (uint)eotId);
+            }
+            // If the configured eot string isn't in the vocab we don't
+            // throw — it's an architecture-definition hint, not a hard
+            // requirement, and a missing eot at worst restores the
+            // pre-fix behaviour where llama.cpp warns at load.
+        }
+
         if (!string.IsNullOrEmpty(tokenizer.ChatTemplate))
         {
             writer.SetMetadata("tokenizer.chat_template", tokenizer.ChatTemplate);
@@ -363,14 +484,15 @@ public static class LlamaHfConverter
     private static readonly Lazy<List<LlamaHfArchitectureDefinition>> _definitions = new(LoadEmbeddedDefinitions);
 
     /// <summary>
-    /// Pick the first registered definition whose <c>hf_architectures</c>
-    /// list contains any of <paramref name="hfArchitectureNames"/>.
+    /// Pick the first registered definition whose primary
+    /// <c>hf_architecture</c> or any of its aliases matches one of
+    /// <paramref name="hfArchitectureNames"/>.
     /// </summary>
     public static LlamaHfArchitectureDefinition? SelectDefinition(IReadOnlyList<string> hfArchitectureNames)
     {
         foreach (var def in _definitions.Value)
         {
-            foreach (var hf in def.HfArchitectures)
+            foreach (var hf in def.AllHfArchitectures)
             {
                 foreach (var query in hfArchitectureNames)
                 {
@@ -384,6 +506,27 @@ public static class LlamaHfConverter
     /// <summary>List the GGUF architecture names this build can convert.</summary>
     public static IReadOnlyList<string> AvailableArchitectures() =>
         _definitions.Value.Select(d => d.GgufArchitecture).ToArray();
+
+    /// <summary>
+    /// Human-readable list of available architectures with their
+    /// definition descriptions, suitable for error messages and the
+    /// GUI's "supported architectures" affordance. This is the consumer
+    /// of the <c>description</c> field in architecture JSONs.
+    /// </summary>
+    public static string FormatAvailableArchitectures()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var def in _definitions.Value)
+        {
+            sb.Append("  - ").Append(def.GgufArchitecture);
+            if (!string.IsNullOrEmpty(def.Description))
+            {
+                sb.Append(": ").Append(def.Description);
+            }
+            sb.Append(" (HF: ").Append(string.Join(", ", def.AllHfArchitectures)).AppendLine(")");
+        }
+        return sb.ToString();
+    }
 
     private static List<LlamaHfArchitectureDefinition> LoadEmbeddedDefinitions()
     {

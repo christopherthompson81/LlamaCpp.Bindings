@@ -29,9 +29,42 @@ namespace LlamaCpp.Bindings.HfConvert;
 /// </remarks>
 public sealed class LlamaHfArchitectureDefinition
 {
-    /// <summary>Entries in the model's <c>config.json</c> "architectures" array that match this definition.</summary>
-    [JsonPropertyName("hf_architectures")]
-    public IReadOnlyList<string> HfArchitectures { get; init; } = Array.Empty<string>();
+    /// <summary>
+    /// Primary entry in the model's <c>config.json</c> "architectures"
+    /// array that this definition handles. Singular by convention —
+    /// derivative models that piggy-back on the same architecture (e.g.
+    /// <c>InternS1ForConditionalGeneration</c> riding on Qwen3,
+    /// <c>Qwen3ForSequenceClassification</c> as a reranker head) go in
+    /// <see cref="HfArchitectureAliases"/>.
+    /// </summary>
+    [JsonPropertyName("hf_architecture")]
+    public string HfArchitecture { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Additional HF architecture names this definition also matches.
+    /// Subordinate to <see cref="HfArchitecture"/> for display
+    /// purposes; the engine treats them equally for arch detection.
+    /// Empty for most definitions.
+    /// </summary>
+    [JsonPropertyName("hf_architecture_aliases")]
+    public IReadOnlyList<string> HfArchitectureAliases { get; init; } = Array.Empty<string>();
+
+    /// <summary>All HF arch names the definition matches against — primary first, then aliases.</summary>
+    public IEnumerable<string> AllHfArchitectures
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(HfArchitecture)) yield return HfArchitecture;
+            // System.Text.Json source-gen leaves init-only properties at
+            // their type default rather than running C# field
+            // initializers when the JSON omits the field, so the list
+            // can be null for definitions without aliases.
+            if (HfArchitectureAliases is { } aliases)
+            {
+                foreach (var a in aliases) yield return a;
+            }
+        }
+    }
 
     /// <summary>GGUF <c>general.architecture</c> value (e.g. "qwen3", "llama").</summary>
     [JsonPropertyName("gguf_arch")]
@@ -67,12 +100,61 @@ public sealed class LlamaHfArchitectureDefinition
     [JsonPropertyName("tokenizer_pre")]
     public string? TokenizerPre { get; init; }
 
+    /// <summary>
+    /// How the engine determines the row count to pad
+    /// <c>tokenizer.ggml.tokens</c> to (HF embeddings are commonly
+    /// padded past the filled vocab for GPU alignment, and llama.cpp
+    /// checks <c>tokens.Count == embed_tokens.shape[vocab]</c>).
+    /// Format: <c>"config:&lt;dotted_path&gt;"</c> reads a numeric field
+    /// from <c>config.json</c>; <c>"tensor:&lt;name&gt;:dim&lt;N&gt;"</c>
+    /// reads a tensor's shape entry. Default <c>"config:vocab_size"</c>.
+    /// </summary>
+    [JsonPropertyName("vocab_anchor")]
+    public string VocabAnchor { get; init; } = "config:vocab_size";
+
+    /// <summary>
+    /// Glob patterns. Tokens in <c>tokenizer.json</c>'s
+    /// <c>added_tokens</c> whose <c>content</c> matches any pattern get
+    /// classified as <see cref="LlamaTokenTypeId.Control"/> regardless
+    /// of their declared <c>special</c> flag. Silences llama.cpp's
+    /// <c>"control-looking token was not control-type"</c> warnings
+    /// without the converter having to re-derive HF's added-token
+    /// semantics. <c>null</c> falls back to a conventional default
+    /// covering chat-template (<c>&lt;|...|&gt;</c>) and
+    /// SentencePiece-style (<c>&lt;s&gt;, &lt;/s&gt;, &lt;unk&gt;,
+    /// &lt;pad&gt;, &lt;bos&gt;, &lt;eos&gt;</c>) tokens.
+    /// </summary>
+    [JsonPropertyName("force_control_token_patterns")]
+    public IReadOnlyList<string>? ForceControlTokenPatterns { get; init; }
+
+    /// <summary>Default control-token patterns when the definition leaves <see cref="ForceControlTokenPatterns"/> null.</summary>
+    public static readonly IReadOnlyList<string> DefaultControlTokenPatterns = new[]
+    {
+        "<|*|>",
+        "<s>",
+        "</s>",
+        "<unk>",
+        "<pad>",
+        "<bos>",
+        "<eos>",
+    };
+
+    /// <summary>
+    /// Optional end-of-turn token string (e.g. <c>"&lt;|im_end|&gt;"</c>
+    /// for Qwen3 chat models). Resolved against the BPE vocab and
+    /// emitted as <c>tokenizer.ggml.eot_token_id</c>; llama.cpp uses
+    /// that to extend its end-of-generation set so chat models stop at
+    /// turn boundaries instead of running through to <c>eos</c>.
+    /// </summary>
+    [JsonPropertyName("eot_token")]
+    public string? EotToken { get; init; }
+
     public static LlamaHfArchitectureDefinition FromJson(string json)
     {
         var def = JsonSerializer.Deserialize(json, ArchitectureJsonContext.Default.LlamaHfArchitectureDefinition)
             ?? throw new InvalidDataException("Architecture definition JSON deserialized to null.");
-        if (def.HfArchitectures.Count == 0)
-            throw new InvalidDataException("Architecture definition is missing hf_architectures.");
+        if (string.IsNullOrEmpty(def.HfArchitecture))
+            throw new InvalidDataException("Architecture definition is missing hf_architecture.");
         if (string.IsNullOrEmpty(def.GgufArchitecture))
             throw new InvalidDataException("Architecture definition is missing gguf_arch.");
         return def;
