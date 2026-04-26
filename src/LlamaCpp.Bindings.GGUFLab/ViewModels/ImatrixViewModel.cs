@@ -42,8 +42,16 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
     [ObservableProperty]
     private int _gpuLayerCount = -1;
 
+    // Default to physical-core count (approximated as logical/2). Two
+    // reasons over either llama.cpp's hard-coded 4 or full ProcessorCount:
+    //   - llama.cpp's GGML_DEFAULT_N_THREADS=4 leaves big SMT boxes idle
+    //     (e.g. 16 logical threads → 25% util).
+    //   - Going to full logical count contends for the per-core SIMD unit
+    //     on SMT systems and tends to flatten or regress for AVX-heavy
+    //     matmul (verified empirically: 16-logical box plateaus at 8).
+    // Users on non-SMT chips can dial up; the spinner accepts any value.
     [ObservableProperty]
-    private int _threadCount = -1;
+    private int _threadCount = Math.Max(1, Environment.ProcessorCount / 2);
 
     [ObservableProperty]
     private string _statusLine = "Idle.";
@@ -303,6 +311,20 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
     protected override bool HasGgufInputValue => !string.IsNullOrEmpty(ModelPath);
 
     partial void OnModelPathChanged(string value) => NotifyRemediesChanged();
+
+    /// <summary>
+    /// True when neither corpus input is filled — surfaces the
+    /// load-wikitext remedy card. Hidden once the user picks a file or
+    /// pastes anything in the text box (those routes are always faster
+    /// than the canonical fetch when the user has their own data).
+    /// </summary>
+    public bool ShowLoadWikitextRemedy =>
+        string.IsNullOrEmpty(CorpusPath) && string.IsNullOrEmpty(CorpusText);
+
+    partial void OnCorpusPathChanged(string value) =>
+        OnPropertyChanged(nameof(ShowLoadWikitextRemedy));
+    partial void OnCorpusTextChanged(string value) =>
+        OnPropertyChanged(nameof(ShowLoadWikitextRemedy));
 
     private void StartTickTimer()
     {

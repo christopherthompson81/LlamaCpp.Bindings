@@ -40,8 +40,11 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
             .OrderBy(f => f.ToString(), StringComparer.Ordinal)
             .ToArray();
 
+    // Physical-core default (logical/2). See ImatrixViewModel for the
+    // rationale; same SMT-contention story applies to the AVX-heavy
+    // group-quantization kernels.
     [ObservableProperty]
-    private int _threadCount;
+    private int _threadCount = Math.Max(1, Environment.ProcessorCount / 2);
 
     [ObservableProperty]
     private bool _allowRequantize;

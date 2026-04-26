@@ -44,9 +44,9 @@ public abstract partial class ToolPageViewModel : ObservableObject
         active.PropertyChanged += (_, e) =>
         {
             // Anything derived from the active path must refresh when
-            // it changes; right now that's just the remedy visibility.
+            // it changes; right now that's the remedy visibility.
             if (e.PropertyName == nameof(Services.ActiveModel.Path))
-                OnPropertyChanged(nameof(ShowConvertFromSafetensorsRemedy));
+                NotifyRemediesChanged();
         };
     }
 
@@ -103,14 +103,34 @@ public abstract partial class ToolPageViewModel : ObservableObject
         // Lower is better. Prefer the lossless / conversion-output ftypes
         // since those are what subsequent tools usually want as the source
         // (you imatrix and quantize FROM an F16, not FROM a Q4_K_M).
+        // Anything carrying "imatrix" in the name is excluded outright —
+        // those are auxiliary outputs, not source weights.
         var name = Path.GetFileNameWithoutExtension(ggufPath);
-        if (Contains(name, "f16"))  return 0;
-        if (Contains(name, "bf16")) return 1;
-        if (Contains(name, "f32"))  return 2;
+        if (Contains(name, "imatrix")) return int.MaxValue;
+        if (Contains(name, "f16"))     return 0;
+        if (Contains(name, "bf16"))    return 1;
+        if (Contains(name, "f32"))     return 2;
         return 3;
 
         static bool Contains(string haystack, string needle) =>
             haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Find the imatrix sidecar produced for <paramref name="ggufPath"/>
+    /// by our Imatrix tool. Convention is <c>&lt;stem&gt;.imatrix.gguf</c>
+    /// next to the source model — see <c>ImatrixViewModel.RunAsync</c>'s
+    /// default OutputPath. Returns null when no sidecar exists yet (which
+    /// is exactly the signal the build-imatrix remedy uses to surface).
+    /// </summary>
+    protected static string? ResolveImatrixForGguf(string? ggufPath)
+    {
+        if (!IsGgufPath(ggufPath)) return null;
+        var dir = Path.GetDirectoryName(ggufPath);
+        if (string.IsNullOrEmpty(dir)) return null;
+        var stem = Path.GetFileNameWithoutExtension(ggufPath);
+        var candidate = Path.Combine(dir, $"{stem}.imatrix.gguf");
+        return File.Exists(candidate) ? candidate : null;
     }
 
     /// <summary>
@@ -119,6 +139,23 @@ public abstract partial class ToolPageViewModel : ObservableObject
     /// to decide whether the safetensors-conversion remedy is relevant.
     /// </summary>
     protected virtual bool HasGgufInputValue => false;
+
+    /// <summary>
+    /// Override in tools that take an imatrix file as a secondary input
+    /// (e.g. Adaptive Quantization) to opt into the build-imatrix remedy.
+    /// </summary>
+    protected virtual bool HasImatrixSlot => false;
+
+    /// <summary>True when the imatrix slot is filled. Override paired with <see cref="HasImatrixSlot"/>.</summary>
+    protected virtual bool HasImatrixInputValue => false;
+
+    /// <summary>
+    /// The GGUF the build-imatrix remedy should hand to the Imatrix tool.
+    /// Tools override to return their own input path when set, otherwise
+    /// what the active model resolves to. Returning null suppresses the
+    /// remedy (we don't know what to imatrix).
+    /// </summary>
+    protected virtual string? CurrentSourceGguf => null;
 
     /// <summary>
     /// True when the tool's GGUF input is empty AND the active model is
@@ -149,13 +186,32 @@ public abstract partial class ToolPageViewModel : ObservableObject
     }
 
     /// <summary>
+    /// True when the tool has an imatrix slot, the slot is empty, we
+    /// know which GGUF to imatrix, and no sidecar exists yet for it.
+    /// Surfaces the build-imatrix remedy card in supporting tools.
+    /// </summary>
+    public bool ShowBuildImatrixRemedy
+    {
+        get
+        {
+            if (!HasImatrixSlot) return false;
+            if (HasImatrixInputValue) return false;
+            if (CurrentSourceGguf is not { } src) return false;
+            return ResolveImatrixForGguf(src) is null;
+        }
+    }
+
+    /// <summary>
     /// Subclasses call this from their own input-field change handler so
     /// the remedy visibility refreshes when the user types or clears the
     /// input. Defined on the base so subclasses don't reach for the
     /// magic property name themselves.
     /// </summary>
     protected void NotifyRemediesChanged()
-        => OnPropertyChanged(nameof(ShowConvertFromSafetensorsRemedy));
+    {
+        OnPropertyChanged(nameof(ShowConvertFromSafetensorsRemedy));
+        OnPropertyChanged(nameof(ShowBuildImatrixRemedy));
+    }
 
     /// <summary>
     /// Switch to the HF→GGUF tool with the active safetensors directory
@@ -172,5 +228,19 @@ public abstract partial class ToolPageViewModel : ObservableObject
             // the remedy, so overwriting any prior value is the intent.
             c.HfDirectory = dir;
         });
+    }
+
+    /// <summary>
+    /// Switch to the Imatrix tool with this tool's source GGUF preloaded.
+    /// Returning to this tool after imatrix completes auto-fills the
+    /// imatrix slot (the back-fill happens in
+    /// <see cref="ApplyActiveModel"/>; see AdaptiveQuantizeViewModel).
+    /// </summary>
+    [RelayCommand]
+    private void RemedyBuildImatrix()
+    {
+        if (Navigator is null) return;
+        if (CurrentSourceGguf is not { } src) return;
+        Navigator.NavigateTo<ImatrixViewModel>(c => c.ModelPath = src);
     }
 }

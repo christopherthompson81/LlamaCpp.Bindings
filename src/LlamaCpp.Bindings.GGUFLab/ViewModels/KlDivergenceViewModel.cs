@@ -31,7 +31,8 @@ public sealed partial class KlDivergenceViewModel : ToolPageViewModel
     [ObservableProperty] private int _contextSize = 512;
     [ObservableProperty] private bool _scoreSecondHalfOnly = true;
     [ObservableProperty] private int _gpuLayerCount = -1;
-    [ObservableProperty] private int _threadCount = -1;
+    // Physical-core default (logical/2). See ImatrixViewModel for rationale.
+    [ObservableProperty] private int _threadCount = Math.Max(1, Environment.ProcessorCount / 2);
 
     [ObservableProperty] private string _statusLine = "Idle.";
     [ObservableProperty] private string _resultText = string.Empty;

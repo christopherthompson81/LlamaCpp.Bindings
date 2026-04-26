@@ -4,7 +4,7 @@
              x:Class="LlamaCpp.Bindings.GGUFLab.Views.LocalModelsView"
              x:DataType="vm:LocalModelsViewModel">
 
-    <DockPanel Margin="24,18">
+    <DockPanel Margin="24,18" Grid.IsSharedSizeScope="True">
         <!-- Header -->
         <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,14">
             <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
@@ -33,16 +33,24 @@
                     Command="{Binding RefreshCommand}" />
         </Grid>
 
-        <!-- Header row -->
+        <!-- Header row. Column widths are SharedSizeGroup-bound so the
+             header and every row line up, and Model auto-sizes to the
+             longest path instead of truncating. -->
         <Grid DockPanel.Dock="Top"
-              ColumnDefinitions="*,2*,90,140,Auto"
               ColumnSpacing="14"
               Margin="14,0,14,4">
-            <TextBlock Grid.Column="0" Text="Model"          FontWeight="SemiBold" Opacity="0.7" FontSize="11" />
-            <TextBlock Grid.Column="1" Text="Set active as…" FontWeight="SemiBold" Opacity="0.7" FontSize="11" />
-            <TextBlock Grid.Column="2" Text="Total"          FontWeight="SemiBold" Opacity="0.7" FontSize="11" HorizontalAlignment="Right" />
-            <TextBlock Grid.Column="3" Text="Modified"       FontWeight="SemiBold" Opacity="0.7" FontSize="11" />
-            <TextBlock Grid.Column="4" Text="Actions"        FontWeight="SemiBold" Opacity="0.7" FontSize="11" Margin="20,0,0,0" />
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" MinWidth="200" SharedSizeGroup="LM_Model" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" MinWidth="80"  SharedSizeGroup="LM_Size" />
+                <ColumnDefinition Width="Auto" MinWidth="120" SharedSizeGroup="LM_Modified" />
+                <ColumnDefinition Width="Auto" SharedSizeGroup="LM_Actions" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="Model"    FontWeight="SemiBold" Opacity="0.85" FontSize="12" />
+            <TextBlock Grid.Column="1" Text="Formats"  FontWeight="SemiBold" Opacity="0.85" FontSize="12" />
+            <TextBlock Grid.Column="2" Text="Size"     FontWeight="SemiBold" Opacity="0.85" FontSize="12" HorizontalAlignment="Right" />
+            <TextBlock Grid.Column="3" Text="Modified" FontWeight="SemiBold" Opacity="0.85" FontSize="12" />
+            <TextBlock Grid.Column="4" Text="Actions"  FontWeight="SemiBold" Opacity="0.85" FontSize="12" Margin="20,0,0,0" />
         </Grid>
 
         <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
@@ -52,15 +60,20 @@
                 <ItemsControl ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate DataType="vm:LocalModelsViewModel+LocalModelRow">
-                            <Grid ColumnDefinitions="*,2*,90,140,Auto"
-                                  ColumnSpacing="14"
+                            <Grid ColumnSpacing="14"
                                   Margin="14,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" MinWidth="200" SharedSizeGroup="LM_Model" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" MinWidth="80"  SharedSizeGroup="LM_Size" />
+                                    <ColumnDefinition Width="Auto" MinWidth="120" SharedSizeGroup="LM_Modified" />
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="LM_Actions" />
+                                </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0"
                                            Text="{Binding DisplayName}"
                                            FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
                                            FontSize="12"
                                            VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis"
                                            ToolTip.Tip="{Binding DirectoryPath}" />
                                 <ItemsControl Grid.Column="1"
                                               ItemsSource="{Binding Formats}"

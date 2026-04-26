@@ -107,7 +107,7 @@
                                            Minimum="-1" Maximum="999" Increment="1"
                                            FormatString="0" Width="140" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Threads (-1 = default)" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Threads" VerticalAlignment="Center" />
                             <NumericUpDown Grid.Row="2" Grid.Column="1"
                                            Value="{Binding ThreadCount, Mode=TwoWay}"
                                            Minimum="-1" Maximum="256" Increment="1"

@@ -56,10 +56,14 @@
                               VerticalAlignment="Top"
                               Click="OnBrowseInput" />
 
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Imatrix" VerticalAlignment="Center" />
-                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding ImatrixPath}"
-                              PlaceholderText="(optional) imatrix .gguf — column-importance weighting" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Imatrix" VerticalAlignment="Top" Margin="0,6,0,0" />
+                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="0">
+                        <TextBox Text="{Binding ImatrixPath}"
+                                 PlaceholderText="(optional) imatrix .gguf — column-importance weighting" />
+                        <v:BuildImatrixRemedyCard />
+                    </StackPanel>
                     <Button   Grid.Row="1" Grid.Column="2" Content="Browse…"
+                              VerticalAlignment="Top"
                               Click="OnBrowseImatrix" />
 
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Base ftype" VerticalAlignment="Center" />

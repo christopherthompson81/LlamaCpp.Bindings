@@ -353,11 +353,22 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         if (string.IsNullOrEmpty(InputPath)
             && ResolveGgufFromActive(path) is { } resolved)
             InputPath = resolved;
+        // Back-fill the imatrix slot from the sidecar Imatrix produces
+        // next to the source model. This is what makes "go build the
+        // imatrix, then come back" work without a re-Browse.
+        if (string.IsNullOrEmpty(ImatrixPath)
+            && ResolveImatrixForGguf(InputPath) is { } imt)
+            ImatrixPath = imt;
     }
 
     protected override bool HasGgufInputValue => !string.IsNullOrEmpty(InputPath);
+    protected override bool HasImatrixSlot => true;
+    protected override bool HasImatrixInputValue => !string.IsNullOrEmpty(ImatrixPath);
+    protected override string? CurrentSourceGguf =>
+        string.IsNullOrEmpty(InputPath) ? ResolveGgufFromActive(Active?.Path) : InputPath;
 
     partial void OnInputPathChanged(string value) => NotifyRemediesChanged();
+    partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
 
     public sealed record RecipeRow(
         string TensorName,

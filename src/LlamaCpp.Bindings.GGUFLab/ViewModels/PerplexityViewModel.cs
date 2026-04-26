@@ -44,7 +44,9 @@ public sealed partial class PerplexityViewModel : ToolPageViewModel
     private int _gpuLayerCount = -1;
 
     [ObservableProperty]
-    private int _threadCount = -1;
+    // Physical-core default (logical/2) to avoid SMT contention on the
+    // forward-pass GEMM. See ImatrixViewModel for the full rationale.
+    private int _threadCount = Math.Max(1, Environment.ProcessorCount / 2);
 
     [ObservableProperty]
     private string _statusLine = "Idle.";
