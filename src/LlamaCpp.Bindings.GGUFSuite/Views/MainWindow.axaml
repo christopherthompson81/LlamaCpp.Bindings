@@ -4,7 +4,8 @@
         xmlns:v="using:LlamaCpp.Bindings.GGUFSuite.Views"
         x:Class="LlamaCpp.Bindings.GGUFSuite.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="GGUF Suite"
+        Title="GGUF Lab"
+        Icon="/Assets/icon-256.png"
         Width="1100" Height="720"
         MinWidth="780" MinHeight="520">
 
@@ -47,12 +48,23 @@
         </DataTemplate>
     </Window.Resources>
 
+    <DockPanel>
+        <!-- Menu bar -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="E_xit" Click="OnExitClicked" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About..." Click="OnAboutClicked" />
+            </MenuItem>
+        </Menu>
+
     <Grid ColumnDefinitions="220,*">
         <!-- Sidebar -->
         <Border Grid.Column="0" Background="{DynamicResource SystemListLowColor}" Padding="0,12">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Top"
-                           Text="GGUF Suite"
+                           Text="GGUF Lab"
                            FontSize="18"
                            FontWeight="SemiBold"
                            Margin="16,4,16,12" />
@@ -125,4 +137,5 @@
             </ContentControl.DataTemplates>
         </ContentControl>
     </Grid>
+    </DockPanel>
 </Window>
