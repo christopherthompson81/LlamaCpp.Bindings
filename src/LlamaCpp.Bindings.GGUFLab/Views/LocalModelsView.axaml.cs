@@ -40,19 +40,20 @@ public partial class LocalModelsView : UserControl
         {
             return;
         }
-        // Confirm before destroying gigabytes — match "Yes" exactly so a
-        // mistapped Enter doesn't take the file.
+        // Confirm before destroying gigabytes — match "Delete" exactly so a
+        // mistapped Enter doesn't take the folder. The whole folder is
+        // removed, including every format inside.
         var confirm = new Window
         {
-            Title = "Delete model?",
-            Width = 460,
-            Height = 160,
+            Title = "Delete model folder?",
+            Width = 480,
+            Height = 170,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
         };
         var msg = new TextBlock
         {
-            Text = $"Delete {row.DisplayName} ({row.DisplaySize}) from disk?\nThis cannot be undone.",
+            Text = $"Delete {row.DisplayName} ({row.DisplaySize}) and ALL files inside it?\nThis cannot be undone.",
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
             Margin = new Avalonia.Thickness(20, 16, 20, 16),
         };

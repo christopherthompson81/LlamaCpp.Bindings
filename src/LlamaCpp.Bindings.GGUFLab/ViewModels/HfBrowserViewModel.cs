@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -47,10 +48,21 @@ public sealed partial class HfBrowserViewModel : ToolPageViewModel
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelectedRepo))]
     [NotifyPropertyChangedFor(nameof(SelectedRepoUrl))]
+    [NotifyPropertyChangedFor(nameof(IsSelectedRepoSafetensors))]
     private HfModelSummary? _selectedRepo;
 
     public bool HasSelectedRepo => SelectedRepo is not null;
     public string SelectedRepoUrl => SelectedRepo is null ? "" : $"https://huggingface.co/{SelectedRepo.Id}";
+
+    /// <summary>
+    /// True when the selected repo carries the <c>safetensors</c> tag.
+    /// Drives visibility of the "Download All Files" button — replicating
+    /// a whole repo is the standard workflow for safetensors models, where
+    /// the weights are sharded and need accompanying config/tokenizer files
+    /// to be usable.
+    /// </summary>
+    public bool IsSelectedRepoSafetensors =>
+        SelectedRepo?.Tags is { } tags && tags.Contains("safetensors");
 
     [ObservableProperty]
     private string _statusLine = "Idle. Type a query (or leave blank) and press Search.";
@@ -189,6 +201,90 @@ public sealed partial class HfBrowserViewModel : ToolPageViewModel
         }
         catch (OperationCanceledException) { StatusLine = "Cancelled."; }
         catch (Exception ex) { StatusLine = $"Download failed: {ex.Message}"; }
+        finally
+        {
+            IsBusy = false;
+            _cts?.Dispose();
+            _cts = null;
+        }
+    }
+
+    /// <summary>
+    /// Download every non-directory file in the currently selected repo
+    /// into <c>&lt;workspace&gt;/&lt;author&gt;/&lt;repoName&gt;/</c>, mirroring the HF tree.
+    /// Files already present at the expected size are skipped so that a
+    /// re-run cheaply resumes a partial replicate.
+    /// </summary>
+    [RelayCommand]
+    private async Task ReplicateRepoAsync()
+    {
+        if (SelectedRepo is null || IsBusy) return;
+        if (SelectedRepoFiles.Count == 0) return;
+        var repo = SelectedRepo;
+        var root = _settings.EnsureWorkspaceRoot();
+        var repoRoot = Path.Combine(root, SafeSegments(repo.Id));
+
+        // Snapshot the file list — the observable collection lives on the
+        // UI thread and could be mutated if the user clicks another repo.
+        var files = new List<HfModelFile>(SelectedRepoFiles);
+
+        _cts = new CancellationTokenSource();
+        IsBusy = true;
+        DownloadProgressFraction = 0;
+        DownloadProgressText = string.Empty;
+
+        int total = files.Count;
+        int done = 0, skipped = 0, downloaded = 0;
+        StatusLine = $"Replicating {repo.Id}: 0 of {total}…";
+
+        try
+        {
+            foreach (var file in files)
+            {
+                _cts.Token.ThrowIfCancellationRequested();
+                done++;
+                var destPath = Path.Combine(repoRoot, SafePath(file.Path));
+
+                if (File.Exists(destPath)
+                    && file.Size is long expected
+                    && new FileInfo(destPath).Length == expected)
+                {
+                    skipped++;
+                    StatusLine = $"Replicating {repo.Id}: {done}/{total} — skipped {file.Path}";
+                    continue;
+                }
+
+                DownloadProgressFraction = 0;
+                DownloadProgressText = "0 / ?";
+                StatusLine = $"Replicating {repo.Id}: {done}/{total} — {file.Path}";
+
+                var progress = new Progress<(long downloaded, long? total)>(p =>
+                {
+                    if (p.total is long t && t > 0)
+                    {
+                        DownloadProgressFraction = (double)p.downloaded / t;
+                        DownloadProgressText = $"{Mb(p.downloaded)} / {Mb(t)} MB ({DownloadProgressFraction * 100:F1}%)";
+                    }
+                    else
+                    {
+                        DownloadProgressFraction = 0;
+                        DownloadProgressText = $"{Mb(p.downloaded)} MB";
+                    }
+                });
+
+                await _api.DownloadAsync(repo.Id, file.Path, destPath, progress, _cts.Token);
+                downloaded++;
+            }
+            StatusLine = $"Replicated {repo.Id}: {downloaded} downloaded, {skipped} already present → {repoRoot}";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusLine = $"Cancelled. {downloaded} downloaded, {skipped} skipped before stop.";
+        }
+        catch (Exception ex)
+        {
+            StatusLine = $"Replicate failed at {done}/{total}: {ex.Message}";
+        }
         finally
         {
             IsBusy = false;

@@ -99,15 +99,24 @@
                             BorderBrush="{DynamicResource SystemBaseLowColor}"
                             BorderThickness="0,0,0,1"
                             IsVisible="{Binding HasSelectedRepo}">
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="{Binding SelectedRepo.Id}" FontWeight="SemiBold" />
-                            <Button Content="Open on huggingface.co ↗"
-                                    Click="OnOpenRepoLink"
-                                    Padding="0"
-                                    Background="Transparent"
-                                    BorderThickness="0"
-                                    Foreground="{DynamicResource SystemAccentColor}" />
-                        </StackPanel>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="{Binding SelectedRepo.Id}" FontWeight="SemiBold" />
+                                <Button Content="Open on huggingface.co ↗"
+                                        Click="OnOpenRepoLink"
+                                        Padding="0"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Foreground="{DynamicResource SystemAccentColor}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="Download All Files"
+                                    Command="{Binding ReplicateRepoCommand}"
+                                    IsEnabled="{Binding IsIdle}"
+                                    IsVisible="{Binding IsSelectedRepoSafetensors}"
+                                    VerticalAlignment="Center"
+                                    ToolTip.Tip="Download every file in this repo into the workspace, mirroring the HF tree." />
+                        </Grid>
                     </Border>
 
                     <!-- File list -->

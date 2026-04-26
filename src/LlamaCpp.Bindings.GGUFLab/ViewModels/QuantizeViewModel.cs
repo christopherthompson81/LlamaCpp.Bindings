@@ -182,6 +182,12 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
 
     public override void ApplyActiveModel(string? path)
     {
-        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(InputPath)) InputPath = path;
+        if (string.IsNullOrEmpty(InputPath)
+            && ResolveGgufFromActive(path) is { } resolved)
+            InputPath = resolved;
     }
+
+    protected override bool HasGgufInputValue => !string.IsNullOrEmpty(InputPath);
+
+    partial void OnInputPathChanged(string value) => NotifyRemediesChanged();
 }

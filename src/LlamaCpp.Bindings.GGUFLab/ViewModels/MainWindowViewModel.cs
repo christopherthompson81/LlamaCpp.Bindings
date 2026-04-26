@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using LlamaCpp.Bindings.GGUFLab.Services;
 
@@ -19,6 +20,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public NativeLogBus LogBus { get; } = new();
     public WorkspaceSettings Settings { get; }
     public ActiveModel ActiveModel { get; } = new();
+    public ToolNavigator Navigator { get; } = new();
 
     public MainWindowViewModel()
     {
@@ -58,6 +60,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
             controlVectors,
             loraMerge,
         };
+
+        // Bind the navigator so any tool can route the user to another
+        // tool (used by the briefcase-medical remedy buttons), then
+        // hand each tool the shell-owned services.
+        Navigator.Bind(
+            type => Tools.FirstOrDefault(t => type.IsInstanceOfType(t)),
+            tool => SelectedTool = (ToolPageViewModel)tool);
+        foreach (var tool in Tools)
+            tool.AttachShell(ActiveModel, Navigator);
 
         _selectedTool = quantize;
 

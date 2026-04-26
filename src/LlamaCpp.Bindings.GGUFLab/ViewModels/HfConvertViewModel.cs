@@ -71,6 +71,16 @@ public sealed partial class HfConvertViewModel : ToolPageViewModel
         _logBus = logBus;
     }
 
+    public override void ApplyActiveModel(string? path)
+    {
+        // The active model can be a directory (a replicated safetensors
+        // model) — that's exactly what this tool wants. Ignore .gguf
+        // files; converting from GGUF isn't this tool's job.
+        if (string.IsNullOrEmpty(path)) return;
+        if (!string.IsNullOrEmpty(HfDirectory)) return;
+        if (Directory.Exists(path)) HfDirectory = path;
+    }
+
     [RelayCommand]
     private async Task RunAsync()
     {
@@ -131,6 +141,14 @@ public sealed partial class HfConvertViewModel : ToolPageViewModel
                 $"Tensors:              {result.TensorCount:N0}\n" +
                 $"Output bytes:         {result.OutputBytes:N0}\n" +
                 $"Elapsed:              {result.Elapsed.TotalSeconds:F2}s";
+
+            // The active model is the model FOLDER, not any single file
+            // inside it — that's what lets the user select once and walk
+            // through Convert → Imatrix → Quantize → Adaptive without
+            // re-selecting. Pin the folder; downstream tools resolve the
+            // appropriate format (the new F16 here) on activation.
+            var modelDir = Path.GetDirectoryName(result.OutputPath);
+            if (!string.IsNullOrEmpty(modelDir)) Active?.Set(modelDir);
         }
         catch (OperationCanceledException)
         {

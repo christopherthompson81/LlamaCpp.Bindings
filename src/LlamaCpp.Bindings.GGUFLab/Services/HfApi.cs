@@ -4,6 +4,7 @@ using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -160,7 +161,7 @@ public sealed class HfApi : IDisposable
                 Likes:        m.Likes,
                 Tags:         m.Tags,
                 Pipeline:     m.PipelineTag,
-                Gated:        m.Gated == true));
+                Gated:        InterpretGated(m.Gated)));
         }
         return result;
     }
@@ -235,6 +236,21 @@ public sealed class HfApi : IDisposable
         File.Move(tempPath, destPath);
     }
 
+    /// <summary>
+    /// Normalize HF's <c>gated</c> field. The API returns <c>false</c> for
+    /// ungated repos and a string <c>"auto"</c>/<c>"manual"</c> for gated
+    /// ones — historical artifact of the gate type living in the same slot
+    /// as the boolean. Anything that isn't an explicit <c>false</c> or the
+    /// string <c>"false"</c> is treated as gated.
+    /// </summary>
+    private static bool InterpretGated(JsonElement el) => el.ValueKind switch
+    {
+        JsonValueKind.True   => true,
+        JsonValueKind.False  => false,
+        JsonValueKind.String => !string.Equals(el.GetString(), "false", StringComparison.OrdinalIgnoreCase),
+        _                    => false,
+    };
+
     // --- API DTOs ---------------------------------------------------------
 
     private sealed class HfApiModel
@@ -246,7 +262,10 @@ public sealed class HfApi : IDisposable
         [JsonPropertyName("likes")]         public long? Likes { get; set; }
         [JsonPropertyName("tags")]          public List<string>? Tags { get; set; }
         [JsonPropertyName("pipeline_tag")]  public string? PipelineTag { get; set; }
-        [JsonPropertyName("gated")]         public bool? Gated { get; set; }
+        // The HF API returns this as either a JSON bool (false when ungated)
+        // or a string ("auto" / "manual" when gated). Accept either by
+        // deserializing as a raw JsonElement and normalizing later.
+        [JsonPropertyName("gated")]         public JsonElement Gated { get; set; }
     }
 
     private sealed class HfApiTreeEntry

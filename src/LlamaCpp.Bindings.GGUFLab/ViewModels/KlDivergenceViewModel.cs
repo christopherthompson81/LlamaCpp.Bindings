@@ -221,6 +221,15 @@ public sealed partial class KlDivergenceViewModel : ToolPageViewModel
     {
         // KL has two slots; the active model is the candidate being
         // judged against the reference, so it lands in TestModelPath.
-        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(TestModelPath)) TestModelPath = path;
+        if (string.IsNullOrEmpty(TestModelPath)
+            && ResolveGgufFromActive(path) is { } resolved)
+            TestModelPath = resolved;
     }
+
+    // The safetensors-conversion remedy is offered against the test
+    // model slot since that's where ApplyActiveModel routes the active
+    // path. Reference is typically a fixed baseline GGUF the user owns.
+    protected override bool HasGgufInputValue => !string.IsNullOrEmpty(TestModelPath);
+
+    partial void OnTestModelPathChanged(string value) => NotifyRemediesChanged();
 }

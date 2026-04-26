@@ -237,8 +237,14 @@ public sealed partial class ShardingViewModel : ToolPageViewModel
 
     public override void ApplyActiveModel(string? path)
     {
-        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(SplitInputPath)) SplitInputPath = path;
+        if (string.IsNullOrEmpty(SplitInputPath)
+            && ResolveGgufFromActive(path) is { } resolved)
+            SplitInputPath = resolved;
     }
+
+    protected override bool HasGgufInputValue => !string.IsNullOrEmpty(SplitInputPath);
+
+    partial void OnSplitInputPathChanged(string value) => NotifyRemediesChanged();
 }
 
 public enum SplitLimit

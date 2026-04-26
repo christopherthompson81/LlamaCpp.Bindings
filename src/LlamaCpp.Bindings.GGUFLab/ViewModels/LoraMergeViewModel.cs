@@ -159,6 +159,12 @@ public sealed partial class LoraMergeViewModel : ToolPageViewModel
 
     public override void ApplyActiveModel(string? path)
     {
-        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(BasePath)) BasePath = path;
+        if (string.IsNullOrEmpty(BasePath)
+            && ResolveGgufFromActive(path) is { } resolved)
+            BasePath = resolved;
     }
+
+    protected override bool HasGgufInputValue => !string.IsNullOrEmpty(BasePath);
+
+    partial void OnBasePathChanged(string value) => NotifyRemediesChanged();
 }

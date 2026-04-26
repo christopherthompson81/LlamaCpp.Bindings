@@ -276,8 +276,14 @@ public sealed partial class GgufEditorViewModel : ToolPageViewModel
 
     public override void ApplyActiveModel(string? path)
     {
-        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(SourcePath)) SourcePath = path;
+        if (string.IsNullOrEmpty(SourcePath)
+            && ResolveGgufFromActive(path) is { } resolved)
+            SourcePath = resolved;
     }
+
+    protected override bool HasGgufInputValue => !string.IsNullOrEmpty(SourcePath);
+
+    partial void OnSourcePathChanged(string value) => NotifyRemediesChanged();
 }
 
 /// <summary>One row in the metadata table — wraps a mutable entry and exposes display cells.</summary>

@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             xmlns:v="using:LlamaCpp.Bindings.GGUFLab.Views"
              x:Class="LlamaCpp.Bindings.GGUFLab.Views.ShardingView"
              x:DataType="vm:ShardingViewModel">
 
@@ -50,10 +51,14 @@
                 <!-- Split-mode form -->
                 <StackPanel Spacing="14" IsVisible="{Binding IsSplitMode}">
                     <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto" RowSpacing="10" ColumnSpacing="10">
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Source GGUF" VerticalAlignment="Center" />
-                        <TextBox  Grid.Row="0" Grid.Column="1" Text="{Binding SplitInputPath}"
-                                  PlaceholderText="Input model.gguf to split" />
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Source GGUF" VerticalAlignment="Top" Margin="0,6,0,0" />
+                        <StackPanel Grid.Row="0" Grid.Column="1" Spacing="0">
+                            <TextBox Text="{Binding SplitInputPath}"
+                                     PlaceholderText="Input model.gguf to split" />
+                            <v:RemedyCard />
+                        </StackPanel>
                         <Button   Grid.Row="0" Grid.Column="2" Content="Browse…"
+                                  VerticalAlignment="Top"
                                   Click="OnBrowseSplitInput" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Output prefix" VerticalAlignment="Center" />

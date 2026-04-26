@@ -1,0 +1,48 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             x:Class="LlamaCpp.Bindings.GGUFLab.Views.RemedyCard"
+             x:DataType="vm:ToolPageViewModel"
+             IsVisible="{Binding ShowConvertFromSafetensorsRemedy}">
+
+    <!--
+        Warn card that surfaces below a tool's GGUF input field when the
+        active model is a safetensors directory. Inherits the parent
+        tool's DataContext (every tool view is bound to a
+        ToolPageViewModel-derived VM) so all bindings resolve directly
+        against the base-class remedy state.
+    -->
+    <Border Background="#33D97706"
+            BorderBrush="#D97706"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="10,8"
+            Margin="0,4,0,0">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+            <Viewbox Grid.Column="0"
+                     Width="20" Height="20"
+                     VerticalAlignment="Center">
+                <Path Data="{StaticResource BriefcaseMedicalIcon}"
+                      Stroke="#D97706"
+                      StrokeThickness="2"
+                      StrokeLineCap="Round"
+                      StrokeJoin="Round" />
+            </Viewbox>
+            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                <TextBlock Text="No GGUF set, but the active model is a safetensors directory."
+                           FontWeight="SemiBold"
+                           FontSize="12"
+                           TextWrapping="Wrap" />
+                <TextBlock Text="This tool needs a GGUF file. Convert the active directory first, then come back."
+                           FontSize="11"
+                           Opacity="0.8"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+            <Button Grid.Column="2"
+                    Content="Convert to GGUF"
+                    Command="{Binding RemedyConvertFromSafetensorsCommand}"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="Switch to HF→GGUF with the active safetensors directory preloaded." />
+        </Grid>
+    </Border>
+</UserControl>

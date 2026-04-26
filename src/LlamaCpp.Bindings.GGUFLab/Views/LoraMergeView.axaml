@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             xmlns:v="using:LlamaCpp.Bindings.GGUFLab.Views"
              x:Class="LlamaCpp.Bindings.GGUFLab.Views.LoraMergeView"
              x:DataType="vm:LoraMergeViewModel">
 
@@ -37,10 +38,13 @@
         <ScrollViewer>
             <StackPanel Spacing="14" MaxWidth="780" HorizontalAlignment="Stretch">
                 <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Base model" VerticalAlignment="Center" />
-                    <TextBox  Grid.Row="0" Grid.Column="1" Text="{Binding BasePath}"
-                              PlaceholderText="Path to base GGUF (F32/F16/BF16)" />
-                    <Button   Grid.Row="0" Grid.Column="2" Content="Browse…" Click="OnBrowseBase" />
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Base model" VerticalAlignment="Top" Margin="0,6,0,0" />
+                    <StackPanel Grid.Row="0" Grid.Column="1" Spacing="0">
+                        <TextBox Text="{Binding BasePath}"
+                                 PlaceholderText="Path to base GGUF (F32/F16/BF16)" />
+                        <v:RemedyCard />
+                    </StackPanel>
+                    <Button   Grid.Row="0" Grid.Column="2" Content="Browse…" VerticalAlignment="Top" Click="OnBrowseBase" />
 
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="LoRA adapter" VerticalAlignment="Center" />
                     <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding AdapterPath}"

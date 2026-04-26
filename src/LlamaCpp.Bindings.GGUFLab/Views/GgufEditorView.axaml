@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             xmlns:v="using:LlamaCpp.Bindings.GGUFLab.Views"
              x:Class="LlamaCpp.Bindings.GGUFLab.Views.GgufEditorView"
              x:DataType="vm:GgufEditorViewModel">
 
@@ -19,6 +20,10 @@
             <Button Grid.Column="2" Content="Save As…" Click="OnSaveAs"
                     IsEnabled="{Binding IsLoaded}" />
         </Grid>
+
+        <!-- Warn card when no GGUF is loaded but the active model is a
+             safetensors directory — offers a one-click jump to convert. -->
+        <v:RemedyCard DockPanel.Dock="Top" Margin="0,0,0,10" />
 
         <!-- Status -->
         <TextBlock DockPanel.Dock="Top" Text="{Binding StatusLine}"

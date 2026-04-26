@@ -295,8 +295,14 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
 
     public override void ApplyActiveModel(string? path)
     {
-        if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(ModelPath)) ModelPath = path;
+        if (string.IsNullOrEmpty(ModelPath)
+            && ResolveGgufFromActive(path) is { } resolved)
+            ModelPath = resolved;
     }
+
+    protected override bool HasGgufInputValue => !string.IsNullOrEmpty(ModelPath);
+
+    partial void OnModelPathChanged(string value) => NotifyRemediesChanged();
 
     private void StartTickTimer()
     {

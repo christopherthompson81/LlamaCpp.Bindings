@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             xmlns:v="using:LlamaCpp.Bindings.GGUFLab.Views"
              x:Class="LlamaCpp.Bindings.GGUFLab.Views.KlDivergenceView"
              x:DataType="vm:KlDivergenceViewModel">
 
@@ -42,10 +43,13 @@
                               PlaceholderText="Baseline GGUF (typically F16 or F32)" />
                     <Button   Grid.Row="0" Grid.Column="2" Content="Browse…" Click="OnBrowseReference" />
 
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Test model" VerticalAlignment="Center" />
-                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding TestModelPath}"
-                              PlaceholderText="Quantized GGUF (e.g. Q4_K_M variant)" />
-                    <Button   Grid.Row="1" Grid.Column="2" Content="Browse…" Click="OnBrowseTest" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Test model" VerticalAlignment="Top" Margin="0,6,0,0" />
+                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="0">
+                        <TextBox Text="{Binding TestModelPath}"
+                                 PlaceholderText="Quantized GGUF (e.g. Q4_K_M variant)" />
+                        <v:RemedyCard />
+                    </StackPanel>
+                    <Button   Grid.Row="1" Grid.Column="2" Content="Browse…" VerticalAlignment="Top" Click="OnBrowseTest" />
 
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Corpus file" VerticalAlignment="Center" />
                     <TextBox  Grid.Row="2" Grid.Column="1" Text="{Binding CorpusPath}"

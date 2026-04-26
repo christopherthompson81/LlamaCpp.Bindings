@@ -5,4 +5,14 @@
     <Application.Styles>
         <FluentTheme />
     </Application.Styles>
+    <Application.Resources>
+        <!--
+            Lucide briefcase-medical (https://lucide.dev/icons/briefcase-medical),
+            ISC-licensed. Six subpaths render the strap, body, and plus glyph.
+            The body is expressed as an explicit rounded rectangle path so the
+            icon parses as a single StreamGeometry suitable for stroke-only
+            rendering.
+        -->
+        <StreamGeometry x:Key="BriefcaseMedicalIcon">M12 11v4 M14 13h-4 M16 6V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2 M18 6v14 M6 6v14 M4 6 L20 6 A2 2 0 0 1 22 8 L22 18 A2 2 0 0 1 20 20 L4 20 A2 2 0 0 1 2 18 L2 8 A2 2 0 0 1 4 6 Z</StreamGeometry>
+    </Application.Resources>
 </Application>
