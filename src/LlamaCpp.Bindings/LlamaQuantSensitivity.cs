@@ -25,12 +25,38 @@ public sealed record LlamaQuantSensitivityResult(
     DateTime ComputedAtUtc,
     TimeSpan Elapsed);
 
-/// <summary>Per-tensor progress reported during the sweep.</summary>
+/// <summary>Sub-step a sensitivity-sweep tensor is currently in.</summary>
+public enum LlamaQuantSensitivityPhase
+{
+    /// <summary>Default; reported once when a new tensor starts.</summary>
+    Tensor,
+    /// <summary>Reading + dequantizing the source tensor to F32.</summary>
+    SourceDequantize,
+    /// <summary>Quantizing the F32 source to the candidate type.</summary>
+    Quantize,
+    /// <summary>Dequantizing the candidate's bytes back to F32.</summary>
+    Dequantize,
+    /// <summary>Computing MSE between source and round-trip.</summary>
+    Score,
+    /// <summary>One candidate finished; <c>CandidateRelativeMse</c> is populated.</summary>
+    CandidateDone,
+}
+
+/// <summary>
+/// Per-tensor / per-candidate progress reported during the sweep.
+/// Fields beyond <see cref="CandidatesPerTensor"/> are populated when
+/// <see cref="Phase"/> is per-candidate; consumers that don't care
+/// about the lightboard can ignore them.
+/// </summary>
 public readonly record struct LlamaQuantSensitivityProgress(
     int TensorIndex,
     int TensorCount,
     string CurrentTensorName,
-    int CandidatesPerTensor);
+    int CandidatesPerTensor,
+    int CandidateIndex = 0,
+    LlamaTensorType? CandidateType = null,
+    LlamaQuantSensitivityPhase Phase = LlamaQuantSensitivityPhase.Tensor,
+    double? CandidateRelativeMse = null);
 
 /// <summary>Knobs for <see cref="LlamaQuantSensitivity.MeasureAsync"/>.</summary>
 public sealed class LlamaQuantSensitivityOptions
@@ -59,6 +85,15 @@ public sealed class LlamaQuantSensitivityOptions
     /// are scored. Useful for fast iteration during development.
     /// </summary>
     public string? IncludeNameRegex { get; set; }
+
+    /// <summary>
+    /// Cap on candidates evaluated concurrently per tensor. Zero (the
+    /// default) means "physical-core count" — each candidate is
+    /// independent given the source F32 and runs on its own buffers,
+    /// so this scales near-linearly with cores until memory bandwidth
+    /// or RAM caps it. Set to 1 to force the old serial behavior.
+    /// </summary>
+    public int MaxDegreeOfParallelism { get; set; }
 }
 
 /// <summary>
@@ -154,16 +189,26 @@ public static class LlamaQuantSensitivity
             .ToList();
 
         var scores = new List<LlamaQuantSensitivityScore>(targets.Count * candidates.Count);
+        int parallelism = opts.MaxDegreeOfParallelism > 0
+            ? opts.MaxDegreeOfParallelism
+            : Math.Max(1, Environment.ProcessorCount / 2);
 
         for (int i = 0; i < targets.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
             var t = targets[i];
+            int tensorIndexCapture = i + 1;
+            // "New tensor" report — clears the lightboard for the UI.
             progress?.Report(new LlamaQuantSensitivityProgress(
-                TensorIndex: i + 1, TensorCount: targets.Count,
-                CurrentTensorName: t.Name, CandidatesPerTensor: candidates.Count));
+                TensorIndex: tensorIndexCapture, TensorCount: targets.Count,
+                CurrentTensorName: t.Name, CandidatesPerTensor: candidates.Count,
+                Phase: LlamaQuantSensitivityPhase.Tensor));
 
             // Dequantize source to F32 once per tensor (cached across all candidates).
+            progress?.Report(new LlamaQuantSensitivityProgress(
+                TensorIndex: tensorIndexCapture, TensorCount: targets.Count,
+                CurrentTensorName: t.Name, CandidatesPerTensor: candidates.Count,
+                Phase: LlamaQuantSensitivityPhase.SourceDequantize));
             var source = ReadTensorAsFloat32(baseFile, t);
             float[]? imat = imatrixByTensor is not null && imatrixByTensor.TryGetValue(t.Name, out var col)
                 ? col : null;
@@ -185,40 +230,75 @@ public static class LlamaQuantSensitivity
                 continue;
             }
 
-            foreach (var qtype in candidates)
+            // Run candidates concurrently. Each candidate is independent
+            // given the (now in-memory) source F32, so this scales with
+            // cores until RAM bandwidth or memory caps it.
+            var perCandidate = new LlamaQuantSensitivityScore?[candidates.Count];
+            var po = new ParallelOptions
             {
-                ct.ThrowIfCancellationRequested();
-                var ggmlQ = (ggml_type)(int)qtype;
-                var traitsPtr = NativeMethods.ggml_get_type_traits(ggmlQ);
-                if (traitsPtr == IntPtr.Zero)
+                MaxDegreeOfParallelism = parallelism,
+                CancellationToken      = ct,
+            };
+            try
+            {
+                Parallel.For(0, candidates.Count, po, ci =>
                 {
-                    scores.Add(new LlamaQuantSensitivityScore(
-                        t.Name, qtype, double.NaN, double.NaN, elements,
-                        imat is not null, Skipped: true,
-                        SkipReason: "ggml_get_type_traits returned null"));
-                    continue;
-                }
-                var traits = Marshal.PtrToStructure<ggml_type_traits>(traitsPtr);
+                    ct.ThrowIfCancellationRequested();
+                    var qtype = candidates[ci];
+                    var ggmlQ = (ggml_type)(int)qtype;
+                    var traitsPtr = NativeMethods.ggml_get_type_traits(ggmlQ);
+                    if (traitsPtr == IntPtr.Zero)
+                    {
+                        perCandidate[ci] = new LlamaQuantSensitivityScore(
+                            t.Name, qtype, double.NaN, double.NaN, elements,
+                            imat is not null, Skipped: true,
+                            SkipReason: "ggml_get_type_traits returned null");
+                        return;
+                    }
+                    var traits = Marshal.PtrToStructure<ggml_type_traits>(traitsPtr);
 
-                // n_per_row must be divisible by the type's block size,
-                // else the kernel rejects the tensor. Surface that as a
-                // skip rather than a throw — different tensors will have
-                // different applicable types, which is itself useful data.
-                if (traits.blck_size > 1 && nPerRow % traits.blck_size != 0)
-                {
-                    scores.Add(new LlamaQuantSensitivityScore(
-                        t.Name, qtype, double.NaN, double.NaN, elements,
-                        imat is not null, Skipped: true,
-                        SkipReason: $"n_per_row {nPerRow} not divisible by block size {traits.blck_size}"));
-                    continue;
-                }
+                    if (traits.blck_size > 1 && nPerRow % traits.blck_size != 0)
+                    {
+                        perCandidate[ci] = new LlamaQuantSensitivityScore(
+                            t.Name, qtype, double.NaN, double.NaN, elements,
+                            imat is not null, Skipped: true,
+                            SkipReason: $"n_per_row {nPerRow} not divisible by block size {traits.blck_size}");
+                        return;
+                    }
 
-                var (rawMse, relMse) = ScoreOne(source, ggmlQ, traits, nRows, nPerRow, imat, denom);
-                scores.Add(new LlamaQuantSensitivityScore(
-                    t.Name, qtype, rawMse, relMse, elements,
-                    ImatrixWeighted: imat is not null,
-                    Skipped: false, SkipReason: null));
+                    var (rawMse, relMse) = ScoreOneWithProgress(
+                        source, ggmlQ, traits, nRows, nPerRow, imat, denom,
+                        progress, tensorIndexCapture, targets.Count, t.Name,
+                        candidatesPerTensor: candidates.Count,
+                        candidateIndex: ci, candidateType: qtype);
+
+                    perCandidate[ci] = new LlamaQuantSensitivityScore(
+                        t.Name, qtype, rawMse, relMse, elements,
+                        ImatrixWeighted: imat is not null,
+                        Skipped: false, SkipReason: null);
+
+                    progress?.Report(new LlamaQuantSensitivityProgress(
+                        TensorIndex: tensorIndexCapture, TensorCount: targets.Count,
+                        CurrentTensorName: t.Name, CandidatesPerTensor: candidates.Count,
+                        CandidateIndex: ci, CandidateType: qtype,
+                        Phase: LlamaQuantSensitivityPhase.CandidateDone,
+                        CandidateRelativeMse: relMse));
+                });
             }
+            catch (OperationCanceledException) { throw; }
+            catch (AggregateException agg)
+            {
+                // Surface a clean cancellation if it was the cause; otherwise
+                // rethrow the first inner exception so the message is useful.
+                if (agg.InnerExceptions.Any(e => e is OperationCanceledException))
+                    throw new OperationCanceledException(ct);
+                throw agg.Flatten().InnerException ?? agg;
+            }
+
+            // Append results in candidate order so the score table is
+            // deterministic regardless of completion order.
+            foreach (var s in perCandidate)
+                if (s is not null) scores.Add(s);
         }
 
         sw.Stop();
@@ -229,6 +309,86 @@ public static class LlamaQuantSensitivity
             Scores: scores,
             ComputedAtUtc: DateTime.UtcNow,
             Elapsed: sw.Elapsed);
+    }
+
+    /// <summary>
+    /// Wraps <see cref="ScoreOne"/> with progress reports at the phase
+    /// boundaries (quantize / dequantize / score). The lightboard relies
+    /// on these to show "what's happening for the current candidate"
+    /// even when a single tensor takes minutes.
+    /// </summary>
+    private static (double raw, double relative) ScoreOneWithProgress(
+        float[] source,
+        ggml_type qtype,
+        ggml_type_traits traits,
+        long nRows, int nPerRow,
+        float[]? imatrix,
+        double denom,
+        IProgress<LlamaQuantSensitivityProgress>? progress,
+        int tensorIndex, int tensorCount, string tensorName, int candidatesPerTensor,
+        int candidateIndex, LlamaTensorType candidateType)
+    {
+        Report(LlamaQuantSensitivityPhase.Quantize);
+        long quantBytes = nRows * (long)traits.type_size * (nPerRow / Math.Max(1L, traits.blck_size));
+        if (traits.blck_size <= 0)
+        {
+            quantBytes = nRows * nPerRow * (long)traits.type_size;
+        }
+        var quantBuf = new byte[quantBytes];
+        var roundTripped = new float[source.Length];
+
+        unsafe
+        {
+            fixed (float* psrc = source)
+            fixed (byte*  pdst = quantBuf)
+            fixed (float* pimat = imatrix)
+            {
+                NativeMethods.ggml_quantize_chunk(
+                    qtype, psrc, pdst,
+                    start: 0, nrows: nRows, n_per_row: nPerRow,
+                    imatrix: pimat);
+            }
+
+            Report(LlamaQuantSensitivityPhase.Dequantize);
+            var toFloat = Marshal.GetDelegateForFunctionPointer<GgmlToFloatDelegate>(traits.to_float);
+            fixed (byte*  pdst = quantBuf)
+            fixed (float* prt  = roundTripped)
+            {
+                toFloat((IntPtr)pdst, (IntPtr)prt, source.Length);
+            }
+        }
+
+        Report(LlamaQuantSensitivityPhase.Score);
+        double sumSqErr = 0;
+        if (imatrix is not null)
+        {
+            for (int e = 0; e < source.Length; e++)
+            {
+                double diff = (double)source[e] - roundTripped[e];
+                sumSqErr += imatrix[e % nPerRow] * diff * diff;
+            }
+        }
+        else
+        {
+            for (int e = 0; e < source.Length; e++)
+            {
+                double diff = (double)source[e] - roundTripped[e];
+                sumSqErr += diff * diff;
+            }
+        }
+        double rawMse = source.Length > 0 ? sumSqErr / source.Length : 0;
+        double relMse = rawMse / denom;
+        return (rawMse, relMse);
+
+        void Report(LlamaQuantSensitivityPhase phase) =>
+            progress?.Report(new LlamaQuantSensitivityProgress(
+                TensorIndex:        tensorIndex,
+                TensorCount:        tensorCount,
+                CurrentTensorName:  tensorName,
+                CandidatesPerTensor: candidatesPerTensor,
+                CandidateIndex:     candidateIndex,
+                CandidateType:      candidateType,
+                Phase:              phase));
     }
 
     /// <summary>

@@ -12,8 +12,8 @@
             <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
         </StackPanel>
 
-        <!-- Footer: status + log -->
-        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto,140" Margin="0,12,0,0">
+        <!-- Footer: progress, lightboard, status + log -->
+        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto,Auto,140" Margin="0,12,0,0">
             <ProgressBar Grid.Row="0"
                          Minimum="0"
                          Maximum="{Binding SweepProgressTotal}"
@@ -21,11 +21,81 @@
                          IsVisible="{Binding IsRunning}"
                          Height="4"
                          Margin="0,0,0,6" />
-            <TextBlock Grid.Row="1"
+
+            <!-- Lightboard: per-candidate chip strip for the tensor in flight.
+                 Pending = dim, active phase = accent, done = green tick + MSE. -->
+            <Border Grid.Row="1"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,6"
+                    Margin="0,0,0,6"
+                    IsVisible="{Binding CandidateChips.Count}">
+                <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                        <TextBlock Grid.Column="0"
+                                   Text="Tensor:" Opacity="0.6" FontSize="11" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding CurrentTensorName}"
+                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                   FontWeight="Medium"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="2"
+                                   Text="{Binding CurrentSubStatus}"
+                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                   FontSize="11"
+                                   Opacity="0.65"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding CandidateChips}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="vm:AdaptiveQuantizeViewModel+CandidateChip">
+                                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                                        BorderThickness="1"
+                                        CornerRadius="3"
+                                        Padding="8,3"
+                                        Margin="0,2,6,2">
+                                    <Border.Styles>
+                                        <Style Selector="Border">
+                                            <Setter Property="Background" Value="{DynamicResource SystemAltLowColor}" />
+                                        </Style>
+                                    </Border.Styles>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock Text="{Binding StateGlyph}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="11"
+                                                   Width="22"
+                                                   TextAlignment="Center"
+                                                   Opacity="0.85" />
+                                        <TextBlock Text="{Binding Type}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontWeight="SemiBold"
+                                                   FontSize="11" />
+                                        <TextBlock Text="{Binding MseText}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="11"
+                                                   Opacity="0.65"
+                                                   IsVisible="{Binding IsDone}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Grid.Row="2"
                        Text="{Binding StatusLine}"
                        Margin="0,0,0,6"
                        Opacity="0.85" />
-            <Border Grid.Row="2"
+            <Border Grid.Row="3"
                     BorderBrush="{DynamicResource SystemBaseLowColor}"
                     BorderThickness="1"
                     CornerRadius="4"

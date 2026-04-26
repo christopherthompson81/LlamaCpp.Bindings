@@ -96,6 +96,20 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
 
     public string LogText => _logBuilder.ToString();
 
+    /// <summary>
+    /// One chip per candidate type for the tensor currently being scored.
+    /// Drives the lightboard so the user always sees what's in flight,
+    /// what's done with its score, and what's pending — even when a
+    /// single tensor takes minutes (token_embd in IQ-quants etc.).
+    /// </summary>
+    public ObservableCollection<CandidateChip> CandidateChips { get; } = new();
+
+    [ObservableProperty]
+    private string _currentTensorName = string.Empty;
+
+    [ObservableProperty]
+    private string _currentSubStatus = string.Empty;
+
     private readonly System.Text.StringBuilder _logBuilder = new();
     private CancellationTokenSource? _cts;
 
@@ -143,11 +157,16 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
             {
                 ImatrixPath = string.IsNullOrWhiteSpace(ImatrixPath) ? null : ImatrixPath,
             };
+            var candidateList = options.CandidateTypes ?? LlamaQuantSensitivity.DefaultCandidateTypes;
+            CandidateChips.Clear();
+            CurrentTensorName = string.Empty;
+            CurrentSubStatus = string.Empty;
             var progress = new Progress<LlamaQuantSensitivityProgress>(p =>
             {
                 SweepProgressCurrent = p.TensorIndex;
                 SweepProgressTotal = p.TensorCount;
                 StatusLine = $"Sweep {p.TensorIndex}/{p.TensorCount} — {p.CurrentTensorName}";
+                ApplyProgressToLightboard(p, candidateList);
             });
             var result = await LlamaQuantSensitivity.MeasureAsync(
                 InputPath, options, progress, _cts.Token);
@@ -348,6 +367,57 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         OnPropertyChanged(nameof(ExceededCount));
     }
 
+    private void ApplyProgressToLightboard(
+        LlamaQuantSensitivityProgress p,
+        IReadOnlyList<LlamaTensorType> candidates)
+    {
+        // New tensor → reset the chip strip so the user sees fresh
+        // pending entries instead of the previous tensor's results.
+        if (p.Phase == LlamaQuantSensitivityPhase.Tensor)
+        {
+            CurrentTensorName = p.CurrentTensorName;
+            CurrentSubStatus  = "starting…";
+            CandidateChips.Clear();
+            for (int i = 0; i < candidates.Count; i++)
+                CandidateChips.Add(new CandidateChip(i, candidates[i].ToString(), CandidateChipState.Pending, null));
+            return;
+        }
+
+        if (p.Phase == LlamaQuantSensitivityPhase.SourceDequantize)
+        {
+            CurrentSubStatus = "reading + dequantizing source to F32…";
+            return;
+        }
+
+        // Per-candidate phases. CandidateIndex maps directly to the chip
+        // we initialized above.
+        if (p.CandidateIndex < 0 || p.CandidateIndex >= CandidateChips.Count) return;
+
+        var existing = CandidateChips[p.CandidateIndex];
+        switch (p.Phase)
+        {
+            case LlamaQuantSensitivityPhase.Quantize:
+                CandidateChips[p.CandidateIndex] = existing with { State = CandidateChipState.Quantizing };
+                CurrentSubStatus = $"{existing.Type}: quantize";
+                break;
+            case LlamaQuantSensitivityPhase.Dequantize:
+                CandidateChips[p.CandidateIndex] = existing with { State = CandidateChipState.Dequantizing };
+                CurrentSubStatus = $"{existing.Type}: dequantize";
+                break;
+            case LlamaQuantSensitivityPhase.Score:
+                CandidateChips[p.CandidateIndex] = existing with { State = CandidateChipState.Scoring };
+                CurrentSubStatus = $"{existing.Type}: score";
+                break;
+            case LlamaQuantSensitivityPhase.CandidateDone:
+                CandidateChips[p.CandidateIndex] = existing with
+                {
+                    State = CandidateChipState.Done,
+                    RelativeMse = p.CandidateRelativeMse,
+                };
+                break;
+        }
+    }
+
     public override void ApplyActiveModel(string? path)
     {
         if (string.IsNullOrEmpty(InputPath)
@@ -380,5 +450,34 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         public string BitsPerElementText => double.IsNaN(BitsPerElement) ? "—" : $"{BitsPerElement:F2}";
         public string RelativeMseText => double.IsNaN(RelativeMse) ? "—" : RelativeMse.ToString("E2");
         public string FlagText => ExceededThreshold ? "⚠ over τ" : "";
+    }
+
+    public enum CandidateChipState { Pending, Quantizing, Dequantizing, Scoring, Done }
+
+    /// <summary>
+    /// One chip on the lightboard. The view styles itself off
+    /// <see cref="State"/> so the user reads "what's running" at a
+    /// glance without parsing the status line.
+    /// </summary>
+    public sealed record CandidateChip(
+        int Index,
+        string Type,
+        CandidateChipState State,
+        double? RelativeMse)
+    {
+        public string StateGlyph => State switch
+        {
+            CandidateChipState.Pending      => "·",
+            CandidateChipState.Quantizing   => "Q…",
+            CandidateChipState.Dequantizing => "D…",
+            CandidateChipState.Scoring      => "S…",
+            CandidateChipState.Done         => "✓",
+            _ => "",
+        };
+        public string MseText => RelativeMse is double m ? m.ToString("E2") : "";
+        public bool IsActive => State is CandidateChipState.Quantizing
+                                      or CandidateChipState.Dequantizing
+                                      or CandidateChipState.Scoring;
+        public bool IsDone => State == CandidateChipState.Done;
     }
 }
