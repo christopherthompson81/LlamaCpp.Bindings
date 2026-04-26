@@ -1,0 +1,187 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFSuite.ViewModels"
+             x:Class="LlamaCpp.Bindings.GGUFSuite.Views.GgufEditorView"
+             x:DataType="vm:GgufEditorViewModel">
+
+    <DockPanel Margin="24,18">
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,14">
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- File controls -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Margin="0,0,0,10">
+            <Button Grid.Column="0" Content="Open GGUF…" Click="OnOpen" />
+            <TextBox Grid.Column="1" Text="{Binding SourcePath}" IsReadOnly="True"
+                     PlaceholderText="No file loaded" />
+            <Button Grid.Column="2" Content="Save As…" Click="OnSaveAs"
+                    IsEnabled="{Binding IsLoaded}" />
+        </Grid>
+
+        <!-- Status -->
+        <TextBlock DockPanel.Dock="Top" Text="{Binding StatusLine}"
+                   Opacity="0.85" Margin="0,0,0,12" />
+
+        <!-- Two-tab layout: metadata | tensors -->
+        <TabControl>
+            <TabItem Header="{Binding MetadataRows.Count, StringFormat='Metadata ({0})'}">
+                <Grid ColumnDefinitions="2*,3*" ColumnSpacing="14">
+                    <!-- Left: metadata list -->
+                    <DockPanel Grid.Column="0">
+                        <!-- Add panel -->
+                        <Border DockPanel.Dock="Bottom"
+                                BorderBrush="{DynamicResource SystemBaseLowColor}"
+                                BorderThickness="0,1,0,0"
+                                Padding="0,10,0,0"
+                                Margin="0,8,0,0">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="Add metadata" FontWeight="SemiBold" Opacity="0.85" />
+                                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                                    <TextBox Grid.Column="0"
+                                             Text="{Binding NewMetadataKey, Mode=TwoWay}"
+                                             PlaceholderText="key (e.g. general.description)" />
+                                    <ComboBox Grid.Column="1"
+                                              ItemsSource="{Binding AddableMetadataTypes}"
+                                              SelectedItem="{Binding NewMetadataType, Mode=TwoWay}"
+                                              MinWidth="100" />
+                                    <Button Grid.Column="2" Content="Add"
+                                            Command="{Binding AddMetadataCommand}" />
+                                </Grid>
+                                <TextBox Text="{Binding NewMetadataValueText, Mode=TwoWay}"
+                                         PlaceholderText="value" />
+                            </StackPanel>
+                        </Border>
+                        <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+                            <TextBlock Grid.Column="0"
+                                       Text="Click a row to edit on the right."
+                                       Opacity="0.55" FontSize="11" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Content="Remove selected"
+                                    Command="{Binding RemoveSelectedMetadataCommand}"
+                                    IsEnabled="{Binding HasMetadataSelection}" />
+                        </Grid>
+
+                        <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Background="{DynamicResource SystemAltLowColor}">
+                            <ScrollViewer>
+                                <ItemsControl ItemsSource="{Binding MetadataRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:MetadataRow">
+                                            <Button Background="Transparent"
+                                                    BorderThickness="0"
+                                                    HorizontalContentAlignment="Stretch"
+                                                    Padding="10,6"
+                                                    Click="OnMetadataRowClick"
+                                                    Tag="{Binding}">
+                                                <Grid ColumnDefinitions="2*,Auto,3*" ColumnSpacing="10">
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding Key}"
+                                                               FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                               FontSize="12"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding TypeName}"
+                                                               Opacity="0.65"
+                                                               FontSize="11"
+                                                               VerticalAlignment="Center" />
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="{Binding DisplayValue}"
+                                                               FontSize="12"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Opacity="0.85" />
+                                                </Grid>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Border>
+                    </DockPanel>
+
+                    <!-- Right: edit panel -->
+                    <Border Grid.Column="1"
+                            BorderBrush="{DynamicResource SystemBaseLowColor}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="14,12">
+                        <StackPanel Spacing="8" IsVisible="{Binding HasMetadataSelection}">
+                            <TextBlock Text="Edit metadata value" FontWeight="SemiBold" Opacity="0.85" />
+                            <Grid ColumnDefinitions="80,*" RowDefinitions="Auto,Auto" RowSpacing="6" ColumnSpacing="8">
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Key" Opacity="0.65" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="0" Grid.Column="1"
+                                          Text="{Binding SelectedMetadataRow.Key}"
+                                          IsReadOnly="True" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Type" Opacity="0.65" VerticalAlignment="Center" />
+                                <TextBox  Grid.Row="1" Grid.Column="1"
+                                          Text="{Binding EditValueTypeName}"
+                                          IsReadOnly="True" />
+                            </Grid>
+                            <TextBlock Text="Value" Opacity="0.65" />
+                            <TextBox Text="{Binding EditValueText, Mode=TwoWay}"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     MinHeight="120"
+                                     MaxHeight="320"
+                                     FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                     FontSize="12"
+                                     IsEnabled="{Binding EditValueIsEditable}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Content="Apply"
+                                        Command="{Binding ApplyEditCommand}"
+                                        IsEnabled="{Binding EditValueIsEditable}"
+                                        Classes="accent" />
+                                <TextBlock Text="{Binding EditStatusLine}"
+                                           VerticalAlignment="Center"
+                                           Opacity="0.75" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="{Binding TensorRows.Count, StringFormat='Tensors ({0})'}">
+                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Background="{DynamicResource SystemAltLowColor}">
+                    <ScrollViewer>
+                        <ItemsControl ItemsSource="{Binding TensorRows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:TensorRow">
+                                    <Grid ColumnDefinitions="3*,Auto,2*,Auto"
+                                          ColumnSpacing="14"
+                                          Margin="14,5">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding Name}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="12"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding TypeName}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="12"
+                                                   Width="60"
+                                                   Opacity="0.7" />
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding Shape}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="12"
+                                                   Opacity="0.85" />
+                                        <TextBlock Grid.Column="3"
+                                                   Text="{Binding ByteSize, StringFormat='{}{0} B'}"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="11"
+                                                   Opacity="0.55" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</UserControl>

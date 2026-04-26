@@ -315,6 +315,169 @@ internal struct mtmd_decoder_pos
     public const int ExpectedSize = 16;
 }
 
+// llama_model_quantize_params — passed by pointer to llama_model_quantize.
+// Field order is locked to llama.h. The 6 packed bools sit at offsets 16..21
+// with a 2-byte tail pad before the pointer block at offset 24.
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_model_quantize_params
+{
+    // 0  | int32_t nthread — <=0 means hardware_concurrency()
+    public int nthread;
+    // 4  | enum llama_ftype ftype
+    public llama_ftype ftype;
+    // 8  | enum ggml_type output_tensor_type
+    public ggml_type output_tensor_type;
+    // 12 | enum ggml_type token_embedding_type
+    public ggml_type token_embedding_type;
+    // 16 | bool allow_requantize
+    [MarshalAs(UnmanagedType.I1)] public bool allow_requantize;
+    // 17 | bool quantize_output_tensor
+    [MarshalAs(UnmanagedType.I1)] public bool quantize_output_tensor;
+    // 18 | bool only_copy
+    [MarshalAs(UnmanagedType.I1)] public bool only_copy;
+    // 19 | bool pure
+    [MarshalAs(UnmanagedType.I1)] public bool pure;
+    // 20 | bool keep_split
+    [MarshalAs(UnmanagedType.I1)] public bool keep_split;
+    // 21 | bool dry_run
+    [MarshalAs(UnmanagedType.I1)] public bool dry_run;
+    // 22..23 | (2 bytes padding to align next pointer to 8)
+    // 24 | const struct llama_model_imatrix_data * imatrix
+    public IntPtr imatrix;
+    // 32 | const struct llama_model_kv_override * kv_overrides
+    public IntPtr kv_overrides;
+    // 40 | const struct llama_model_tensor_override * tt_overrides
+    public IntPtr tt_overrides;
+    // 48 | const int32_t * prune_layers — null-terminator-free count is
+    //      caller's responsibility (the native side reads until... see
+    //      llama-quantize CLI for the exact convention).
+    public IntPtr prune_layers;
+
+    public const int ExpectedSize = 56;
+}
+
+// llama_model_imatrix_data — single imatrix entry (one tensor's column-sum).
+// llama_model_quantize takes a pointer to one of these; in practice the
+// CLI builds a flat array of them, but the struct itself is just three
+// pointer-sized words.
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_model_imatrix_data
+{
+    // 0  | const char * name — tensor name the data is for
+    public IntPtr name;
+    // 8  | const float * data — column-importance values
+    public IntPtr data;
+    // 16 | size_t size — number of floats at @data
+    public nuint size;
+
+    public const int ExpectedSize = 24;
+}
+
+// llama_model_tensor_override — pattern → ggml_type. Used by quantize to
+// pin specific tensors to a non-default type (e.g. keep output.weight at F16
+// regardless of the chosen ftype).
+[StructLayout(LayoutKind.Sequential)]
+internal struct llama_model_tensor_override
+{
+    // 0  | const char * pattern — fnmatch-style pattern over tensor names
+    public IntPtr pattern;
+    // 8  | enum ggml_type type — target type for matching tensors
+    public ggml_type type;
+    // 12..15 | (4 bytes tail pad — struct is 8-aligned by the leading pointer)
+
+    public const int ExpectedSize = 16;
+}
+
+// llama_model_kv_override — overrides one GGUF metadata key when loading or
+// quantizing. The C struct is { enum tag; char key[128]; union { ... }; }
+// where the union's 128-byte char[] member dominates and is 8-byte aligned,
+// giving 4 + 128 + 4-pad + 128 = 264 bytes total.
+//
+// We don't currently need to construct these from C# — quantize callers can
+// pass IntPtr.Zero for kv_overrides — but the struct must mirror correctly
+// so future callers can build arrays without re-deriving the layout. The
+// inline char buffers are exposed as fixed-size byte arrays; encoders should
+// write UTF-8 with a trailing NUL byte and refuse keys/strings >= 128 bytes
+// of UTF-8 (matches the native limit).
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct llama_model_kv_override
+{
+    // 0   | enum llama_model_kv_override_type tag
+    public llama_model_kv_override_type tag;
+    // 4   | char key[128] — NUL-terminated UTF-8 key
+    public fixed byte key[128];
+    // 132..135 | explicit 4-byte pad: the union's int64/double members force
+    //            8-byte alignment of the union body in C, but `fixed byte[]`
+    //            is 1-byte-aligned in C#, so we need to materialise the pad.
+    private fixed byte _pad[4];
+    // 136 | union { int64; double; bool; char[128] }; the char[] dominates
+    //       the size, so we mirror it and treat the other reads as
+    //       overlapping prefixes (val_str[0..7] aliases val_i64 etc.).
+    public fixed byte val_str[128];
+
+    public const int ExpectedSize = 264;
+}
+
+/// <summary>
+/// Mirror of <c>ggml_tensor</c> from <c>ggml.h</c>. We only read this from
+/// inside the imatrix eval-callback — the runtime hands us a raw
+/// <c>ggml_tensor *</c> and we need byte-correct field offsets to pull
+/// type/op/src/data/name/dims out without a P/Invoke per access.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The struct is 336 bytes on 64-bit Linux/macOS/Windows. Layout:
+/// <c>type(0,4)</c>, pad(4..7), <c>buffer(8,8)</c>, <c>ne[4](16,32)</c>,
+/// <c>nb[4](48,32)</c>, <c>op(80,4)</c>, <c>op_params[16](84,64)</c>,
+/// <c>flags(148,4)</c>, <c>src[10](152,80)</c>, <c>view_src(232,8)</c>,
+/// <c>view_offs(240,8)</c>, <c>data(248,8)</c>, <c>name[64](256,64)</c>,
+/// <c>extra(320,8)</c>, <c>padding[8](328,8)</c>.
+/// </para>
+/// <para>
+/// Field-offset assertions in <see cref="StructLayoutTests"/> guard against
+/// silent header drift; if any of them fire after a llama.cpp bump, re-run
+/// <c>tools/dump-struct-sizes.sh</c> and reconcile here before believing
+/// any imatrix output.
+/// </para>
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct ggml_tensor
+{
+    // 0   | enum ggml_type type
+    public ggml_type type;
+    // 4   | (4 bytes pad to align next pointer to 8)
+    private int _pad_after_type;
+    // 8   | struct ggml_backend_buffer * buffer
+    public IntPtr buffer;
+    // 16  | int64_t ne[4]
+    public fixed long ne[4];
+    // 48  | size_t nb[4]
+    public fixed ulong nb[4];
+    // 80  | enum ggml_op op
+    public ggml_op op;
+    // 84  | int32_t op_params[16] — reserved 64 bytes; contents are
+    //       op-specific and we don't read them.
+    public fixed int op_params[16];
+    // 148 | int32_t flags
+    public int flags;
+    // 152 | struct ggml_tensor * src[10]
+    public fixed long src[10]; // pointer-sized; we read these as IntPtrs.
+    // 232 | struct ggml_tensor * view_src
+    public IntPtr view_src;
+    // 240 | size_t view_offs
+    public nuint view_offs;
+    // 248 | void * data
+    public IntPtr data;
+    // 256 | char name[64]
+    public fixed byte name[64];
+    // 320 | void * extra
+    public IntPtr extra;
+    // 328 | char padding[8]
+    public fixed byte padding[8];
+
+    public const int ExpectedSize = 336;
+}
+
 /// <summary>
 /// Mirror of <c>gguf_init_params</c>. The 1-byte bool is followed by 7 bytes
 /// of padding before the pointer; <see cref="LayoutKind.Sequential"/> with
@@ -354,6 +517,11 @@ internal static class NativeLayout
         Check<mtmd_input_text>(mtmd_input_text.ExpectedSize);
         Check<mtmd_decoder_pos>(mtmd_decoder_pos.ExpectedSize);
         Check<gguf_init_params>(gguf_init_params.ExpectedSize);
+        Check<llama_model_quantize_params>(llama_model_quantize_params.ExpectedSize);
+        Check<llama_model_imatrix_data>(llama_model_imatrix_data.ExpectedSize);
+        Check<llama_model_tensor_override>(llama_model_tensor_override.ExpectedSize);
+        Check<llama_model_kv_override>(llama_model_kv_override.ExpectedSize);
+        Check<ggml_tensor>(ggml_tensor.ExpectedSize);
     }
 
     private static void Check<T>(int expected, [CallerMemberName] string? caller = null) where T : struct

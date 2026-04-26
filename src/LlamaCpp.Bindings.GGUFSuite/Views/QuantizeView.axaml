@@ -1,0 +1,97 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFSuite.ViewModels"
+             x:Class="LlamaCpp.Bindings.GGUFSuite.Views.QuantizeView"
+             x:DataType="vm:QuantizeViewModel">
+
+    <DockPanel Margin="24,18">
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,18">
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Footer: status + log -->
+        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,*" Margin="0,12,0,0">
+            <TextBlock Grid.Row="0"
+                       Text="{Binding StatusLine}"
+                       Margin="0,0,0,6"
+                       Opacity="0.85" />
+            <Border Grid.Row="1"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    MinHeight="200"
+                    Background="{DynamicResource SystemAltLowColor}">
+                <ScrollViewer>
+                    <SelectableTextBlock Text="{Binding LogText}"
+                                         FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                         FontSize="12"
+                                         Padding="10,8"
+                                         TextWrapping="NoWrap" />
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- Form -->
+        <ScrollViewer>
+            <StackPanel Spacing="14" MaxWidth="780" HorizontalAlignment="Stretch">
+                <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Input GGUF" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="0" Grid.Column="1" Text="{Binding InputPath}"
+                              PlaceholderText="Path to source .gguf" />
+                    <Button   Grid.Row="0" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseInput" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Output GGUF" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding OutputPath}"
+                              PlaceholderText="Leave blank to derive from input + ftype" />
+                    <Button   Grid.Row="1" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseOutput" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Quant type" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="2" Grid.Column="1"
+                              ItemsSource="{Binding AvailableFileTypes}"
+                              SelectedItem="{Binding SelectedFileType, Mode=TwoWay}"
+                              HorizontalAlignment="Stretch" />
+                </Grid>
+
+                <Expander Header="Advanced options">
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <Grid ColumnDefinitions="120,*" RowDefinitions="Auto" ColumnSpacing="10">
+                            <TextBlock Grid.Column="0" Text="Threads" VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Column="1"
+                                           Value="{Binding ThreadCount, Mode=TwoWay}"
+                                           Minimum="0" Maximum="256" Increment="1"
+                                           FormatString="0"
+                                           HorizontalAlignment="Left"
+                                           Width="120" />
+                        </Grid>
+                        <CheckBox IsChecked="{Binding QuantizeOutputTensor, Mode=TwoWay}"
+                                  Content="Quantize output.weight (default on)" />
+                        <CheckBox IsChecked="{Binding AllowRequantize, Mode=TwoWay}"
+                                  Content="Allow re-quantizing already-quantized tensors" />
+                        <CheckBox IsChecked="{Binding Pure, Mode=TwoWay}"
+                                  Content="Pure — apply chosen ftype to every tensor (skip per-tensor smart overrides)" />
+                        <CheckBox IsChecked="{Binding KeepSplit, Mode=TwoWay}"
+                                  Content="Preserve source shard count" />
+                        <CheckBox IsChecked="{Binding OnlyCopy, Mode=TwoWay}"
+                                  Content="Only copy tensors — no actual quantization (useful for resharding)" />
+                        <CheckBox IsChecked="{Binding DryRun, Mode=TwoWay}"
+                                  Content="Dry run — report sizes without writing output" />
+                    </StackPanel>
+                </Expander>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button Content="Run"
+                            Command="{Binding RunCommand}"
+                            IsEnabled="{Binding IsIdle}"
+                            Classes="accent" />
+                    <Button Content="Cancel"
+                            Command="{Binding CancelCommand}"
+                            IsEnabled="{Binding IsRunning}" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

@@ -23,4 +23,11 @@
           Visible="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- HF→GGUF architecture definitions, embedded as resources so the
+         binding ships them in-process without a separate file deployment. -->
+    <EmbeddedResource Include="HfConvert\architectures\*.json"
+                      LogicalName="LlamaCpp.Bindings.HfConvert.architectures.%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

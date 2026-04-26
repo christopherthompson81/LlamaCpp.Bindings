@@ -10,9 +10,11 @@
 
 #include "llama.h"
 #include "mtmd.h"
+#include "ggml.h"
 
 #define SZ(T)      printf("    \"sizeof_" #T "\": %zu,\n",      sizeof(T))
 #define OFF(T, F)  printf("    \"offsetof_" #T "__" #F "\": %zu,\n", offsetof(T, F))
+#define ENUMV(E)   printf("    \"enumvalue_" #E "\": %d,\n",      (int)(E))
 
 int main(void) {
     printf("{\n");
@@ -150,6 +152,64 @@ int main(void) {
     OFF(struct mtmd_decoder_pos, x);
     OFF(struct mtmd_decoder_pos, y);
     OFF(struct mtmd_decoder_pos, z);
+
+    // ----- llama_model_quantize_params -----
+    SZ(struct llama_model_quantize_params);
+    OFF(struct llama_model_quantize_params, nthread);
+    OFF(struct llama_model_quantize_params, ftype);
+    OFF(struct llama_model_quantize_params, output_tensor_type);
+    OFF(struct llama_model_quantize_params, token_embedding_type);
+    OFF(struct llama_model_quantize_params, allow_requantize);
+    OFF(struct llama_model_quantize_params, quantize_output_tensor);
+    OFF(struct llama_model_quantize_params, only_copy);
+    OFF(struct llama_model_quantize_params, pure);
+    OFF(struct llama_model_quantize_params, keep_split);
+    OFF(struct llama_model_quantize_params, dry_run);
+    OFF(struct llama_model_quantize_params, imatrix);
+    OFF(struct llama_model_quantize_params, kv_overrides);
+    OFF(struct llama_model_quantize_params, tt_overrides);
+    OFF(struct llama_model_quantize_params, prune_layers);
+
+    // ----- llama_model_imatrix_data -----
+    SZ(struct llama_model_imatrix_data);
+    OFF(struct llama_model_imatrix_data, name);
+    OFF(struct llama_model_imatrix_data, data);
+    OFF(struct llama_model_imatrix_data, size);
+
+    // ----- llama_model_kv_override -----
+    SZ(struct llama_model_kv_override);
+    OFF(struct llama_model_kv_override, tag);
+    OFF(struct llama_model_kv_override, key);
+
+    // ----- llama_model_tensor_override -----
+    SZ(struct llama_model_tensor_override);
+    OFF(struct llama_model_tensor_override, pattern);
+    OFF(struct llama_model_tensor_override, type);
+
+    // ----- ggml_tensor (used by the imatrix eval-callback path) -----
+    // The fields read from C# during the imatrix collector callback are
+    // type / buffer / ne / nb / op / src / data / name. We assert sizes
+    // and offsets for every field we read so a header bump that moves
+    // anything trips StructLayoutTests rather than silently corrupting
+    // memory inside the callback.
+    SZ(struct ggml_tensor);
+    OFF(struct ggml_tensor, type);
+    OFF(struct ggml_tensor, buffer);
+    OFF(struct ggml_tensor, ne);
+    OFF(struct ggml_tensor, nb);
+    OFF(struct ggml_tensor, op);
+    OFF(struct ggml_tensor, op_params);
+    OFF(struct ggml_tensor, flags);
+    OFF(struct ggml_tensor, src);
+    OFF(struct ggml_tensor, view_src);
+    OFF(struct ggml_tensor, view_offs);
+    OFF(struct ggml_tensor, data);
+    OFF(struct ggml_tensor, name);
+    OFF(struct ggml_tensor, extra);
+
+    // ----- ggml_op values consumed by the imatrix callback -----
+    ENUMV(GGML_OP_MUL_MAT);
+    ENUMV(GGML_OP_MUL_MAT_ID);
 
     // Terminator to keep JSON valid without worrying about trailing comma.
     printf("    \"_end\": 0\n");

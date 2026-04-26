@@ -1,0 +1,98 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:LlamaCpp.Bindings.GGUFSuite.ViewModels"
+        xmlns:v="using:LlamaCpp.Bindings.GGUFSuite.Views"
+        x:Class="LlamaCpp.Bindings.GGUFSuite.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="GGUF Suite"
+        Width="1100" Height="720"
+        MinWidth="780" MinHeight="520">
+
+    <Window.Resources>
+        <DataTemplate x:Key="QuantizeTemplate" DataType="vm:QuantizeViewModel">
+            <v:QuantizeView />
+        </DataTemplate>
+        <DataTemplate x:Key="PerplexityTemplate" DataType="vm:PerplexityViewModel">
+            <v:PerplexityView />
+        </DataTemplate>
+        <DataTemplate x:Key="ImatrixTemplate" DataType="vm:ImatrixViewModel">
+            <v:ImatrixView />
+        </DataTemplate>
+        <DataTemplate x:Key="ControlVectorTemplate" DataType="vm:ControlVectorViewModel">
+            <v:ControlVectorView />
+        </DataTemplate>
+        <DataTemplate x:Key="GgufEditorTemplate" DataType="vm:GgufEditorViewModel">
+            <v:GgufEditorView />
+        </DataTemplate>
+        <DataTemplate x:Key="HfConvertTemplate" DataType="vm:HfConvertViewModel">
+            <v:HfConvertView />
+        </DataTemplate>
+        <DataTemplate x:Key="RoadmapTemplate" DataType="vm:RoadmapViewModel">
+            <v:RoadmapView />
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid ColumnDefinitions="220,*">
+        <!-- Sidebar -->
+        <Border Grid.Column="0" Background="{DynamicResource SystemListLowColor}" Padding="0,12">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top"
+                           Text="GGUF Suite"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Margin="16,4,16,12" />
+                <TextBlock DockPanel.Dock="Top"
+                           Text="Model preparation"
+                           FontSize="11"
+                           Opacity="0.6"
+                           Margin="16,0,16,8" />
+                <ListBox ItemsSource="{Binding Tools}"
+                         SelectedItem="{Binding SelectedTool, Mode=TwoWay}"
+                         Background="Transparent"
+                         BorderThickness="0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="vm:ToolPageViewModel">
+                            <StackPanel Margin="4,2">
+                                <TextBlock Text="{Binding Title}" FontWeight="Medium" />
+                                <TextBlock Text="{Binding Description}"
+                                           FontSize="11"
+                                           Opacity="0.6"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- Content host. The implicit DataTemplates above pick the right view
+             for the SelectedTool VM (QuantizeViewModel → QuantizeView, etc.). -->
+        <ContentControl Grid.Column="1"
+                        Content="{Binding SelectedTool}"
+                        Margin="0">
+            <ContentControl.DataTemplates>
+                <DataTemplate DataType="vm:QuantizeViewModel">
+                    <v:QuantizeView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:PerplexityViewModel">
+                    <v:PerplexityView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:ImatrixViewModel">
+                    <v:ImatrixView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:ControlVectorViewModel">
+                    <v:ControlVectorView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:GgufEditorViewModel">
+                    <v:GgufEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:HfConvertViewModel">
+                    <v:HfConvertView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:RoadmapViewModel">
+                    <v:RoadmapView />
+                </DataTemplate>
+            </ContentControl.DataTemplates>
+        </ContentControl>
+    </Grid>
+</Window>

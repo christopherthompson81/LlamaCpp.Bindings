@@ -4,6 +4,7 @@
     <Project Path="samples/LlamaChat/LlamaChat.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/LlamaCpp.Bindings.GGUFSuite/LlamaCpp.Bindings.GGUFSuite.csproj" />
     <Project Path="src/LlamaCpp.Bindings.LlamaChat/LlamaCpp.Bindings.LlamaChat.csproj" />
     <Project Path="src/LlamaCpp.Bindings.Server/LlamaCpp.Bindings.Server.csproj" />
     <Project Path="src/LlamaCpp.Bindings.Tests/LlamaCpp.Bindings.Tests.csproj" />

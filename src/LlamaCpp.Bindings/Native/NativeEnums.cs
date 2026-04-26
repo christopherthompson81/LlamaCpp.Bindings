@@ -86,6 +86,75 @@ internal enum llama_split_mode : int
     LLAMA_SPLIT_MODE_TENSOR = 3,
 }
 
+// llama_ftype — target type for llama_model_quantize. Values are stable and
+// baked into GGUF files; gaps in numbering correspond to removed types
+// (see comments in llama.h.pinned). Keep numbering aligned with the header.
+internal enum llama_ftype : int
+{
+    LLAMA_FTYPE_ALL_F32          = 0,
+    LLAMA_FTYPE_MOSTLY_F16       = 1,
+    LLAMA_FTYPE_MOSTLY_Q4_0      = 2,
+    LLAMA_FTYPE_MOSTLY_Q4_1      = 3,
+    LLAMA_FTYPE_MOSTLY_Q8_0      = 7,
+    LLAMA_FTYPE_MOSTLY_Q5_0      = 8,
+    LLAMA_FTYPE_MOSTLY_Q5_1      = 9,
+    LLAMA_FTYPE_MOSTLY_Q2_K      = 10,
+    LLAMA_FTYPE_MOSTLY_Q3_K_S    = 11,
+    LLAMA_FTYPE_MOSTLY_Q3_K_M    = 12,
+    LLAMA_FTYPE_MOSTLY_Q3_K_L    = 13,
+    LLAMA_FTYPE_MOSTLY_Q4_K_S    = 14,
+    LLAMA_FTYPE_MOSTLY_Q4_K_M    = 15,
+    LLAMA_FTYPE_MOSTLY_Q5_K_S    = 16,
+    LLAMA_FTYPE_MOSTLY_Q5_K_M    = 17,
+    LLAMA_FTYPE_MOSTLY_Q6_K      = 18,
+    LLAMA_FTYPE_MOSTLY_IQ2_XXS   = 19,
+    LLAMA_FTYPE_MOSTLY_IQ2_XS    = 20,
+    LLAMA_FTYPE_MOSTLY_Q2_K_S    = 21,
+    LLAMA_FTYPE_MOSTLY_IQ3_XS    = 22,
+    LLAMA_FTYPE_MOSTLY_IQ3_XXS   = 23,
+    LLAMA_FTYPE_MOSTLY_IQ1_S     = 24,
+    LLAMA_FTYPE_MOSTLY_IQ4_NL    = 25,
+    LLAMA_FTYPE_MOSTLY_IQ3_S     = 26,
+    LLAMA_FTYPE_MOSTLY_IQ3_M     = 27,
+    LLAMA_FTYPE_MOSTLY_IQ2_S     = 28,
+    LLAMA_FTYPE_MOSTLY_IQ2_M     = 29,
+    LLAMA_FTYPE_MOSTLY_IQ4_XS    = 30,
+    LLAMA_FTYPE_MOSTLY_IQ1_M     = 31,
+    LLAMA_FTYPE_MOSTLY_BF16      = 32,
+    LLAMA_FTYPE_MOSTLY_TQ1_0     = 36,
+    LLAMA_FTYPE_MOSTLY_TQ2_0     = 37,
+    LLAMA_FTYPE_MOSTLY_MXFP4_MOE = 38,
+    LLAMA_FTYPE_MOSTLY_NVFP4     = 39,
+    LLAMA_FTYPE_MOSTLY_Q1_0      = 40,
+    LLAMA_FTYPE_GUESSED          = 1024,
+}
+
+// llama_model_kv_override_type — tag for the union inside
+// llama_model_kv_override. Order matches the C header (no explicit values
+// there, so these track positionally).
+internal enum llama_model_kv_override_type : int
+{
+    LLAMA_KV_OVERRIDE_TYPE_INT   = 0,
+    LLAMA_KV_OVERRIDE_TYPE_FLOAT = 1,
+    LLAMA_KV_OVERRIDE_TYPE_BOOL  = 2,
+    LLAMA_KV_OVERRIDE_TYPE_STR   = 3,
+}
+
+// From ggml.h — referenced by ggml_tensor.op. The full enum is ~120 entries
+// long and tracks ggml's compute-graph node kinds. We only inspect a tiny
+// subset (matrix multiplications) inside the imatrix collector callback;
+// other values flow through opaquely and are deliberately not enumerated
+// here so a header bump that adds new ops doesn't churn this file.
+internal enum ggml_op : int
+{
+    GGML_OP_NONE        = 0,
+    // The two values the imatrix collector cares about. These are the only
+    // ops where we read src[1] (the activation matrix). Numbering is
+    // positional in the C enum — re-pin via dump-struct-sizes if it shifts.
+    GGML_OP_MUL_MAT     = 29,
+    GGML_OP_MUL_MAT_ID  = 30,
+}
+
 // From ggml.h — referenced by llama_context_params.type_k / type_v.
 internal enum ggml_type : int
 {

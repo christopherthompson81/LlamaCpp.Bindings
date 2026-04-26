@@ -74,6 +74,21 @@ internal static partial class NativeMethods
     [LibraryImport(LibGgml)]
     internal static partial IntPtr ggml_backend_buft_name(IntPtr buft);
 
+    // True when the buffer's bytes are directly addressable by the host
+    // CPU. False on GPU buffers (CUDA, Metal, Vulkan...) — those need a
+    // tensor_get to copy back. Used by the imatrix callback to decide
+    // whether to read tensor->data directly or stage through a host copy.
+    [LibraryImport(LibGgml)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool ggml_backend_buffer_is_host(IntPtr buffer);
+
+    // Copy <size> bytes starting at <offset> within the tensor's allocated
+    // buffer into the host-side <data> pointer. Synchronous; safe to call
+    // from the eval callback. Caller owns <data>.
+    [LibraryImport(LibGgml)]
+    internal static unsafe partial void ggml_backend_tensor_get(
+        IntPtr tensor, void* data, nuint offset, nuint size);
+
     // Callback: void (*)(ggml_log_level level, const char * text, void * user_data)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void GgmlLogCallback(ggml_log_level level, IntPtr text, IntPtr user_data);
@@ -186,6 +201,25 @@ internal static partial class NativeMethods
     [LibraryImport(LibName)]
     internal static unsafe partial int llama_model_meta_val_str_by_index(
         IntPtr model, int i, byte* buf, nuint buf_size);
+
+    // ----- Model quantization (GGUFSuite) -----
+
+    // Returns a default-initialised llama_model_quantize_params by value.
+    // Defaults reflect the CLI's "do nothing surprising" baseline:
+    // ftype=Q5_1, output_tensor_type/token_embedding_type=COUNT (sentinel
+    // meaning "unset"), allow_requantize=false, quantize_output_tensor=true.
+    [LibraryImport(LibName)]
+    internal static partial llama_model_quantize_params llama_model_quantize_default_params();
+
+    // Quantizes fname_inp → fname_out using @params. Returns 0 on success and
+    // a nonzero code on failure (mirrors the C API contract). Progress is not
+    // reported through a callback — observers should hook llama_log_set to
+    // stream "[ N/M] tensor_name" lines as they're emitted.
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial uint llama_model_quantize(
+        string fname_inp,
+        string fname_out,
+        llama_model_quantize_params* params_);
 
     // ----- Context create / metadata / free -----
 
@@ -694,6 +728,42 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibGgml)]
     internal static partial nuint gguf_get_data_offset(IntPtr ctx);
+
+    // ----- GGUF metadata KV readers -----
+    //
+    // Minimum surface for round-tripping metadata written by
+    // LlamaGgufWriter. We don't expose every gguf_get_val_* yet — only
+    // the variants imatrix and our writer round-trip tests actually use.
+    // String returns come back as raw UTF-8 char* owned by the gguf
+    // context; they live as long as the context does, so callers must
+    // copy before gguf_free().
+
+    [LibraryImport(LibGgml)]
+    internal static partial long gguf_get_n_kv(IntPtr ctx);
+
+    [LibraryImport(LibGgml, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial long gguf_find_key(IntPtr ctx, string key);
+
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr gguf_get_key(IntPtr ctx, long key_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial uint gguf_get_kv_type(IntPtr ctx, long key_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr gguf_get_val_str(IntPtr ctx, long key_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial uint gguf_get_val_u32(IntPtr ctx, long key_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial uint gguf_get_arr_type(IntPtr ctx, long key_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial nuint gguf_get_arr_n(IntPtr ctx, long key_id);
+
+    [LibraryImport(LibGgml)]
+    internal static partial IntPtr gguf_get_arr_str(IntPtr ctx, long key_id, nuint i);
 
     // ----- State / sessions -----
     //

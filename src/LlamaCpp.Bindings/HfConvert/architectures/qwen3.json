@@ -1,0 +1,38 @@
+{
+  "hf_architectures": ["Qwen3ForCausalLM"],
+  "gguf_arch": "qwen3",
+  "description": "Qwen3 dense decoder-only transformer (Q/K head-norm variant of Llama-style architecture).",
+  "tokenizer_family": "bpe-gpt2",
+  "tokenizer_pre": "qwen2",
+
+  "metadata_map": [
+    { "gguf": "context_length",                  "hf": "max_position_embeddings", "type": "uint32" },
+    { "gguf": "embedding_length",                "hf": "hidden_size",             "type": "uint32" },
+    { "gguf": "block_count",                     "hf": "num_hidden_layers",       "type": "uint32" },
+    { "gguf": "feed_forward_length",             "hf": "intermediate_size",       "type": "uint32" },
+    { "gguf": "attention.head_count",            "hf": "num_attention_heads",     "type": "uint32" },
+    { "gguf": "attention.head_count_kv",         "hf": "num_key_value_heads",     "type": "uint32" },
+    { "gguf": "attention.key_length",            "hf": "head_dim",                "type": "uint32", "optional": true },
+    { "gguf": "attention.value_length",          "hf": "head_dim",                "type": "uint32", "optional": true },
+    { "gguf": "attention.layer_norm_rms_epsilon","hf": "rms_norm_eps",            "type": "float32" },
+    { "gguf": "rope.freq_base",                  "hf": "rope_theta",              "type": "float32", "optional": true }
+  ],
+
+  "tensor_map": [
+    { "gguf": "token_embd.weight",          "hf": "model.embed_tokens.weight",                          "transform": "passthrough" },
+    { "gguf": "output_norm.weight",         "hf": "model.norm.weight",                                  "transform": "passthrough" },
+    { "gguf": "output.weight",              "hf": "lm_head.weight",                                     "transform": "passthrough", "optional_when_tied": true },
+
+    { "gguf": "blk.{i}.attn_norm.weight",   "hf": "model.layers.{i}.input_layernorm.weight",            "transform": "passthrough" },
+    { "gguf": "blk.{i}.attn_q.weight",      "hf": "model.layers.{i}.self_attn.q_proj.weight",           "transform": "passthrough" },
+    { "gguf": "blk.{i}.attn_k.weight",      "hf": "model.layers.{i}.self_attn.k_proj.weight",           "transform": "passthrough" },
+    { "gguf": "blk.{i}.attn_v.weight",      "hf": "model.layers.{i}.self_attn.v_proj.weight",           "transform": "passthrough" },
+    { "gguf": "blk.{i}.attn_q_norm.weight", "hf": "model.layers.{i}.self_attn.q_norm.weight",           "transform": "passthrough", "optional": true },
+    { "gguf": "blk.{i}.attn_k_norm.weight", "hf": "model.layers.{i}.self_attn.k_norm.weight",           "transform": "passthrough", "optional": true },
+    { "gguf": "blk.{i}.attn_output.weight", "hf": "model.layers.{i}.self_attn.o_proj.weight",           "transform": "passthrough" },
+    { "gguf": "blk.{i}.ffn_norm.weight",    "hf": "model.layers.{i}.post_attention_layernorm.weight",   "transform": "passthrough" },
+    { "gguf": "blk.{i}.ffn_gate.weight",    "hf": "model.layers.{i}.mlp.gate_proj.weight",              "transform": "passthrough" },
+    { "gguf": "blk.{i}.ffn_up.weight",      "hf": "model.layers.{i}.mlp.up_proj.weight",                "transform": "passthrough" },
+    { "gguf": "blk.{i}.ffn_down.weight",    "hf": "model.layers.{i}.mlp.down_proj.weight",              "transform": "passthrough" }
+  ]
+}

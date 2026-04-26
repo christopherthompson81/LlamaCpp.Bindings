@@ -124,6 +124,85 @@ public class StructLayoutTests
     }
 
     [Fact]
+    public void LlamaModelQuantizeParams_Size_Matches_Pinned()
+    {
+        Assert.Equal(56, Unsafe.SizeOf<llama_model_quantize_params>());
+    }
+
+    [Theory]
+    [InlineData(nameof(llama_model_quantize_params.nthread),                 0)]
+    [InlineData(nameof(llama_model_quantize_params.ftype),                   4)]
+    [InlineData(nameof(llama_model_quantize_params.output_tensor_type),      8)]
+    [InlineData(nameof(llama_model_quantize_params.token_embedding_type),   12)]
+    [InlineData(nameof(llama_model_quantize_params.allow_requantize),       16)]
+    [InlineData(nameof(llama_model_quantize_params.quantize_output_tensor), 17)]
+    [InlineData(nameof(llama_model_quantize_params.only_copy),              18)]
+    [InlineData(nameof(llama_model_quantize_params.pure),                   19)]
+    [InlineData(nameof(llama_model_quantize_params.keep_split),             20)]
+    [InlineData(nameof(llama_model_quantize_params.dry_run),                21)]
+    [InlineData(nameof(llama_model_quantize_params.imatrix),                24)]
+    [InlineData(nameof(llama_model_quantize_params.kv_overrides),           32)]
+    [InlineData(nameof(llama_model_quantize_params.tt_overrides),           40)]
+    [InlineData(nameof(llama_model_quantize_params.prune_layers),           48)]
+    public void LlamaModelQuantizeParams_Field_Offsets_Match_Pinned(string field, int expected)
+    {
+        Assert.Equal(expected, Marshal.OffsetOf<llama_model_quantize_params>(field).ToInt32());
+    }
+
+    [Fact]
+    public void LlamaModelImatrixData_Size_Matches_Pinned()
+    {
+        Assert.Equal(24, Unsafe.SizeOf<llama_model_imatrix_data>());
+    }
+
+    [Fact]
+    public void LlamaModelTensorOverride_Size_Matches_Pinned()
+    {
+        Assert.Equal(16, Unsafe.SizeOf<llama_model_tensor_override>());
+    }
+
+    [Fact]
+    public void LlamaModelKvOverride_Size_Matches_Pinned()
+    {
+        Assert.Equal(264, Unsafe.SizeOf<llama_model_kv_override>());
+    }
+
+    [Fact]
+    public void GgmlTensor_Size_Matches_Pinned()
+    {
+        Assert.Equal(336, Unsafe.SizeOf<ggml_tensor>());
+    }
+
+    [Theory]
+    [InlineData(nameof(ggml_tensor.type),       0)]
+    [InlineData(nameof(ggml_tensor.buffer),     8)]
+    [InlineData(nameof(ggml_tensor.ne),        16)]
+    [InlineData(nameof(ggml_tensor.nb),        48)]
+    [InlineData(nameof(ggml_tensor.op),        80)]
+    [InlineData(nameof(ggml_tensor.op_params), 84)]
+    [InlineData(nameof(ggml_tensor.flags),    148)]
+    [InlineData(nameof(ggml_tensor.src),      152)]
+    [InlineData(nameof(ggml_tensor.view_src), 232)]
+    [InlineData(nameof(ggml_tensor.view_offs),240)]
+    [InlineData(nameof(ggml_tensor.data),     248)]
+    [InlineData(nameof(ggml_tensor.name),     256)]
+    [InlineData(nameof(ggml_tensor.extra),    320)]
+    public void GgmlTensor_Field_Offsets_Match_Pinned(string field, int expected)
+    {
+        Assert.Equal(expected, Marshal.OffsetOf<ggml_tensor>(field).ToInt32());
+    }
+
+    [Fact]
+    public void GgmlOp_Values_Match_Pinned_Header()
+    {
+        // If a header bump shifts these, the imatrix collector will look
+        // at the wrong nodes. struct-sizes.json carries the ground-truth
+        // values dumped from the pinned ggml.h.
+        Assert.Equal(29, (int)ggml_op.GGML_OP_MUL_MAT);
+        Assert.Equal(30, (int)ggml_op.GGML_OP_MUL_MAT_ID);
+    }
+
+    [Fact]
     public void NativeLayout_Verify_Does_Not_Throw()
     {
         // If this throws the binding refuses to load, so it must pass whenever

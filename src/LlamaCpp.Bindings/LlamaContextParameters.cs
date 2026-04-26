@@ -131,6 +131,19 @@ public sealed class LlamaContextParameters
     /// </summary>
     public uint YarnOriginalContext { get; set; } = 0;
 
+    /// <summary>
+    /// Function pointer for the per-tensor eval callback wired into
+    /// <c>llama_context_params.cb_eval</c>. Internal because every consumer
+    /// needs to keep the underlying managed delegate alive for the
+    /// lifetime of the context — exposing the raw IntPtr publicly would
+    /// invite use-after-free bugs. <see cref="LlamaImatrix"/> sets this
+    /// during context construction.
+    /// </summary>
+    internal IntPtr EvalCallback { get; set; } = IntPtr.Zero;
+
+    /// <summary>User-data IntPtr passed to the eval callback. Same lifetime caveats as <see cref="EvalCallback"/>.</summary>
+    internal IntPtr EvalCallbackUserData { get; set; } = IntPtr.Zero;
+
     internal llama_context_params ToNative()
     {
         var native = NativeMethods.llama_context_default_params();
@@ -156,6 +169,11 @@ public sealed class LlamaContextParameters
         native.yarn_beta_fast    = YarnBetaFast;
         native.yarn_beta_slow    = YarnBetaSlow;
         native.yarn_orig_ctx     = YarnOriginalContext;
+        if (EvalCallback != IntPtr.Zero)
+        {
+            native.cb_eval = EvalCallback;
+            native.cb_eval_user_data = EvalCallbackUserData;
+        }
         return native;
     }
 
