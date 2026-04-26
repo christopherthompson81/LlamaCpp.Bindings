@@ -60,15 +60,35 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
 
     public bool IsIdle => !IsRunning;
 
-    public string LogText => _logBuilder.ToString();
+    public string LogText => _log.Text;
+    public bool HasFullLog => _log.FullLogPath is not null;
 
-    private readonly System.Text.StringBuilder _logBuilder = new();
+    /// <summary>
+    /// Throttled, deduped, bounded log surface. Imatrix can spit out
+    /// thousands of lines; the naive StringBuilder + per-line
+    /// PropertyChanged path froze the UI. <see cref="ThrottledLogBuffer"/>
+    /// caps visible runs, batches re-renders, and mirrors everything
+    /// to a tail file for "Save log…".
+    /// </summary>
+    private readonly ThrottledLogBuffer _log = new();
     private CancellationTokenSource? _cts;
 
     public ImatrixViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
+        // Forward the buffer's throttled Text changes to the view.
+        _log.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ThrottledLogBuffer.Text))
+            {
+                OnPropertyChanged(nameof(LogText));
+                OnPropertyChanged(nameof(HasFullLog));
+            }
+        };
     }
+
+    /// <summary>Save the full (un-deduped, un-truncated) tail to <paramref name="destPath"/>.</summary>
+    public Task SaveFullLogAsync(string destPath) => _log.SaveFullLogAsync(destPath);
 
     /// <summary>
     /// Read <paramref name="path"/> into <see cref="CorpusText"/> and
@@ -154,8 +174,7 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
             }
         }
 
-        _logBuilder.Clear();
-        OnPropertyChanged(nameof(LogText));
+        _log.Clear();
         ResultText = string.Empty;
         ProgressFraction = 0;
 
@@ -163,11 +182,7 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
         IsRunning = true;
         StatusLine = "Loading model…";
 
-        var unsubscribe = _logBus.Subscribe(line =>
-        {
-            _logBuilder.AppendLine(line);
-            OnPropertyChanged(nameof(LogText));
-        });
+        var unsubscribe = _logBus.Subscribe(line => _log.Append(line));
 
         try
         {
@@ -222,8 +237,7 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
         catch (Exception ex)
         {
             StatusLine = $"Failed: {ex.Message}";
-            _logBuilder.AppendLine($"[error] {ex}");
-            OnPropertyChanged(nameof(LogText));
+            _log.Append($"[error] {ex}");
         }
         finally
         {
@@ -231,6 +245,9 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;
+            // Final flush so the visible log shows the tail of the run
+            // without waiting for the next throttle tick.
+            _log.Stop();
         }
     }
 

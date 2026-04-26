@@ -47,6 +47,23 @@ public partial class ImatrixView : UserControl
         if (path is not null) vm.OutputPath = path;
     }
 
+    private async void OnSaveLog(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ImatrixViewModel vm) return;
+        var top = TopLevel.GetTopLevel(this);
+        if (top is null) return;
+        var logType = new FilePickerFileType("Log file") { Patterns = new[] { "*.log", "*.txt" } };
+        var res = await top.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Save imatrix log",
+            DefaultExtension = "log",
+            SuggestedFileName = $"imatrix-{System.DateTime.Now:yyyyMMdd-HHmmss}.log",
+            FileTypeChoices = new[] { logType },
+        });
+        var path = res?.TryGetLocalPath();
+        if (path is not null) await vm.SaveFullLogAsync(path);
+    }
+
     private async Task<string?> OpenFileAsync(string title, string typeName, params string[] patterns)
     {
         var top = TopLevel.GetTopLevel(this);

@@ -127,6 +127,10 @@
                     <Button Content="Cancel"
                             Command="{Binding CancelCommand}"
                             IsEnabled="{Binding IsRunning}" />
+                    <Button Content="Save log…"
+                            Click="OnSaveLog"
+                            IsEnabled="{Binding HasFullLog}"
+                            ToolTip.Tip="Save the un-deduped, un-truncated log of the last run." />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>
