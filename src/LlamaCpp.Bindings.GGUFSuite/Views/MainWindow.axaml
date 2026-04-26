@@ -15,6 +15,9 @@
         <DataTemplate x:Key="PerplexityTemplate" DataType="vm:PerplexityViewModel">
             <v:PerplexityView />
         </DataTemplate>
+        <DataTemplate x:Key="KlDivergenceTemplate" DataType="vm:KlDivergenceViewModel">
+            <v:KlDivergenceView />
+        </DataTemplate>
         <DataTemplate x:Key="ImatrixTemplate" DataType="vm:ImatrixViewModel">
             <v:ImatrixView />
         </DataTemplate>
@@ -79,6 +82,9 @@
                 </DataTemplate>
                 <DataTemplate DataType="vm:PerplexityViewModel">
                     <v:PerplexityView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:KlDivergenceViewModel">
+                    <v:KlDivergenceView />
                 </DataTemplate>
                 <DataTemplate DataType="vm:ImatrixViewModel">
                     <v:ImatrixView />
