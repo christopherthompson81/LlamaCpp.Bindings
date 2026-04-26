@@ -36,6 +36,9 @@
         <DataTemplate x:Key="HfConvertTemplate" DataType="vm:HfConvertViewModel">
             <v:HfConvertView />
         </DataTemplate>
+        <DataTemplate x:Key="LoraMergeTemplate" DataType="vm:LoraMergeViewModel">
+            <v:LoraMergeView />
+        </DataTemplate>
         <DataTemplate x:Key="RoadmapTemplate" DataType="vm:RoadmapViewModel">
             <v:RoadmapView />
         </DataTemplate>
@@ -106,6 +109,9 @@
                 </DataTemplate>
                 <DataTemplate DataType="vm:HfConvertViewModel">
                     <v:HfConvertView />
+                </DataTemplate>
+                <DataTemplate DataType="vm:LoraMergeViewModel">
+                    <v:LoraMergeView />
                 </DataTemplate>
                 <DataTemplate DataType="vm:RoadmapViewModel">
                     <v:RoadmapView />
