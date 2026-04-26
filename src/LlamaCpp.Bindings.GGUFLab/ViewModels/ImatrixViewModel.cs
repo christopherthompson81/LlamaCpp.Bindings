@@ -55,6 +55,21 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
     private double _progressFraction;
 
     [ObservableProperty]
+    private string _elapsedText = string.Empty;
+
+    [ObservableProperty]
+    private string _etaText = string.Empty;
+
+    /// <summary>
+    /// Snapshot of the form values at the moment Run was clicked.
+    /// Shown in a panel that stays visible during and after the run
+    /// so the user can answer "what did I configure?" without
+    /// scrolling back through the form.
+    /// </summary>
+    [ObservableProperty]
+    private string _runParametersText = string.Empty;
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle))]
     private bool _isRunning;
 
@@ -72,6 +87,13 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
     /// </summary>
     private readonly ThrottledLogBuffer _log = new();
     private CancellationTokenSource? _cts;
+
+    // Run-timing state. _latestProgress captures the most recent chunk
+    // tick from the worker thread; the dispatcher timer reads it once
+    // a second and updates the elapsed / ETA strings on the UI thread.
+    private DateTime? _runStartedAt;
+    private (int Idx, int Count)? _latestProgress;
+    private Avalonia.Threading.DispatcherTimer? _tickTimer;
 
     public ImatrixViewModel(NativeLogBus logBus)
     {
@@ -177,10 +199,17 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
         _log.Clear();
         ResultText = string.Empty;
         ProgressFraction = 0;
+        ElapsedText = string.Empty;
+        EtaText = string.Empty;
+        _latestProgress = null;
+        _runStartedAt = DateTime.UtcNow;
+        RunParametersText = BuildRunParametersText();
 
         _cts = new CancellationTokenSource();
         IsRunning = true;
         StatusLine = "Loading model…";
+
+        StartTickTimer();
 
         var unsubscribe = _logBus.Subscribe(line => _log.Append(line));
 
@@ -202,6 +231,7 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
                         ? (double)p.ChunkIndex / p.ChunkCount
                         : 0;
                     StatusLine = $"Chunk {p.ChunkIndex}/{p.ChunkCount} — {p.TensorsTracked} tensors tracked";
+                    _latestProgress = (p.ChunkIndex, p.ChunkCount);
                 });
 
                 return await LlamaImatrix.ComputeAsync(
@@ -245,6 +275,11 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;
+            StopTickTimer();
+            // One last update so the final elapsed time lands without
+            // waiting for the next tick, and ETA collapses cleanly.
+            UpdateTimingDisplay();
+            EtaText = string.Empty;
             // Final flush so the visible log shows the tail of the run
             // without waiting for the next throttle tick.
             _log.Stop();
@@ -261,5 +296,80 @@ public sealed partial class ImatrixViewModel : ToolPageViewModel
     public override void ApplyActiveModel(string? path)
     {
         if (!string.IsNullOrEmpty(path) && string.IsNullOrEmpty(ModelPath)) ModelPath = path;
+    }
+
+    private void StartTickTimer()
+    {
+        StopTickTimer();
+        _tickTimer = new Avalonia.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _tickTimer.Tick += (_, _) => UpdateTimingDisplay();
+        _tickTimer.Start();
+        UpdateTimingDisplay();
+    }
+
+    private void StopTickTimer()
+    {
+        if (_tickTimer is not null)
+        {
+            _tickTimer.Stop();
+            _tickTimer = null;
+        }
+    }
+
+    private void UpdateTimingDisplay()
+    {
+        if (_runStartedAt is not DateTime started)
+        {
+            ElapsedText = string.Empty;
+            EtaText = string.Empty;
+            return;
+        }
+        var elapsed = DateTime.UtcNow - started;
+        ElapsedText = FormatHms(elapsed);
+
+        // ETA is a linear extrapolation: time spent so far × remaining-fraction
+        // / done-fraction. Loading the model + computing the first chunk
+        // dominate before any progress lands, so we only publish ETA once
+        // we have at least one completed chunk to anchor against.
+        if (_latestProgress is { Idx: > 0, Count: > 0 } p && elapsed.TotalSeconds > 0)
+        {
+            var remainingFraction = (double)(p.Count - p.Idx) / p.Idx;
+            var eta = TimeSpan.FromSeconds(elapsed.TotalSeconds * remainingFraction);
+            EtaText = eta.TotalSeconds < 1 ? "<1s" : FormatHms(eta);
+        }
+        else
+        {
+            EtaText = "—";
+        }
+    }
+
+    private static string FormatHms(TimeSpan span)
+    {
+        if (span.TotalHours >= 1) return $"{(int)span.TotalHours}h {span.Minutes:D2}m {span.Seconds:D2}s";
+        if (span.TotalMinutes >= 1) return $"{span.Minutes}m {span.Seconds:D2}s";
+        return $"{span.Seconds}s";
+    }
+
+    private string BuildRunParametersText()
+    {
+        var modelLabel  = string.IsNullOrEmpty(ModelPath)  ? "(none)" : Path.GetFileName(ModelPath);
+        var corpusLabel = !string.IsNullOrEmpty(CorpusPath)
+            ? Path.GetFileName(CorpusPath)
+            : (string.IsNullOrEmpty(CorpusText) ? "(none)" : $"pasted ({CorpusText.Length:N0} chars)");
+        var outputLabel = string.IsNullOrEmpty(OutputPath) ? "(auto)" : Path.GetFileName(OutputPath);
+        var gpuLabel     = GpuLayerCount == -1 ? "all" : GpuLayerCount.ToString();
+        var threadsLabel = ThreadCount    == -1 ? "default" : ThreadCount.ToString();
+        var outputTensor = ProcessOutput  ? "yes" : "no";
+        return
+            $"Model:        {modelLabel}\n" +
+            $"Corpus:       {corpusLabel}\n" +
+            $"Output:       {outputLabel}\n" +
+            $"Context:      {ContextSize}\n" +
+            $"GPU layers:   {gpuLabel}\n" +
+            $"Threads:      {threadsLabel}\n" +
+            $"Process out:  {outputTensor}";
     }
 }
