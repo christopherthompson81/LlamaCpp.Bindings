@@ -30,10 +30,10 @@ public sealed class AboutDialog : Window
     public AboutDialog()
     {
         Title = "About GGUF Lab";
-        Width = 680;
-        Height = 440;
+        Width = 720;
+        Height = 480;
         MinWidth = 560;
-        MinHeight = 360;
+        MinHeight = 400;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         CanResize = false;
         this[!BackgroundProperty] = new DynamicResourceExtension("Background");
@@ -49,7 +49,8 @@ public sealed class AboutDialog : Window
     private Control BuildBody()
     {
         // Left: hero image. Uniform stretch so the near-square 1037x997 is
-        // not distorted, capped at 240 DIPs.
+        // not distorted; sized to fill most of the dialog height with a
+        // small inset so the right column still has comfortable room.
         Image hero;
         try
         {
@@ -59,8 +60,9 @@ public sealed class AboutDialog : Window
             {
                 Source = new Bitmap(stream),
                 Stretch = Stretch.Uniform,
-                Width = 240,
-                VerticalAlignment = VerticalAlignment.Center,
+                Width = 360,
+                Margin = new Thickness(12, 12, 0, 12),
+                VerticalAlignment = VerticalAlignment.Stretch,
             };
         }
         catch
@@ -83,6 +85,8 @@ public sealed class AboutDialog : Window
             Opacity = 0.65,
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 280,
+            HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 0, 16),
         };
 
