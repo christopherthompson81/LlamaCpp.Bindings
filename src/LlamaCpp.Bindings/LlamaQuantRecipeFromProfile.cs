@@ -91,6 +91,26 @@ public sealed class LlamaQuantRecipeFromProfileOptions
     /// restrict further (e.g. forbid Q2_K family-wide).
     /// </summary>
     public IReadOnlyList<LlamaTensorType>? CandidateTypes { get; set; }
+
+    /// <summary>
+    /// Apply <see cref="LlamaStockBaseline"/> as a per-tensor floor:
+    /// every tensor's effective type is <c>max(baseline, recipe-pick)</c>,
+    /// so the recipe can promote above stock's per-layer protection
+    /// but never demote below it. Default <c>true</c>. Run 15 showed
+    /// that without this, profile recipes lose ~3 PPL to stock at
+    /// Q4_K_M-class budgets because single-tensor profile ablations
+    /// can't capture the per-layer interaction effects stock's
+    /// <c>use_more_bits</c> alternation pattern protects against.
+    /// </summary>
+    public bool ApplyStockBaseline { get; set; } = true;
+
+    /// <summary>
+    /// Pre-built stock baseline map. When null and <see cref="ApplyStockBaseline"/>
+    /// is true, the builder computes one from the target GGUF using
+    /// <see cref="LlamaStockBaseline.Build"/>. Tests can supply an
+    /// explicit map to exercise specific baseline scenarios.
+    /// </summary>
+    public IReadOnlyDictionary<string, LlamaTensorType>? StockBaselineMap { get; set; }
 }
 
 /// <summary>
@@ -150,7 +170,36 @@ public static class LlamaQuantRecipeFromProfile
         long targetParamCount = opts.TargetParameterCountOverride ??
             ggufFile.Tensors.Sum(t => t.Dimensions.Aggregate(1L, (a, b) => a * (long)b));
 
+        // Auto-compute the stock baseline if enabled and not already
+        // supplied. Layer count comes from the architecture's block_count
+        // metadata; falls back to the profile's LayerCount.
+        if (opts.ApplyStockBaseline && opts.StockBaselineMap is null)
+        {
+            int layerCount = ResolveLayerCount(ggufFile, profile.LayerCount);
+            var baselineInput = ggufFile.Tensors
+                .Where(t => t.Dimensions.Length > 1 && t.Name.EndsWith(".weight", StringComparison.Ordinal))
+                .Select(t => (Name: t.Name, Dimensions: t.Dimensions))
+                .ToList();
+            opts.StockBaselineMap = LlamaStockBaseline.Build(baselineInput, layerCount);
+        }
+
         return BuildFromTensorLayout(profile, weightTensors, targetParamCount, targetBitsPerElement, opts);
+    }
+
+    private static int ResolveLayerCount(LlamaGgufFile ggufFile, int profileFallback)
+    {
+        var arch = ggufFile.Metadata.FirstOrDefault(m => m.Key == "general.architecture")
+            ?.Value.AsString();
+        if (string.IsNullOrEmpty(arch)) return profileFallback > 0 ? profileFallback : 1;
+        var entry = ggufFile.Metadata.FirstOrDefault(m => m.Key == $"{arch}.block_count");
+        if (entry is null) return profileFallback > 0 ? profileFallback : 1;
+        return entry.Value.Type switch
+        {
+            LlamaGgufType.Uint32 => (int)entry.Value.AsUInt32(),
+            LlamaGgufType.Int32  => entry.Value.AsInt32(),
+            LlamaGgufType.Uint64 => (int)entry.Value.AsUInt64(),
+            _                    => profileFallback > 0 ? profileFallback : 1,
+        };
     }
 
     /// <summary>
@@ -212,27 +261,59 @@ public static class LlamaQuantRecipeFromProfile
             }
         }
 
-        // ---- 5. Element-count totals per category (for bpw accounting) ----
-        // For uncategorized tensors we also resolve the per-tensor protection
-        // type up front, so bpw enumeration sees a constant uncategorized
-        // bit-contribution rather than a per-tensor calculation in the
-        // hot loop.
+        // ---- 5. Element-count totals per category, with stock-baseline floor ----
+        // For uncategorized tensors we resolve their effective type up front
+        // (max of stock baseline and the user's protection table). Their bit
+        // contribution is constant across recipe enumeration.
+        //
+        // For categorized tensors we precompute, *per (category, candidate type T)*:
+        //   - bits if cat is at T: sum over t in cat of bpw(max(baseline(t), T)) × elements(t)
+        //   - elements at T (vs riding baseline): used for ΔPPL pro-rating
+        // Stock baseline acts as a per-tensor floor: the recipe can promote
+        // above it but never demote below. This guarantees recipes ship at
+        // least as good as stock at the protected layers.
+        var baseline = opts.StockBaselineMap ?? new Dictionary<string, LlamaTensorType>(StringComparer.Ordinal);
+
+        LlamaTensorType MaxType(LlamaTensorType a, LlamaTensorType b) =>
+            LlamaQuantRecipe.GetBitsPerElement(a) >= LlamaQuantRecipe.GetBitsPerElement(b) ? a : b;
+
         var categoryElements = new Dictionary<string, long>(StringComparer.Ordinal);
         var uncategorizedTypeByName = new Dictionary<string, LlamaTensorType>(StringComparer.Ordinal);
         long uncategorizedElements = 0;
         double uncategorizedBitsTotal = 0;
+        // Per (cat, type) → (bits, elements_at_or_below_baseline-overridden, elements_at_T).
+        var categoryBitsAtType = new Dictionary<(string Cat, LlamaTensorType T), double>();
+        var categoryAtTElements = new Dictionary<(string Cat, LlamaTensorType T), long>();
+
         foreach (var (name, elements) in weightTensors)
         {
             if (tensorCategory.TryGetValue(name, out var cat))
             {
                 categoryElements[cat] = categoryElements.GetValueOrDefault(cat) + elements;
+
+                // Precompute (bits, atTElements) for every candidate type for this tensor.
+                baseline.TryGetValue(name, out var b);  // default = LlamaTensorType.None ≈ no opinion
+                bool hasBaseline = baseline.ContainsKey(name);
+                foreach (var T in ladder)
+                {
+                    LlamaTensorType effective = hasBaseline ? MaxType(b, T) : T;
+                    var bits = LlamaQuantRecipe.GetBitsPerElement(effective) * elements;
+                    var key = (cat, T);
+                    categoryBitsAtType[key] = categoryBitsAtType.GetValueOrDefault(key) + bits;
+                    if (effective == T)  // tensor uses category type, not baseline
+                        categoryAtTElements[key] = categoryAtTElements.GetValueOrDefault(key) + elements;
+                }
             }
             else
             {
-                var resolved = ResolveUncategorizedType(name, opts);
-                uncategorizedTypeByName[name] = resolved;
+                // Uncategorized: max(stock baseline, protection-table type).
+                var protection = ResolveUncategorizedType(name, opts);
+                var effective = baseline.TryGetValue(name, out var b)
+                    ? MaxType(b, protection)
+                    : protection;
+                uncategorizedTypeByName[name] = effective;
                 uncategorizedElements += elements;
-                uncategorizedBitsTotal += LlamaQuantRecipe.GetBitsPerElement(resolved) * elements;
+                uncategorizedBitsTotal += LlamaQuantRecipe.GetBitsPerElement(effective) * elements;
             }
         }
         long totalElements = categoryElements.Values.Sum() + uncategorizedElements;
@@ -283,8 +364,18 @@ public static class LlamaQuantRecipeFromProfile
             double pplSum = 0;
             foreach (var (cat, type) in assignment)
             {
-                bpwSum += LlamaQuantRecipe.GetBitsPerElement(type) * categoryElements.GetValueOrDefault(cat);
-                pplSum += ScaledDelta(cat, type);
+                // Per-(cat, T) bit contribution accounts for stock baseline:
+                // tensors whose baseline > T stay at baseline, others use T.
+                bpwSum += categoryBitsAtType[(cat, type)];
+                // Pro-rate the predicted ΔPPL by the fraction of category
+                // elements actually riding at the recipe type (not the
+                // baseline override). Baseline-overridden tensors are
+                // assumed "good enough" — they don't count against this
+                // category's predicted cost.
+                long catTotal = categoryElements[cat];
+                long atT = categoryAtTElements.GetValueOrDefault((cat, type));
+                if (catTotal > 0)
+                    pplSum += ScaledDelta(cat, type) * ((double)atT / catTotal);
             }
             bpwSum += uncategorizedBitsTotal;
             var bpw = bpwSum / totalElements;
@@ -306,6 +397,7 @@ public static class LlamaQuantRecipeFromProfile
                 "Recipe enumeration produced no assignment — empty category space.");
 
         // ---- 7. Materialize per-tensor entries ----
+        // Each tensor's effective type = max(baseline, recipe choice).
         var entries = new List<LlamaQuantRecipeEntry>(weightTensors.Count);
         foreach (var (name, elements) in weightTensors)
         {
@@ -313,13 +405,14 @@ public static class LlamaQuantRecipeFromProfile
             double estDelta;
             if (tensorCategory.TryGetValue(name, out var cat))
             {
-                chosen = pick[cat];
-                estDelta = ScaledDelta(cat, chosen);
+                var picked = pick[cat];
+                chosen = baseline.TryGetValue(name, out var b) ? MaxType(b, picked) : picked;
+                estDelta = chosen == picked ? ScaledDelta(cat, picked) : 0.0;
             }
             else
             {
                 chosen = uncategorizedTypeByName[name];
-                estDelta = 0.0;  // no data — assume protection-table choice is right
+                estDelta = 0.0;  // no profile signal — baseline + protection table picked it
             }
             entries.Add(new LlamaQuantRecipeEntry(
                 TensorName:        name,
