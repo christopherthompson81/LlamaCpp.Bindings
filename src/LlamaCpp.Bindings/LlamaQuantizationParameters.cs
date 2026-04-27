@@ -193,6 +193,18 @@ public sealed class LlamaQuantizationParameters
     public IReadOnlyList<KeyValuePair<string, LlamaTensorType>>? TensorTypeOverrides { get; set; }
 
     /// <summary>
+    /// Optional path to an importance-matrix GGUF (e.g. produced by
+    /// <see cref="LlamaImatrix.ComputeAsync"/>). When set, the per-tensor
+    /// column-importance values are forwarded to <c>llama_model_quantize</c>
+    /// so the per-block scale optimization is imatrix-aware. Without this,
+    /// even ftypes that nominally need imatrix (Q2_K, IQ-quants) run
+    /// unweighted and the quantizer warns. Pairs cleanly with
+    /// <see cref="TensorTypeOverrides"/> from a recipe built against the
+    /// same imatrix.
+    /// </summary>
+    public string? ImatrixPath { get; set; }
+
+    /// <summary>
     /// Snapshot of the native defaults as a managed parameters object.
     /// </summary>
     public static LlamaQuantizationParameters Default()

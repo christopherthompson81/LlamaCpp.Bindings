@@ -10,7 +10,21 @@ the heuristic allocate bits to the right tensors?*
 The expectation going in was that for Qwen3-0.6B — small, dense, well-
 studied — the heuristic should be approximately right.
 
-**Final verdict (after Run 5)**: QK-norm has a real, isolated
+**Status (after Run 6)**:
+- *Architectural signature*: confirmed. QK-norm causes a real,
+  isolated, ~100× amplification of imatrix-weighted MSE on K/Q
+  tensors (Run 5's 4-way comparison). This is a stable observation.
+- *Operational claim* ("therefore the recipe beats Q4_K_M on PPL"):
+  **not supported by Run 6.** The recipe at τ=0.01 lost on wikitext
+  PPL by 31 % vs stock Q4_K_M (29.34 vs 22.36) at 4.31 vs 5.09 bpw.
+  The bpw weren't matched (recipe spent less), but the trade is bad
+  either way. Per-tensor MSE optimization is too greedy — errors
+  stack across layers, so individually-passing IQ2_S picks
+  cumulatively hurt PPL more than protecting late attn_k/attn_q
+  helps. See Run 6 for a detailed breakdown and the future-work
+  shortlist.
+
+**Earlier final verdict (after Run 5)**: QK-norm has a real, isolated
 quantization signature, but it's about *imatrix-aware quantization
 losing its usual benefit on K/Q tensors*, not about the raw weights
 being unusually hard. The 4-way comparison nails the story:
@@ -166,6 +180,116 @@ empirically the loudest), can't see this — it's hard-coded to the
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
+
+## Run 6 — 2026-04-26 19:39  (PPL test — the recipe loses)
+
+**Why this run**: Run 5 produced a clean architectural signature
+(QK-norm amplifies imatrix-weighted MSE on K/Q by ~100×) and the
+"operational implication" was that the Adaptive Quantization
+recipe — built from imatrix-weighted scores — should outperform
+the heuristic on wikitext PPL because it spends bits where the
+imatrix-aware error is concentrated. Run 6 tests that claim
+directly.
+
+**Setup**: New `samples/Quantize.Cli` (with `--imatrix` and
+`--recipe-from-scores` / `--tau`) and `samples/Perplexity.Cli`.
+The bindings now surface the imatrix path on
+`LlamaQuantizationParameters` so the production quantizer is
+imatrix-aware end-to-end. Built two variants from
+`Qwen3-0.6B.F16.gguf`:
+
+  1. **Heuristic baseline**: `--ftype Q4_K_M --imatrix sidecar`.
+     Stock per-tensor heuristic, imatrix-aware quantization.
+  2. **Recipe-overridden**: same plus
+     `--recipe-from-scores Qwen3-0.6B.F16.scores.json --tau 0.01`.
+     The Run 1 imatrix-weighted score table feeds the recipe;
+     `tt_overrides` pin per-tensor types from there.
+
+PPL on wikitext-2 test (`wiki.test.raw`, 583 chunks at n_ctx=512,
+second-half scoring — matches llama.cpp's published-numbers setup).
+
+### Result
+
+| variant                        | bpw  | size      | PPL          |
+|--------------------------------|------|-----------|--------------|
+| stock Q4_K_M (heuristic)       | 5.09 | 484 MB    | **22.3648**  |
+| recipe at τ=0.01               | 4.31 | 386 MB    | **29.3432**  |
+
+The recipe is **31 % worse on PPL** while saving 16 % bytes. That
+isn't a fair-bpw comparison — the recipe spent 0.78 bpw less — but
+the trade is still bad: a 31 % PPL hit for 16 % less storage is
+not a win at any reasonable price point.
+
+### What this tells us (honestly)
+
+The Run 5 verdict on QK-norm — that imatrix-weighted MSE blows up
+on QK-norm K/Q tensors specifically and asymmetrically — is still
+true as an architectural signature. The *operational* claim that
+followed from it ("therefore the recipe outperforms the heuristic")
+is **not supported** by this test.
+
+Two mechanisms likely:
+
+1. **Per-tensor MSE doesn't compose into PPL impact.** Even when
+   every individual tensor passes τ in isolation, errors stack
+   through the 28-layer forward pass. The recipe's many `IQ2_S`
+   picks (early-layer `attn_v`, etc.) each have small per-tensor
+   rel-MSE but their cumulative effect on the residual stream
+   dwarfs the savings from protecting late `attn_k`/`attn_q`.
+2. **High imatrix-weighted MSE on a tensor doesn't necessarily
+   mean that tensor's quantization hurts PPL much.** The activation
+   importance the imatrix captures is a per-token expectation;
+   the model can be robust to large errors in heavily-used columns
+   if downstream layers compensate. The 0.76 rel-MSE on
+   `blk.26.attn_k` doesn't translate one-to-one into a 76 %
+   degradation in attention outputs from that layer.
+
+### Caveats
+
+- **Imatrix-collector bug**: both Qwen3-0.6B and Llama-3.2-1B
+  imatrix files are missing the *last* block's FFN tensors
+  (`blk.27.ffn_*` for Qwen3, `blk.15.ffn_*` for Llama). 3/198 of
+  Qwen3's tensors. The bug is deterministic in
+  `LlamaImatrix.ComputeAsync`. Both the heuristic baseline and
+  the recipe quantize call get the same incomplete imatrix, so
+  the comparison is equally handicapped on both sides — the gap
+  isn't an artifact of this. The bug is logged as a follow-up
+  to fix; tests should be re-run after the fix.
+- **bpw not matched**. The right next test is recipe at a tighter
+  τ (so it lands at ~5.09 bpw matching the heuristic). At equal
+  budget, the recipe's MSE-aware allocation might still help —
+  this run only shows that "less budget plus MSE-aware allocation"
+  loses to "more budget plus heuristic allocation".
+
+### Where this leaves us
+
+The recipe-vs-heuristic claim is now uncertain in this direction
+and likely to need substantial work to pin down. The honest
+read:
+
+- The QK-norm signature is real (Run 5 stands).
+- Imatrix-weighted MSE is a *measurement of* something about the
+  weights, but it isn't a directly-actionable proxy for PPL.
+  Per-tensor optimization (and the recipe-at-τ rule) is too
+  greedy — it cuts where individual tensors look "fine" without
+  modeling the cumulative effect across layers.
+- The Adaptive Quantization tool's recipe is a useful diagnostic
+  (which tensors does the heuristic mispredict?) but its output
+  shouldn't be applied blindly. A PPL-anchored search loop
+  (try a recipe → score PPL → adjust → repeat) would be the
+  honest next step if we want a recipe that beats the heuristic.
+
+### Future-work shortlist
+
+1. Fix the imatrix-collector bug, regenerate, re-run the whole
+   chain to confirm the conclusions are stable.
+2. Run 7: recipe at τ tuned to match Q4_K_M's bpw (around 0.005
+   should land near 5.09). If the recipe beats the heuristic at
+   matched bpw, the operational claim gets resurrected.
+3. Run 8: K-quants only, no IQ-quants. The IQ-quant codebook
+   search may have systematic issues this experiment doesn't
+   isolate.
+4. PPL-anchored recipe search rather than τ-driven recipe.
 
 ## Run 5 — 2026-04-26 19:11  (Llama-3.2-1B with imatrix — verdict)
 

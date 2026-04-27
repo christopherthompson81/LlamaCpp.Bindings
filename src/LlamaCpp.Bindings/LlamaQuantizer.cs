@@ -94,12 +94,13 @@ public static class LlamaQuantizer
     {
         var native = parameters.ToNative();
 
-        // Per-tensor type overrides need a pinned native array of
-        // llama_model_tensor_override structs (pattern + ggml_type) and
-        // the pattern strings must outlive the native call. We allocate
-        // both up-front, plant the pointer in native.tt_overrides, and
-        // free everything in finally.
+        // Per-tensor type overrides + imatrix both need pinned native
+        // arrays whose payloads (UTF-8 strings, float[] data) must
+        // outlive the native call. We allocate both up-front, plant
+        // the pointers in the native struct, and free everything in
+        // finally.
         var overrideAllocations = AllocateTensorTypeOverrides(parameters.TensorTypeOverrides, ref native);
+        var imatrixAllocations  = AllocateImatrix(parameters.ImatrixPath, ref native);
         try
         {
             var status = NativeMethods.llama_model_quantize(inputPath, outputPath, &native);
@@ -114,7 +115,155 @@ public static class LlamaQuantizer
         }
         finally
         {
+            imatrixAllocations.Free();
             overrideAllocations.Free();
+        }
+    }
+
+    /// <summary>
+    /// Read an imatrix GGUF and marshal its (name, data, size) entries
+    /// into a contiguous native array of
+    /// <c>llama_model_imatrix_data</c>, terminated by an entry whose
+    /// <c>name</c> field is null. Plants the pointer in
+    /// <c>native.imatrix</c>; the caller frees via the returned
+    /// <see cref="ImatrixAllocations"/>.
+    /// </summary>
+    /// <remarks>
+    /// The imatrix GGUF stores each tensor's column-importance vector
+    /// as an <c>F32</c> tensor named <c>&lt;tensor_name&gt;.in_sum2</c>
+    /// (and a sibling <c>.in_count</c> per upstream convention). We
+    /// extract the <c>.in_sum2</c> rows; that's what
+    /// <c>llama_model_quantize</c> consumes.
+    /// </remarks>
+    private static ImatrixAllocations AllocateImatrix(
+        string? imatrixPath,
+        ref llama_model_quantize_params native)
+    {
+        if (string.IsNullOrEmpty(imatrixPath))
+        {
+            return default;
+        }
+
+        var imat = LoadImatrixGguf(imatrixPath);
+        if (imat.Count == 0)
+        {
+            return default;
+        }
+
+        // Native struct layout: { const char* name; const float* data; size_t size; } = 24 bytes.
+        // Trailing entry has name=null to signal the end.
+        int entryCount = imat.Count;
+        int byteCount = (entryCount + 1) * llama_model_imatrix_data.ExpectedSize;
+        IntPtr buffer = Marshal.AllocHGlobal(byteCount);
+
+        var namePtrs = new IntPtr[entryCount];
+        var dataPtrs = new IntPtr[entryCount];
+
+        try
+        {
+            int i = 0;
+            foreach (var (tensorName, columns) in imat)
+            {
+                var namePtr = Marshal.StringToCoTaskMemUTF8(tensorName);
+                namePtrs[i] = namePtr;
+
+                int dataBytes = columns.Length * sizeof(float);
+                IntPtr dataPtr = Marshal.AllocHGlobal(dataBytes);
+                Marshal.Copy(columns, 0, dataPtr, columns.Length);
+                dataPtrs[i] = dataPtr;
+
+                int slot = i * llama_model_imatrix_data.ExpectedSize;
+                Marshal.WriteIntPtr(buffer, slot,                      namePtr);
+                Marshal.WriteIntPtr(buffer, slot + IntPtr.Size,        dataPtr);
+                Marshal.WriteIntPtr(buffer, slot + 2 * IntPtr.Size,    (IntPtr)(nint)(nuint)columns.Length);
+                i++;
+            }
+
+            // Terminator entry: name=null, data=null, size=0.
+            int tail = entryCount * llama_model_imatrix_data.ExpectedSize;
+            Marshal.WriteIntPtr(buffer, tail,                        IntPtr.Zero);
+            Marshal.WriteIntPtr(buffer, tail + IntPtr.Size,          IntPtr.Zero);
+            Marshal.WriteIntPtr(buffer, tail + 2 * IntPtr.Size,      IntPtr.Zero);
+
+            native.imatrix = buffer;
+            return new ImatrixAllocations(buffer, namePtrs, dataPtrs);
+        }
+        catch
+        {
+            foreach (var ptr in namePtrs) if (ptr != IntPtr.Zero) Marshal.FreeCoTaskMem(ptr);
+            foreach (var ptr in dataPtrs) if (ptr != IntPtr.Zero) Marshal.FreeHGlobal(ptr);
+            Marshal.FreeHGlobal(buffer);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Load an imatrix GGUF and return one column-importance vector per
+    /// tracked tensor. Mirrors the relevant slice of
+    /// <c>LlamaQuantSensitivity.LoadImatrix</c>; kept inline here so the
+    /// quantize path doesn't reach across to the sensitivity module.
+    /// Reads <c>&lt;tensor_name&gt;.in_sum2</c> F32 rows, normalized
+    /// per <c>&lt;tensor_name&gt;.in_count</c> by upstream's convention
+    /// (we just hand the raw .in_sum2 columns through — that's what
+    /// <c>llama_model_quantize</c> divides by chunk count internally).
+    /// </summary>
+    private static IReadOnlyDictionary<string, float[]> LoadImatrixGguf(string path)
+    {
+        var file = LlamaGgufFile.Open(path);
+        var result = new Dictionary<string, float[]>(StringComparer.Ordinal);
+        const string suffix = ".in_sum2";
+        foreach (var t in file.Tensors)
+        {
+            if (!t.Name.EndsWith(suffix, StringComparison.Ordinal)) continue;
+            if (t.TypeId != 0)  // F32
+            {
+                continue;  // sum2 rows are always F32 by upstream convention
+            }
+            var bytes = new byte[t.ByteSize];
+            using (var fs = File.OpenRead(file.SourcePath))
+            {
+                fs.Seek(file.DataSectionFileOffset + t.ByteOffsetInDataSection, SeekOrigin.Begin);
+                int read = 0;
+                while (read < bytes.Length)
+                {
+                    int n = fs.Read(bytes, read, bytes.Length - read);
+                    if (n <= 0) throw new EndOfStreamException($"Truncated imatrix tensor {t.Name}.");
+                    read += n;
+                }
+            }
+            var floats = new float[bytes.Length / sizeof(float)];
+            Buffer.BlockCopy(bytes, 0, floats, 0, bytes.Length);
+            // Strip the .in_sum2 suffix to recover the source tensor name
+            // (e.g. blk.0.attn_q.weight.in_sum2 → blk.0.attn_q.weight).
+            var tensorName = t.Name.Substring(0, t.Name.Length - suffix.Length);
+            result[tensorName] = floats;
+        }
+        return result;
+    }
+
+    /// <summary>Disposable holder for imatrix side allocations; <see cref="Free"/> after the native call returns.</summary>
+    private readonly struct ImatrixAllocations
+    {
+        private readonly IntPtr _buffer;
+        private readonly IntPtr[]? _namePtrs;
+        private readonly IntPtr[]? _dataPtrs;
+
+        public ImatrixAllocations(IntPtr buffer, IntPtr[] namePtrs, IntPtr[] dataPtrs)
+        {
+            _buffer = buffer;
+            _namePtrs = namePtrs;
+            _dataPtrs = dataPtrs;
+        }
+
+        public void Free()
+        {
+            if (_namePtrs is not null)
+                foreach (var ptr in _namePtrs)
+                    if (ptr != IntPtr.Zero) Marshal.FreeCoTaskMem(ptr);
+            if (_dataPtrs is not null)
+                foreach (var ptr in _dataPtrs)
+                    if (ptr != IntPtr.Zero) Marshal.FreeHGlobal(ptr);
+            if (_buffer != IntPtr.Zero) Marshal.FreeHGlobal(_buffer);
         }
     }
 
