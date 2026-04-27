@@ -11,6 +11,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Vectorized softmax (TensorPrimitives.Max / Subtract / Exp / Sum)
+         in LlamaPerplexity. Pure managed; the BCL falls back to scalar
+         on hardware without AVX2. -->
+    <PackageReference Include="System.Numerics.Tensors" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Ship native binaries alongside the managed DLL, under runtimes/<rid>/native/.
          This is the path the .NET native-library resolver probes by default.
          Link= preserves the `runtimes/` prefix that Include='..\..\runtimes\**' otherwise collapses away. -->

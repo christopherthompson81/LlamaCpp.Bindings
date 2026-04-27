@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
 using LlamaCpp.Bindings.Native;
 
@@ -199,13 +201,15 @@ public static class LlamaPerplexity
                     }
                 }
 
-                // Parallelize the per-position softmax loop: each token's
-                // log-prob is independent, and the softmax cost
-                // (full-vocab log-sum-exp) dominates the per-chunk wall
-                // time. Empirically this is the actual bottleneck —
-                // GPU forward is fast, the C# softmax is what takes 90%
-                // of the chunk's time. Aggregating into thread-local
-                // accumulators keeps the hot loop lock-free.
+                // Per-chunk wall is dominated by the GPU→CPU logit readback
+                // (65% on Qwen3-1.7B / RTX 3090, observed via temporary
+                // instrumentation): ~150 MB of logits per chunk transferred
+                // lazily as the softmax loop touches managed-memory pages.
+                // The compute (TensorPrimitives.Max/Subtract/Exp/Sum) is
+                // ~32%; GPU forward is just 2%. The eventual fix is a
+                // device-side logsumexp+gather subgraph that returns only
+                // (target_logit, logsumexp) per position — kills the
+                // readback. Until that lands, this is what we've got.
                 int firstScored = options.ScoreSecondHalfOnly ? chunkSize / 2 : 1;
                 var (chunkNllSum, chunkScored) = ParallelChunkScore(
                     context, tokens, start, firstScored, chunkSize, nVocab,
@@ -787,20 +791,33 @@ public static class LlamaPerplexity
                 $"Token id {actualToken} out of range for vocab size {nVocab}.");
         }
 
-        // Stable log-sum-exp.
-        float maxLogit = logits[0];
-        for (int i = 1; i < nVocab; i++)
+        // Stable log-sum-exp via vectorized TensorPrimitives. The two
+        // hot loops over a ~150k-vocab dominate per-chunk wall time
+        // (Run 14: ~14s pure softmax for wikitext-2 at 16-thread
+        // parallel). TensorPrimitives.Max / Subtract / Exp / Sum are
+        // SIMD-accelerated on AVX2/AVX512, giving roughly 4× over the
+        // scalar Math.Exp loop on this hardware.
+        var logitSpan = new ReadOnlySpan<float>(logits, nVocab);
+        float maxLogit = TensorPrimitives.Max(logitSpan);
+
+        // Rent a per-call buffer for the shifted/exp'd logits. ArrayPool
+        // is lock-free at this size class — each parallel scoring task
+        // pays a single rent/return per scored position.
+        var rented = ArrayPool<float>.Shared.Rent(nVocab);
+        try
         {
-            if (logits[i] > maxLogit) maxLogit = logits[i];
+            var tmp = rented.AsSpan(0, nVocab);
+            TensorPrimitives.Subtract(logitSpan, maxLogit, tmp);
+            TensorPrimitives.Exp(tmp, tmp);
+            float sumExp = TensorPrimitives.Sum((ReadOnlySpan<float>)tmp);
+            double logZ = maxLogit + Math.Log(sumExp);
+            double logProb = logits[actualToken] - logZ;
+            return -logProb;
         }
-        double sum = 0;
-        for (int i = 0; i < nVocab; i++)
+        finally
         {
-            sum += Math.Exp(logits[i] - maxLogit);
+            ArrayPool<float>.Shared.Return(rented);
         }
-        double logZ = maxLogit + Math.Log(sum);
-        double logProb = logits[actualToken] - logZ;
-        return -logProb;
     }
 
     /// <summary>
