@@ -6,11 +6,16 @@ namespace LlamaCpp.Bindings;
 public sealed class LlamaQuantRecipeFromProfileOptions
 {
     /// <summary>
-    /// Starting type for every category. The greedy walk promotes /
-    /// demotes from here to hit the bpw budget. Default Q4_K matches
-    /// the stock <c>llama-quant Q4_K_M</c> baseline.
+    /// Type to assign to weight tensors that don't match any of the
+    /// profile's categories (e.g. <c>token_embd.weight</c>,
+    /// <c>output.weight</c> when the profile doesn't include an
+    /// embedding category). Default Q4_K. The recipe builder applies
+    /// this type to uncategorized weights without optimizing them
+    /// against the bpw budget — they're assumed to be a small fraction
+    /// of total weight bytes. If your profile has dedicated categories
+    /// for token_embd / output, no uncategorized fallback is needed.
     /// </summary>
-    public LlamaTensorType DefaultType { get; set; } = LlamaTensorType.Q4_K;
+    public LlamaTensorType UncategorizedType { get; set; } = LlamaTensorType.Q4_K;
 
     /// <summary>
     /// Exponent applied to the parameter-count ratio when projecting
@@ -59,19 +64,27 @@ public sealed class LlamaQuantRecipeFromProfileOptions
 /// </summary>
 /// <remarks>
 /// <para>
-/// Algorithm — greedy by ΔPPL/bit. Start every category at
-/// <see cref="LlamaQuantRecipeFromProfileOptions.DefaultType"/>
-/// (clamped to floor). If under-budget, repeatedly promote the
-/// category whose promotion saves the most ΔPPL per added bit. If
-/// over-budget, repeatedly demote the category whose demotion costs
-/// the least ΔPPL per saved bit. Stop when bpw lands in the
-/// tolerance band.
+/// Algorithm — exhaustive enumeration over per-category type choices,
+/// filtered by floors. With 7 categories × 3 measured types that's
+/// ≤ 2187 combinations, trivially enumerable. Selection objective:
+/// minimize total predicted ΔPPL subject to weighted bpw ≤ target +
+/// tolerance. Falls back to lowest-PPL recipe overall when the budget
+/// is infeasible (collective floors exceed the budget).
 /// </para>
 /// <para>
 /// Coefficients are size-scaled — a profile built on a 0.6B model
 /// applied to a 1.7B target multiplies its coefficients by
 /// <c>(1.7/0.6)^exponent</c>. Default exponent <c>1.0</c> is the
 /// safe (over-estimating) choice; cross-size validation refines it.
+/// </para>
+/// <para>
+/// The output recipe is meant to be consumed by
+/// <see cref="LlamaCustomQuantizer.QuantizeWithRecipeAsync"/>, which
+/// realizes the per-tensor type choices verbatim. The legacy path
+/// through <see cref="LlamaQuantizer.QuantizeAsync"/> with
+/// <see cref="LlamaQuantizationParameters.TensorTypeOverrides"/>
+/// will silently drop demotions, so recipe-built recipes ship larger
+/// than predicted on that path (Run 14).
 /// </para>
 /// </remarks>
 public static class LlamaQuantRecipeFromProfile
@@ -222,7 +235,7 @@ public static class LlamaQuantRecipeFromProfile
                 bpwSum += LlamaQuantRecipe.GetBitsPerElement(type) * categoryElements.GetValueOrDefault(cat);
                 pplSum += ScaledDelta(cat, type);
             }
-            bpwSum += LlamaQuantRecipe.GetBitsPerElement(opts.DefaultType) * uncategorizedElements;
+            bpwSum += LlamaQuantRecipe.GetBitsPerElement(opts.UncategorizedType) * uncategorizedElements;
             var bpw = bpwSum / totalElements;
 
             if (pplSum < bestOverallPpl)
@@ -254,7 +267,7 @@ public static class LlamaQuantRecipeFromProfile
             }
             else
             {
-                chosen = opts.DefaultType;
+                chosen = opts.UncategorizedType;
                 estDelta = 0.0;  // no data — assume default is right
             }
             entries.Add(new LlamaQuantRecipeEntry(
