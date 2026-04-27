@@ -33,21 +33,40 @@ studied — the heuristic should be approximately right.
   doesn't show up loudly in the MSE measurement at all. So the
   recipe makes 3 of 4 worst-possible category choices.
 
-**Path forward**: per-category PPL coefficients (Stage 1, Run 9)
-+ per-(category × bpw) coefficients (Stage 2, future) → recipe
-that minimizes predicted ΔPPL subject to budget rather than per-
-tensor MSE thresholds.
+**Path forward (after Run 12)**: cross-architecture validation
+confirms what was suspected — **sensitivity profiles are
+architecture-specific**.
 
-**Recipe v2 (Run 10) validates this path** — a hand-coded swap of
-`ffn_up` ↔ `ffn_down` use_more_bits bumps, derived directly from
-Stage 1's ranking, beats stock Q4_K_M by 0.29 PPL at near-matched
-bpw (5.17 vs 5.09). The ablation coefficients are actionable; the
-heuristic has at least one exploitable mistake on this architecture.
-See Run 10 for the full table and the future-work shortlist.
+  - Qwen3-0.6B (QK-norm): `attn_v` is 2nd-most-sensitive. Heuristic
+    correctly protects it. `ffn_up` is missed. `ffn_down` has a knee
+    that justifies its protection.
+  - Llama-3.2-1B (no QK-norm): `attn_v` is the *least*-sensitive
+    category (+0.008 PPL at Q4_K). The heuristic's `use_more_bits`
+    bumps on `attn_v` are wasted budget. `ffn_up` *and* `ffn_gate`
+    are both under-protected.
 
-The QK-norm signature stays a useful diagnostic; the recipe-builder
-needs a different objective function. Per-tensor imat-weighted MSE
-is a measurement, not an optimization target.
+A universal "fix the heuristic" recipe doesn't exist. The right tool
+design (and the GGUFLab Adaptive Quantization v2 specification):
+
+  1. Ship per-architecture sensitivity profiles as build-time
+     artifacts (one ablation campaign per architecture, ~1 hour).
+  2. The recipe builder takes a budget target and a profile;
+     produces an allocation that minimizes predicted ΔPPL while
+     respecting per-category knees (e.g. ffn_down's cliff at Q2_K).
+  3. The MSE-based sensitivity sweep (Runs 1-5) keeps a reduced but
+     real role: picking *which tensor within a category* to bump
+     first when the builder allocates extra bpw to that category.
+     That's where the QK-norm signal earns its keep.
+
+Recipe v2 (Run 10) was a category-level swap that beat stock Q4_K_M
+by 0.29 PPL on Qwen3-0.6B — proof that ablation-driven recipes work.
+But applying that exact swap to Llama-3.2-1B would not work the
+same way; you'd need a different swap (promote ffn_gate too, demote
+attn_v).
+
+The QK-norm signature is a measurement of an architectural property,
+not a recipe ingredient. Per-tensor imat-weighted MSE is a
+measurement, not an optimization target.
 
 **Earlier final verdict (after Run 5)**: QK-norm has a real, isolated
 quantization signature, but it's about *imatrix-aware quantization
@@ -205,6 +224,126 @@ empirically the loudest), can't see this — it's hard-coded to the
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
+
+## Run 12 — 2026-04-27 (Cross-architecture: Llama-3.2-1B Stage 1)
+
+The user predicted that quantization sensitivity profiles would be
+architecture-specific. Run 12 tests it directly: same Stage 1
+ablation protocol on Llama-3.2-1B (no QK-norm, classical MHA), 16
+layers, F16 baseline 13.82 PPL on wikitext-2.
+
+### Result — side-by-side ΔPPL at Q4_K
+
+| category       | Qwen3-0.6B (QK-norm) | Llama-3.2-1B (no QK-norm) | Qwen3 rank | Llama rank |
+|----------------|----------------------|----------------------------|------------|------------|
+| `ffn_up`       | **+0.4573**          | **+0.1646**                | **1**      | **1**      |
+| `attn_v`       | +0.4367              | +0.0077                    | 2          | **7 (least)** |
+| `attn_k`       | +0.2959              | +0.0072                    | 3          | 6          |
+| `attn_q`       | +0.2674              | +0.0592                    | 4          | 3          |
+| `attn_output`  | +0.0801              | +0.0405                    | 5          | 5          |
+| `ffn_gate`     | +0.0757              | **+0.1245**                | 6          | **2**      |
+| `ffn_down`     | +0.0303              | +0.0449                    | 7          | 4          |
+
+(F16 baselines: Qwen3 = 21.47 PPL, Llama = 13.82 PPL.)
+
+### Verdict — the user's prediction is confirmed
+
+**Universal patterns** (true on both architectures):
+
+- **`ffn_up` is the most-sensitive category, on both models.** The
+  Q4_K_M heuristic's "default Q4_K" decision is wrong on Qwen3
+  *and* Llama. Promoting `ffn_up` is a universal heuristic
+  improvement — that part of recipe v2 (Run 10) generalizes.
+- `attn_output` is mid-rank (#5) on both.
+
+**Architecture-specific patterns** (and they're dramatic):
+
+- **`attn_v`**: 2nd-most-sensitive on Qwen3 (+0.44) → *least*-
+  sensitive on Llama (+0.008). The heuristic's `use_more_bits`
+  bumps to Q5_K/Q6_K on `attn_v` are necessary on Qwen3 but
+  **wasted budget on Llama** — at Q4_K it costs Llama only
+  0.06 % of its baseline PPL.
+- **`attn_k`**: 3rd on Qwen3 → 6th on Llama. Same pattern.
+- **`ffn_gate`**: 6th (low) on Qwen3 → 2nd (high) on Llama.
+  Llama would benefit from `ffn_gate` protection; Qwen3 wouldn't.
+
+### What this means for QK-norm
+
+The QK-norm story (Run 5) was about imat-weighted *MSE* amplification
+on K/Q tensors. Run 8 showed MSE didn't predict PPL at the *category*
+level. Run 12 now closes the loop:
+
+- On QK-norm Qwen3, attention tensors (`attn_v`/`k`/`q`) really are
+  more PPL-sensitive than on non-QK-norm Llama. So the QK-norm
+  signature *does* translate into PPL impact, just not in the
+  direction the imat-weighted MSE recipe was chasing (it was
+  protecting `attn_k`/`attn_q` heavily — those are #3/#4 in PPL
+  rank on Qwen3, not #1).
+- The heuristic's hand-tuned `attn_v` protection happens to be
+  *correct* for QK-norm Qwen3 (attn_v really is high-sensitivity)
+  but **is genuine over-spending on Llama** where attn_v is
+  effectively free.
+
+Whether that's a coincidence (Llama-1/2-era heuristic accidentally
+correct for QK-norm) or whether QK-norm-era models inherited
+sensitivity patterns that earlier MHA models also had at lower
+amplitude (in which case the heuristic was always right and Llama-3.2
+just regressed) is its own research question. The data here can't
+tell.
+
+### Implication for the GGUFLab recipe builder
+
+A universal "fix the heuristic" recipe doesn't exist. The Q4_K_M
+heuristic is wrong in *different* ways on different architectures:
+
+  - On Qwen3-0.6B: under-protects `ffn_up`; over-protects `ffn_down`
+    (but only mildly — see Stage 2 knee).
+  - On Llama-3.2-1B: under-protects `ffn_up` *and* `ffn_gate`;
+    over-protects `attn_v` and `attn_k` (their Q5_K/Q6_K bumps
+    buy almost nothing).
+
+The right tool design ships **per-architecture sensitivity profiles**.
+A profile is a (category, bpw) → ΔPPL table built by running Stages
+1+2 on the architecture once. The recipe builder picks bumps by
+ROI (ΔPPL improvement per ΔBPW) from the profile, never crosses a
+known knee, and produces a recipe tuned to that architecture rather
+than a one-size-fits-all rule.
+
+Profiles measured so far: Qwen3-0.6B (Stages 1+2). Llama-3.2-1B
+needs Stage 2 for completeness — the Stage 1 ranking is in hand.
+
+### What would falsify this
+
+If we ran Stage 1 on a different Qwen3 size (1.7B, 4B) and got a
+materially different ranking from Qwen3-0.6B, that would say
+"profiles are model-size-specific too" — bad for tooling. The bet
+is that profiles are *architecture-family*-specific (QK-norm vs
+not, MoE vs dense, GQA ratio, …) but reasonably stable within a
+family. Validating that requires a Run 13 on Qwen3-1.7B or 4B.
+
+### Operational guidance update — final form
+
+For GGUFLab:
+
+  1. Ship **per-architecture sensitivity profiles** as build-time
+     artifacts. One profile per (architecture, model-size-class)
+     measured via Stage 1+2 ablation.
+  2. The recipe builder takes a budget target and a profile;
+     produces an allocation that minimizes predicted ΔPPL while
+     respecting per-category knees.
+  3. The Adaptive Quantization tool's role becomes *building the
+     profile*, not picking the recipe. The user runs an ablation
+     campaign once per model architecture (~1 hour); the recipe
+     builder consumes the profile.
+  4. The MSE-based sensitivity sweep (Runs 1–5) keeps a useful but
+     reduced role: it picks **which tensor *within* a category**
+     to bump first when the recipe builder allocates extra bpw to
+     a category. That's the QK-norm signal earning its keep —
+     finding the layer-15-attn_k that needs Q5_K bumped to Q6_K
+     before bumping layer-3-attn_k.
+
+This is genuinely a research-grade tool design. The investigation
+is complete; the implementation is its own project.
 
 ## Run 11 — 2026-04-27 (Stage 2: per-(category × bpw) — and the ffn_down cliff)
 
