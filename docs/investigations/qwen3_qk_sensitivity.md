@@ -10,25 +10,37 @@ the heuristic allocate bits to the right tensors?*
 The expectation going in was that for Qwen3-0.6B — small, dense, well-
 studied — the heuristic should be approximately right.
 
-**Final status (after Run 8)**:
-- *Architectural signature*: confirmed. QK-norm causes a real,
-  isolated, ~100× amplification of imatrix-weighted MSE on K/Q
-  tensors (Run 5's 4-way comparison). This is a stable observation
-  and a legitimate research output.
-- *Operational claim* ("therefore the recipe beats Q4_K_M on PPL"):
-  **retracted.** Even at *matched bpw* (5.11 vs 5.09), the recipe is
-  +17 % worse on wikitext PPL than stock Q4_K_M (26.24 vs 22.40 —
-  Run 8). The heuristic's allocation is empirically better, even
-  on QK-norm architectures where imatrix-weighted MSE measurement
-  says it's mis-allocating. Per-tensor MSE is not a good proxy for
-  PPL impact; the heuristic's hand-tuned rules compose better
-  across the layer chain than a τ-threshold per-tensor rule.
+**Final status (after Run 9)**:
+- *Architectural signature*: QK-norm causes a real, isolated, ~100×
+  amplification of imatrix-weighted MSE on K/Q tensors (Run 5).
+  Confirmed.
+- *PPL coefficient diagnosis*: per-category ablation (Run 9) measures
+  how much each tensor category actually costs in PPL when quantized
+  to Q4_K. The ranking:
 
-**Net**: the QK-norm signature is a real diagnostic finding,
-worth surfacing in the Adaptive Quantization tool as research
-output, but the recipe should not be applied as a drop-in
-replacement for stock ftypes. See Run 8 for the full operational
-guidance.
+      ffn_up (+0.46)  ≈  attn_v (+0.44)  >  attn_k (+0.30)
+      ≈ attn_q (+0.27)  >>  attn_output (+0.08)  ≈ ffn_gate (+0.08)
+      >  ffn_down (+0.03)
+
+  The Q4_K_M heuristic gets `attn_v` protection right but **misses
+  `ffn_up`** (the highest-leverage category — heuristic gives it
+  default Q4_K) and **over-protects `ffn_down`** (the lowest-
+  leverage — heuristic spends Q5_K/Q6_K on it via `use_more_bits`).
+- *Operational claim* ("imat-weighted MSE recipe beats Q4_K_M on
+  PPL"): retracted (Run 8). The recipe was loud where MSE was loud
+  (late attn_k/attn_q from QK-norm) but those are mid-sensitivity
+  for PPL — and the actual most-sensitive category (`ffn_up`)
+  doesn't show up loudly in the MSE measurement at all. So the
+  recipe makes 3 of 4 worst-possible category choices.
+
+**Path forward**: per-category PPL coefficients (Stage 1, this run)
++ per-(category × bpw) coefficients (Stage 2, future) → recipe v2
+that minimizes predicted ΔPPL subject to budget rather than per-
+tensor MSE thresholds. See Run 9 for full proposal.
+
+The QK-norm signature stays a useful diagnostic; the recipe-builder
+needs a different objective function. Per-tensor imat-weighted MSE
+is a measurement, not an optimization target.
 
 **Earlier final verdict (after Run 5)**: QK-norm has a real, isolated
 quantization signature, but it's about *imatrix-aware quantization
@@ -186,6 +198,143 @@ empirically the loudest), can't see this — it's hard-coded to the
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
+
+## Run 9 — 2026-04-27 (Stage 1 ablation: per-category PPL coefficients)
+
+Run 8 closed the operational claim — the recipe loses to the heuristic
+even at matched bpw. Run 9 is the diagnostic for *why*: per-tensor
+imatrix-weighted MSE doesn't predict PPL impact. So we measure the
+PPL coefficient per tensor category directly.
+
+**Method**: F16 baseline + 7 single-category-ablation quants. For each
+category in {attn_q, attn_k, attn_v, attn_output, ffn_up, ffn_gate,
+ffn_down}, quantize *only that category* to Q4_K via a recipe that
+explicitly maps every other 2-D weight tensor to F16. PPL on
+`wiki.test.raw`. ΔPPL = (ablation PPL) − (F16 baseline PPL) is the
+per-category PPL cost of going from F16 to Q4_K on those tensors only.
+
+**Implementation note**: tt_overrides only fire when the base ftype is
+quantized (the `if (!pure && ggml_is_quantized(default_type))` guard
+in llama-quant.cpp). Naive `--ftype MostlyF16 --recipe target-only.json`
+was a no-op until I switched to `--ftype Q4_K_M` with a recipe covering
+*every* 2-D tensor (target → Q4_K, others → F16). Worth knowing for
+future ablation work.
+
+### Result
+
+| rank | category       | ΔPPL    | heuristic does     | match?           |
+|------|----------------|---------|--------------------|------------------|
+| 1    | `ffn_up`       | **+0.4573** | Q4_K (default — no protection) | ❌ heuristic misses |
+| 2    | `attn_v`       | +0.4367 | Q5_K / Q6_K (protected via use_more_bits) | ✅ correct |
+| 3    | `attn_k`       | +0.2959 | Q4_K (default)     | ✅ correct       |
+| 4    | `attn_q`       | +0.2674 | Q4_K (default)     | ✅ correct       |
+| 5    | `attn_output`  | +0.0801 | Q4_K (default)     | ✅ correct       |
+| 6    | `ffn_gate`     | +0.0757 | Q4_K (default)     | ✅ correct       |
+| 7    | `ffn_down`     | **+0.0303** | Q5_K / Q6_K (protected via use_more_bits) | ❌ heuristic over-protects |
+
+F16 baseline PPL: 21.4720.
+
+### What the heuristic gets right and wrong
+
+The Q4_K_M heuristic protects two categories: `attn_v` and `ffn_down`.
+On Qwen3-0.6B:
+
+- **`attn_v` protection — correct**. Ablation confirms `attn_v` is the
+  2nd-most-sensitive category. The Llama-1/2 era intuition holds.
+- **`ffn_down` protection — wrong**. Ablation shows `ffn_down` is the
+  *least* sensitive category by a wide margin (+0.03 PPL — barely
+  measurable). The heuristic burns budget here for ~no benefit.
+- **`ffn_up` non-protection — wrong**. Ablation shows `ffn_up` is the
+  *most* sensitive category, narrowly edging out `attn_v`. The
+  heuristic puts it at the default Q4_K and walks past one of the
+  highest-leverage protection opportunities.
+
+The other four categories (attn_q, attn_k, attn_output, ffn_gate) are
+all in the heuristic's "default Q4_K" bucket, and the ablation agrees
+none of them are special enough to warrant protection on this model.
+
+### Why this also explains Run 7/8's recipe failure
+
+The Run 7 imatrix-weighted recipe at matched bpw (Run 8) was making
+exactly the wrong allocation choices:
+
+| category    | imat-weighted MSE rank | actual PPL-impact rank | recipe's choice                        | direction |
+|-------------|------------------------|------------------------|----------------------------------------|-----------|
+| `attn_k`    | 1st (MSE 0.76)         | 3rd                    | bumped to BF16 / Q8_0 on late layers   | wasted    |
+| `attn_q`    | 2nd (MSE 0.56)         | 4th                    | bumped to Q8_0 on late layers          | wasted    |
+| `attn_v`    | mid                    | 2nd                    | cut to IQ2_S on early layers           | harmful   |
+| `ffn_up`    | mid                    | **1st**                | cut to IQ4_XS broadly                  | harmful   |
+| `ffn_down`  | low                    | 7th                    | mostly preserved                       | overspend |
+
+Imatrix-weighted MSE is uncorrelated with actual PPL coefficient.
+The recipe was loud where the MSE was loud (late attn_k/attn_q from
+QK-norm) and quiet where the MSE was quiet (ffn_up) — but PPL doesn't
+care about the same things imatrix-weighted MSE cares about.
+
+### What this gives us as a buildable recipe
+
+A budget-conscious recipe for Qwen3-0.6B (and presumably the broader
+Qwen3 family with QK-norm) should, relative to Q4_K_M:
+
+- **Bump `ffn_up`** from Q4_K to Q5_K / Q6_K. The heuristic doesn't
+  do this; ablation says it's the highest-leverage protection.
+- **Cut `ffn_down`** from Q5_K / Q6_K back to Q4_K (or even IQ4_XS).
+  The heuristic over-spends here for negligible PPL benefit.
+- **Keep `attn_v` at Q5_K / Q6_K** as the heuristic does.
+- **Keep `attn_q`, `attn_k`, `attn_output`, `ffn_gate` at Q4_K** as
+  the heuristic does.
+- **Don't bump late-layer `attn_k` / `attn_q` to Q8_0+ even though
+  imat-weighted MSE screams**. They're mid-sensitivity per the
+  ablation; spending a budget there is worse than spending it on
+  `ffn_up`.
+
+This is a *testable* recipe. Whether it actually beats Q4_K_M at
+matched bpw on PPL is the natural next experiment.
+
+### What other factors might still matter
+
+Stage 1 is the cheapest first cut — uniform per-category coefficients
+at one bpw point. Open dimensions:
+
+1. **(category × bpw)**: does `attn_v` at Q3_K hurt 4× more than at
+   Q4_K, or 16×, or differently per category? Repeating Stage 1 at
+   Q2_K and Q6_K gives a (category, bpw) lookup table.
+2. **Depth bucketing**: Run 5 showed late-layer `attn_k` MSE behaves
+   very differently from early-layer. Per-depth ablation (early /
+   middle / late thirds × per-category) tests whether the PPL
+   coefficient is layer-dependent. 7×3 = 21 buckets × 1 bpw =
+   significant compute but probably worth it before claiming a
+   universal "Qwen3 recipe."
+3. **Coupling**: the Stage-1 model assumes per-category effects sum.
+   Real PPL impact may have non-additive coupling (e.g., ablating
+   `attn_v` + `ffn_down` together hurts more than the sum). Pairwise
+   ablations can detect this; full-coverage recipes (like
+   Q4_K_M itself) are the integration test.
+4. **Position in residual stream**: a structural prior, not a
+   measurement — `attn_output` and `ffn_down` write to the residual
+   while `attn_q/k/v` are consumed inside attention. The ablation
+   data is consistent with this prior (ffn_up — a residual-stream
+   *input* — being most sensitive while ffn_down — also residual-
+   stream-adjacent — being least sensitive is interesting, suggests
+   the up-projection's role in shaping the post-norm input matters
+   more than the heuristic assumed).
+
+### Operational guidance update
+
+The Adaptive Quantization tool's recipe should NOT use raw imat-
+weighted MSE thresholds — that demonstrably picks the wrong tensors.
+Instead the recipe should be informed by per-category PPL coefficients.
+A future Adaptive Quantization v2 could:
+
+1. Ship per-architecture coefficient tables (Stage 1+2 results).
+2. Solve a constrained optimization: minimize Σ α(type, bpw) × Δ_PPL
+   subject to total bpw ≤ budget. The MSE measurement still
+   contributes — it picks *which tensor within a category* gets
+   bumped — but the *category-level* allocation comes from the
+   coefficients, not raw MSE.
+
+This is a real research project; running Stage 2 + Stage 3 and
+publishing the coefficient tables would be the deliverable.
 
 ## Run 8 — 2026-04-26 21:04  (matched-bpw recipe vs heuristic)
 
