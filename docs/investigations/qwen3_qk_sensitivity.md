@@ -225,6 +225,123 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 15 — 2026-04-27 13:30  (Custom quantizer + matched-bpw stock baselines — Run 14 inverts)
+
+Run 14 had a confounder: `tt_overrides` only fires as "manual" when
+the override differs from the default ftype's pick
+(`llama-quant.cpp:682`), which silently dropped our demote-to-Q4_K
+attempts on `output.weight` and ffn_down(half-the-layers). That
+~120 MiB of forced Q6_K protection was riding our recipes; what
+Run 14 measured as a "profile recipe wins" was mostly that heuristic
+backstop, not our bit allocation.
+
+Run 15 fixes the comparison. We landed `LlamaCustomQuantizer`
+(commit 7cd231f) — a pure-bindings driver that bypasses
+`llama_model_quantize`'s heuristic entirely and realizes the
+recipe's per-tensor types verbatim. Then re-ran the same Run 14
+matrix with the new quantizer, now at *actually* matched bpw, and
+added Q5_K_M as a higher-bpw second baseline.
+
+### Result
+
+| recipe                  | actual bpw | wikitext-2 PPL | Δ vs stock |
+|-------------------------|------------|----------------|------------|
+| stock Q4_K_M            | 5.026      | **18.68**      | —          |
+| recipe (1.7B → 1.7B) @Q4| 4.979      | 21.67          | **+2.99**  |
+| recipe (0.6B → 1.7B) @Q4| 4.979      | 21.67          | **+2.99**  |
+| stock Q5_K_M            | 5.772      | **17.11**      | —          |
+| recipe (1.7B → 1.7B) @Q5| 5.813      | 17.13          | +0.02      |
+| recipe (0.6B → 1.7B) @Q5| 5.575      | 21.06          | +3.95      |
+
+(Custom quantizer wall: ~140 s per recipe — pure-CPU dequant /
+requant, single-threaded ggml_quantize_chunk. PPL ~62 s each.
+Total run 16 min.)
+
+### Diagnosis — `output.weight` is the elephant in the unprofiled room
+
+The recipes in the profile know about 7 categories:
+`attn_{q,k,v,output}.weight`, `ffn_{up,gate,down}`. They know
+*nothing* about `output.weight` (the lm_head projection) or
+`token_embd.weight`. Both fall through to
+`Options.UncategorizedType` (default Q4_K).
+
+Stock Q4_K_M's heuristic promotes `output.weight → Q6_K` because
+`use_more_bits` knows it's high-leverage at the model's output
+side. Our recipes ship with `output.weight` at Q4_K. That single
+tensor is 310M params; Q4_K vs Q6_K is a 2.06-bpw difference on
+~15% of the model's bytes. The PPL cost is ~3 — exactly what we
+measured.
+
+Concretely: the gap between stock Q4_K_M (18.68) and our recipe
+(21.67) is essentially the cost of demoting `output.weight` from
+Q6_K to Q4_K. Our recipe's smart attn_k/v/q/ffn_up promotions
+partially recovered the loss, but didn't make up for the missing
+output protection.
+
+**Run 14's "+1.37 PPL improvement" was an artifact of the
+override-only-elevates bug protecting us from our own profile's
+blind spot.** llama-quant kept `output.weight` at Q6_K against our
+will, and that hidden protection masked the missing-category
+problem.
+
+### Other findings still standing
+
+- **Cross-size transfer math works.** At Q4_K_M target, the 0.6B
+  and 1.7B-derived recipes produced *byte-identical* recipes (both
+  PPL 21.67 at the same actual bpw). The size scaling correctly
+  reproduces the same category choices when both profiles share
+  the same blind spot. The cross-size design is fine; it's
+  operating on incomplete data.
+
+- **At Q5_K_M, recipe(1.7→1.7) ties stock** (17.13 vs 17.11). At
+  higher budget the algorithm promotes enough other categories
+  that the missing output protection doesn't dominate. This says
+  the profile is competitive *when the budget hides the gap* — a
+  reminder that bpw budget and profile completeness interact.
+
+- **The 0.6B recipe at Q5 budget collapses to 5.57 bpw**, not the
+  full 5.77 budget. At the higher budget the size-scaled
+  coefficients made promoting more categories not predicted-worth-
+  it, so the algorithm settled lower. PPL 21.06 — back to the
+  output@Q4_K disaster. This is consistent: when you don't
+  characterize the most-sensitive tensors, optimizing for the
+  others doesn't help.
+
+### Operational implication — fix the profile
+
+Two steps before any further validation:
+
+1. **Add `output.weight` and `token_embd.weight` as profile
+   categories.** The builder already supports custom categories
+   via `Options.Categories`. We just need to re-run the ablation
+   campaigns with `["attn_q.weight", "attn_k.weight",
+   "attn_v.weight", "attn_output.weight", "ffn_up", "ffn_gate",
+   "ffn_down", "output.weight", "token_embd.weight"]`. The token
+   embedding is shaped (vocab × hidden) and `output.weight` is
+   (hidden × vocab); both will measure cleanly.
+
+2. **Expand the candidate type ladder.** Q2_K/Q4_K/Q6_K is too
+   coarse — Run 15 hit several "couldn't fit budget cleanly"
+   cases. Add Q3_K, Q5_K, Q8_0, IQ4_XS for finer-grained
+   bit-allocation. Wall cost ~1 hour for both Qwen3 sizes with
+   the corrected VRAM heuristic.
+
+Both go together: the rerun campaign is one set of compute. Run
+16 is the full re-validation against this corrected profile, with
+the same Q4_K_M / Q5_K_M / cross-size matrix.
+
+### What this means for the v2 ship plan
+
+- The recipe builder, custom quantizer, and JSONC schema are all
+  unchanged-correct. The bug is in the *contents* of the shipped
+  reference profiles — they don't include enough categories.
+- The "small-model profile predicts large-model behavior" claim
+  from Run 13 is still credible but unproven against properly
+  matched bpw. Need Run 16 to settle.
+- Cross-size cost model: validated when both profiles have the
+  same blind spot. Will need to re-validate when profiles are
+  complete.
+
 ## Run 14 — 2026-04-27 12:30  (End-to-end: profile recipe vs stock Q4_K_M on 1.7B)
 
 First real PPL test of Adaptive Quantization v2: build three recipes
