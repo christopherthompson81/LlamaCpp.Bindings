@@ -186,17 +186,25 @@ public static class LlamaSensitivityProfileBuilder
             void ReportQuant(string label) =>
                 progress?.Report(new Progress(Stage.Quantizing, completed, totalJobs, label));
 
-            // Resolve concurrency early so we can size the disk-bounded
-            // batches. We use the F16 source as the size estimate — every
-            // ablation file is roughly the same size as the source (it's
-            // mostly F16 with one category dropped to a smaller type).
+            // Two distinct knobs that used to be conflated:
+            //   - batch size: how many ablations we quantize+score per
+            //     pipeline iteration. Bounds peak disk use and the number
+            //     of files in flight.
+            //   - PPL concurrency: how many of those run on the GPU
+            //     simultaneously. This wants per-batch sizing because
+            //     ablation files vary 3× in size between Q2_K (~25% F16)
+            //     and Q8_0 (~53% F16). Sizing PPL concurrency from the
+            //     F16 source over-reserves VRAM by 2-4× on every non-
+            //     baseline batch.
+            //
+            // Fix: batch size stays bounded (CPU/2 or user override),
+            // PPL concurrency is auto-detected per-batch from the actual
+            // quantized file paths via RunParallelAsync's built-in
+            // RecommendConcurrency call.
             int totalAblations = opts.Categories.Count * opts.CandidateTypes.Count;
-            int resolvedConcurrency = opts.MaxConcurrent > 0
+            int batchSize = opts.MaxConcurrent > 0
                 ? opts.MaxConcurrent
-                : LlamaPerplexity.RecommendConcurrency(
-                    new[] { sourceModelPath },
-                    availableVramBytes: opts.AvailableVramBytes,
-                    expectedJobCount: totalAblations);
+                : Math.Min(Environment.ProcessorCount, 8);
 
             // Default to n_ctx=512 to match the wikitext-2 published-number
             // convention used in Run 9/11 (and what GGUFLab's standalone
@@ -262,7 +270,7 @@ public static class LlamaSensitivityProfileBuilder
                 completed++;
 
                 progress?.Report(new Progress(Stage.Scoring, 0, totalJobs,
-                    CurrentLabel: $"baseline (concurrency={resolvedConcurrency})"));
+                    CurrentLabel: $"baseline (batch={batchSize}, ppl-concurrency=auto)"));
                 var baselineJob = new LlamaPerplexity.PerplexityJob(
                     ModelPath: baselinePath, Corpus: corpusText, Options: pplOpts, Tag: "BASELINE");
                 baseline = double.NaN;
@@ -278,7 +286,7 @@ public static class LlamaSensitivityProfileBuilder
                 progress?.Report(new Progress(Stage.Scoring, scored, totalJobs, CurrentLabel: "baseline done"));
             }
 
-            // Now the ablation specs, batched into rounds of `resolvedConcurrency`.
+            // Now the ablation specs, batched into rounds of `batchSize`.
             // Skip any (cat, type) the checkpoint already has scored.
             var allSpecs = new List<(string Category, LlamaTensorType Type)>();
             foreach (var category in opts.Categories)
@@ -289,10 +297,10 @@ public static class LlamaSensitivityProfileBuilder
             // reports remain meaningful (denominator is total, not remaining).
             completed += ablationPpl.Count;
 
-            for (int batchStart = 0; batchStart < allSpecs.Count; batchStart += resolvedConcurrency)
+            for (int batchStart = 0; batchStart < allSpecs.Count; batchStart += batchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var batch = allSpecs.Skip(batchStart).Take(resolvedConcurrency).ToList();
+                var batch = allSpecs.Skip(batchStart).Take(batchSize).ToList();
                 var batchPaths = new List<(string Cat, LlamaTensorType Type, string Path)>();
 
                 // Quantize this batch sequentially (quantize is CPU-only
@@ -321,8 +329,12 @@ public static class LlamaSensitivityProfileBuilder
                         ModelPath: bp.Path, Corpus: corpusText, Options: pplOpts,
                         Tag: $"{bp.Cat}|{bp.Type}|{bp.Path}")).ToList();
 
+                // maxConcurrent: 0 → RunParallelAsync auto-detects from
+                // the actual quantized file paths, so a Q2_K-heavy batch
+                // (small files) gets higher PPL concurrency than a
+                // Q8_0-heavy batch (larger files).
                 await foreach (var jr in LlamaPerplexity.RunParallelAsync(
-                    batchJobs, resolvedConcurrency, cancellationToken: cancellationToken))
+                    batchJobs, maxConcurrent: 0, cancellationToken: cancellationToken))
                 {
                     scored++;
                     if (jr.Tag is string tag)
