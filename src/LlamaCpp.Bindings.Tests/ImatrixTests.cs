@@ -107,6 +107,48 @@ public class ImatrixTests
             }
             Assert.True(blkInSum2Count > 0, "Imatrix has no .in_sum2 tensors for blk.* layers.");
             Assert.Equal(blkInSum2Count, blkCountsCount);
+
+            // Regression: the last block must have the same per-weight
+            // coverage as the first block. There was a bug where setting
+            // logits=true only on the last token caused the scheduler to
+            // prune the last layer's FFN computation to a single-token
+            // batch, which the collector's small-batch guard then
+            // rejected — silently dropping blk.<last>.ffn_down/gate/up
+            // from every imatrix this binding produced. Verified
+            // deterministic on Qwen3-0.6B (last block was 27) and
+            // Llama-3.2-1B (last block was 15) before the fix.
+            var perBlock = new Dictionary<int, HashSet<string>>();
+            for (int i = 0; i < tensorCount; i++)
+            {
+                var name = Marshal.PtrToStringUTF8(NativeMethods.gguf_get_tensor_name(ctx.Handle, i)) ?? "";
+                if (!name.EndsWith(".in_sum2", StringComparison.Ordinal)) continue;
+                if (!name.StartsWith("blk.", StringComparison.Ordinal)) continue;
+                // blk.<idx>.<weight>.weight.in_sum2 → extract idx and <weight>
+                var rest = name.AsSpan(4); // skip "blk."
+                int dot1 = rest.IndexOf('.');
+                if (dot1 < 0) continue;
+                if (!int.TryParse(rest[..dot1], out int blockIdx)) continue;
+                var afterIdx = rest[(dot1 + 1)..].ToString();
+                // strip trailing ".weight.in_sum2"
+                const string suffix = ".weight.in_sum2";
+                if (!afterIdx.EndsWith(suffix, StringComparison.Ordinal)) continue;
+                var weightName = afterIdx[..^suffix.Length];
+                if (!perBlock.TryGetValue(blockIdx, out var set))
+                {
+                    set = new HashSet<string>(StringComparer.Ordinal);
+                    perBlock[blockIdx] = set;
+                }
+                set.Add(weightName);
+            }
+            Assert.True(perBlock.Count >= 2, "Need at least two blocks tracked to compare first vs last.");
+            int firstIdx = perBlock.Keys.Min();
+            int lastIdx  = perBlock.Keys.Max();
+            var firstSet = perBlock[firstIdx];
+            var lastSet  = perBlock[lastIdx];
+            var missing  = firstSet.Except(lastSet).OrderBy(s => s).ToArray();
+            Assert.True(missing.Length == 0,
+                $"Last block (blk.{lastIdx}) is missing weights present in first block (blk.{firstIdx}): " +
+                $"[{string.Join(", ", missing)}]. This is the last-token-logits scheduler-pruning bug.");
         }
         finally
         {

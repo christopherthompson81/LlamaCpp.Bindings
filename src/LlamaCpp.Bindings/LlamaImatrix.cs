@@ -173,7 +173,7 @@ public static class LlamaImatrix
 
                     int start = chunk * chunkSize;
                     context.ClearKvCache();
-                    PopulateBatchLastLogit(ref batch, tokens, start, chunkSize);
+                    PopulateBatchAllLogits(ref batch, tokens, start, chunkSize);
 
                     unsafe
                     {
@@ -273,7 +273,7 @@ public static class LlamaImatrix
         }
     }
 
-    private static unsafe void PopulateBatchLastLogit(
+    private static unsafe void PopulateBatchAllLogits(
         ref llama_batch batch, int[] tokens, int offset, int count)
     {
         batch.n_tokens = count;
@@ -288,11 +288,20 @@ public static class LlamaImatrix
             posPtr[i]      = i;
             nSeqPtr[i]     = 1;
             seqIdArr[i][0] = 0;
-            // Imatrix only needs the forward pass to run — the logits
-            // values themselves are unused. Enabling at the last position
-            // keeps decode from rejecting the batch as "no output" while
-            // letting llama.cpp skip output projection for the others.
-            logits[i] = (sbyte)(i == count - 1 ? 1 : 0);
+            // Enable logits for *every* token. The values are unused —
+            // imatrix only cares about activations on the way through —
+            // but if we mark only the last token (an obvious optimization
+            // for "skip output projection on the others") the scheduler
+            // also prunes the last layer's FFN computation down to that
+            // one token's slice. The collector's "small-batch guard"
+            // (src1.ne[1] >= 16) then rejects those calls, and the
+            // resulting imatrix is silently missing the last block's
+            // ffn_down/gate/up entries — verified deterministic on
+            // Qwen3-0.6B and Llama-3.2-1B. Marking every token costs
+            // one additional output-projection matmul per chunk
+            // (negligible) and keeps every layer's FFN running at
+            // chunk-batch width.
+            logits[i] = 1;
         }
     }
 
