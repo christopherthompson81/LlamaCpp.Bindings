@@ -111,6 +111,30 @@ public sealed class LlamaQuantRecipeFromProfileOptions
     /// explicit map to exercise specific baseline scenarios.
     /// </summary>
     public IReadOnlyDictionary<string, LlamaTensorType>? StockBaselineMap { get; set; }
+
+    /// <summary>
+    /// Efficiency threshold in PPL-per-bpw units. The optimizer
+    /// minimizes <c>pplSum + MinPplGainPerBpw × bpw</c> within the
+    /// budget cap, so a promotion is only taken when its predicted
+    /// PPL gain divided by added bpw exceeds this threshold.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this, strict <c>min(pplSum within budget)</c> happily
+    /// trades 0.06 bpw for 0.001 PPL gain — visible on Run 17 as
+    /// the algorithm picking <c>attn_v Q8_0×28</c> over
+    /// <c>attn_v Q6_K×28</c> for a noise-level predicted improvement.
+    /// Run 17b's variant B verified that switching attn_v back to
+    /// Q6_K reclaimed 0.056 bpw AND slightly improved PPL — the
+    /// strict-min-pplSum was actively harmful.
+    /// </para>
+    /// <para>
+    /// Default <c>0.05</c> rejects trades worse than 0.05 PPL per
+    /// added bpw. Set to <c>0</c> for the original strict-min
+    /// behavior.
+    /// </para>
+    /// </remarks>
+    public double MinPplGainPerBpw { get; set; } = 0.05;
 }
 
 /// <summary>
@@ -351,10 +375,18 @@ public static class LlamaQuantRecipeFromProfile
         // with the lowest predicted ΔPPL — better to ship a good recipe
         // slightly over budget than refuse to build one.
         double budgetCap = targetBitsPerElement + opts.BitsPerElementTolerance;
+        // Composite score: pplSum + MinPplGainPerBpw × bpw. With λ in
+        // PPL-per-bpw units, an assignment that costs +Δbpw and saves
+        // -Δppl is preferred only when Δppl/Δbpw > λ. Threshold defaults
+        // to 0.05 so we don't burn ~0.06 bpw chasing 0.001 PPL gains
+        // (Run 17b variant B finding).
+        double Score(double pplSum, double bpw) =>
+            pplSum + opts.MinPplGainPerBpw * bpw;
+
         Dictionary<string, LlamaTensorType>? bestInBudget = null;
-        double bestInBudgetPpl = double.PositiveInfinity;
+        double bestInBudgetScore = double.PositiveInfinity;
         Dictionary<string, LlamaTensorType>? bestOverall = null;
-        double bestOverallPpl = double.PositiveInfinity;
+        double bestOverallScore = double.PositiveInfinity;
 
         var catList = perCategoryChoices.Keys.ToList();
         var current = new Dictionary<string, LlamaTensorType>(StringComparer.Ordinal);
@@ -379,15 +411,16 @@ public static class LlamaQuantRecipeFromProfile
             }
             bpwSum += uncategorizedBitsTotal;
             var bpw = bpwSum / totalElements;
+            var score = Score(pplSum, bpw);
 
-            if (pplSum < bestOverallPpl)
+            if (score < bestOverallScore)
             {
-                bestOverallPpl = pplSum;
+                bestOverallScore = score;
                 bestOverall = new Dictionary<string, LlamaTensorType>(assignment, StringComparer.Ordinal);
             }
-            if (bpw <= budgetCap && pplSum < bestInBudgetPpl)
+            if (bpw <= budgetCap && score < bestInBudgetScore)
             {
-                bestInBudgetPpl = pplSum;
+                bestInBudgetScore = score;
                 bestInBudget = new Dictionary<string, LlamaTensorType>(assignment, StringComparer.Ordinal);
             }
         });
