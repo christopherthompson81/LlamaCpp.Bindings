@@ -131,3 +131,97 @@ empirically the loudest), can't see this — it's hard-coded to the
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
+
+## Run 3 — 2026-04-26 18:23  (QK-norm hypothesis test on Llama-3.2-1B)
+
+Pivoted the contrast model. Qwen2-0.5B was the obvious "same family
+minus QK-norm" choice, but its `hidden_size = 896` isn't divisible
+by the K-quant super-block size (256), so llama.cpp's heuristic
+falls back to Q8_0 for almost every attention/FFN tensor — the
+"Q4_K_M" file is mostly Q8_0 by mass. The sensitivity sweep
+faithfully marks K-quants as skipped for those tensors, but the
+result isn't comparable to Qwen3-0.6B's all-K-quant world.
+Llama-3.2-1B (`hidden_size = 2048 = 8×256`) keeps the candidate
+ladder fully populated.
+
+**Source**: `bartowski/Llama-3.2-1B-Instruct-GGUF` →
+`Llama-3.2-1B-Instruct-f16.gguf` (2.4 GB). 16 layers, MHA without
+QK-norm. Sweep ran in 6.4 min wall, 3.4× CPU speedup vs serial.
+
+**Command**:
+```bash
+llama-sensitivity-sweep \
+  --input ~/.cache/llama-models/bartowski/Llama-3.2-1B-Instruct/Llama-3.2-1B-Instruct-f16.gguf \
+  --output ~/.cache/llama-models/bartowski/Llama-3.2-1B-Instruct/Llama-3.2-1B-Instruct.scores.json \
+  --benchmark
+python3 tools/analyze-sensitivity-vs-heuristic.py \
+  --scores .../Llama-3.2-1B-Instruct.scores.json --ftype q4_k_m --layers 16
+```
+
+### Headline contrast
+
+Both models disagree with the heuristic on ~all tensors at matched
+bpw — but the *severity* of the disagreement is dramatically
+different. The right metric is "what rel-MSE does the heuristic's
+pick actually produce?", not "do the picks disagree?".
+
+| metric                                       | Qwen3-0.6B (QK-norm) | Llama-3.2-1B (no QK-norm) |
+|----------------------------------------------|----------------------|---------------------------|
+| worst rel-MSE at heuristic-pick              | **0.759**            | 0.0062                    |
+| worst category                               | `attn_k` blk.26      | `attn_k` blk.15           |
+| tensors with rel-MSE ≥ 0.05 at heuristic     | 21 / 198             | **0 / 113**               |
+| tensors with rel-MSE ≥ 0.10 at heuristic     | 17 / 198             | 0 / 113                   |
+| heuristic average bpw                        | 4.803                | 4.797                     |
+| recipe avg bpw at τ=0.01                     | 4.527                | 4.250                     |
+
+### Worst-case rel-MSE per category
+
+| category              | Qwen3-0.6B max | Llama-3.2-1B max | ratio |
+|-----------------------|----------------|-------------------|-------|
+| `attn_k`              | 7.59e-1        | 6.19e-3           | **122×** |
+| `attn_q`              | 5.65e-1        | 5.54e-3           | **102×** |
+| `attn_v`              | 5.13e-2        | 1.44e-3           | 36×   |
+| `attn_output`         | 2.59e-2        | 5.38e-3           | 4.8×  |
+| `ffn_gate`            | 1.60e-2        | 5.37e-3           | 3.0×  |
+| `ffn_up`              | 1.51e-2        | 5.32e-3           | 2.8×  |
+| `ffn_down`            | 7.41e-3        | 5.43e-3           | 1.4×  |
+| `TOKEN_EMBD`          | 5.08e-3        | 5.45e-3           | 0.9×  |
+| `OUTPUT`              | 3.14e-4        | (n/a, tied)       | —     |
+
+The QK-affected categories (`attn_k`, `attn_q`, `attn_v`) explode
+two orders of magnitude on the QK-norm model relative to the
+no-QK-norm baseline. The non-attention categories (`ffn_*`,
+`TOKEN_EMBD`) are within ~3× — same general behavior, just a
+slightly harder model. **The QK-norm signal is isolated to the
+tensors QK-norm operates on**, which is exactly what the
+hypothesis predicts.
+
+### Verdict
+
+Hypothesis confirmed. The Q4_K_M heuristic is fine on classical
+MHA models like Llama-3.2-1B (mildly over-cautious — every tensor
+under 1% rel-MSE means the recipe could drop most picks to IQ4_XS
+and still keep quality, but the heuristic isn't *wrong*). On
+QK-normed Qwen3-0.6B it under-protects late-layer `attn_k`/`attn_q`
+to the point of catastrophic per-tensor error.
+
+The mechanism is now clear: QK-norm shifts where sensitivity lives
+because the post-norm activation is what the dot-product cares
+about, leaving the *raw* K and Q weights free to adopt wider per-
+block dynamic ranges that K-quant's per-block scale can't capture.
+This is consistent with QK-norm's design intent (give the network
+flexibility on the K/Q side of the attention) but has the
+side-effect of making those weights uniquely hard to quantize at
+4-bit per-block precision.
+
+### Operational implication
+
+For QK-norm architectures (Qwen3, also worth checking on Phi-3,
+Gemma-2, Llama-3.1+), the stock Q4_K_M is delivering significantly
+worse per-tensor reconstruction than its label suggests. The
+Adaptive Quantization tool's recipe correctly addresses this by
+spending the budget where it actually matters (Q8_0 on the worst
+attn_k/attn_q, IQ-quants on tensors the heuristic over-protects).
+The next step (Run 4, deferred) is a real perplexity comparison —
+recipe-built GGUF vs stock Q4_K_M on wikitext — to confirm the
+per-tensor MSE story translates to end-to-end model quality.

@@ -627,6 +627,11 @@ public static class LlamaQuantSensitivity
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new JsonStringEnumConverter() },
+        // Allow Infinity/-Infinity/NaN as quoted literals so a sweep
+        // that produced an unusual rel-MSE value (catastrophic
+        // round-trip on a degenerate tensor) doesn't lose its score
+        // table. The recipe builder already handles NaN explicitly.
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
     };
 
     /// <summary>Serialize a sweep result to a JSON file. Pairs with <see cref="LoadFromJson"/>.</summary>
