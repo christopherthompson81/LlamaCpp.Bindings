@@ -26,6 +26,16 @@ public sealed class LlamaCustomQuantizerOptions
     /// regardless of any recipe entry. Default true.
     /// </summary>
     public bool ApplyHeuristicSkipList { get; set; } = true;
+
+    /// <summary>
+    /// Maximum tensors to dequantize / requantize in parallel.
+    /// <c>0</c> (default) uses <c>min(Environment.ProcessorCount, 8)</c>;
+    /// <c>1</c> forces sequential. Per-tensor work is independent
+    /// (read F16 bytes, F32 convert, ggml_quantize_chunk, hold buffer
+    /// in memory) so this scales near-linearly until memory bandwidth
+    /// dominates.
+    /// </summary>
+    public int MaxParallelism { get; set; } = 0;
 }
 
 /// <summary>Per-tensor progress for <see cref="LlamaCustomQuantizer"/>.</summary>
@@ -105,48 +115,74 @@ public static class LlamaCustomQuantizer
         var recipeByName = recipe.Entries.ToDictionary(e => e.TensorName, e => e.ChosenType, StringComparer.Ordinal);
         var imatrix = opts.ImatrixPath is { } imatPath ? LoadImatrix(imatPath) : null;
 
-        int completed = 0;
         int total = src.Tensors.Count;
 
-        for (int i = 0; i < src.Tensors.Count; i++)
+        // Phase 1: decide a target type per tensor (sequential — fast).
+        var targets = new LlamaTensorType[total];
+        for (int i = 0; i < total; i++)
+        {
+            var t = src.Tensors[i];
+            var srcTypeId = (LlamaTensorType)(int)t.TypeId;
+
+            if (!ShouldQuantize(t, opts, recipeByName, out _))
+            {
+                targets[i] = srcTypeId;
+            }
+            else if (recipeByName.TryGetValue(t.Name, out var recipeType))
+            {
+                targets[i] = recipeType;
+                if (opts.AllowShapeFallback)
+                    targets[i] = ApplyShapeFallback(t, targets[i]);
+                else
+                    EnsureShapeCompatible(t, targets[i]);
+            }
+            else
+            {
+                targets[i] = srcTypeId;
+            }
+        }
+
+        // Phase 2: quantize in parallel for tensors that need conversion.
+        // Each tensor is independent (read its own bytes from source,
+        // dequant→F32→requant, hold the result). LlamaGgufWriter is not
+        // thread-safe, so we accumulate quantized bytes here and add
+        // them serially in phase 3.
+        var quantizedBytes = new byte[total][];
+        int parallelism = opts.MaxParallelism > 0
+            ? opts.MaxParallelism
+            : Math.Min(Environment.ProcessorCount, 8);
+        int completed = 0;
+        Parallel.For(0, total,
+            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+            i =>
+            {
+                var t = src.Tensors[i];
+                var srcTypeId = (LlamaTensorType)(int)t.TypeId;
+                if (targets[i] == srcTypeId) return;  // copied verbatim in phase 3
+
+                var srcF32 = ReadTensorAsFloat32(src, t);
+                float[]? imatRow = null;
+                if (imatrix is not null && imatrix.TryGetValue(t.Name, out var w))
+                    imatRow = w;
+                quantizedBytes[i] = QuantizeF32(srcF32, targets[i], t.Dimensions, imatRow);
+
+                int done = Interlocked.Increment(ref completed);
+                progress?.Report(new LlamaCustomQuantizerProgress(
+                    CompletedTensors: done,
+                    TotalTensors:     total,
+                    CurrentTensor:    t.Name,
+                    AppliedType:      targets[i]));
+            });
+
+        // Phase 3: stage tensors into the writer in original GGUF order.
+        // Serial because LlamaGgufWriter mutates internal lists.
+        for (int i = 0; i < total; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var t = src.Tensors[i];
             var srcTypeId = (LlamaTensorType)(int)t.TypeId;
-
-            LlamaTensorType targetType;
-            if (!ShouldQuantize(t, opts, recipeByName, out var skipReason))
+            if (targets[i] == srcTypeId)
             {
-                targetType = srcTypeId;
-            }
-            else if (recipeByName.TryGetValue(t.Name, out var recipeType))
-            {
-                targetType = recipeType;
-                if (opts.AllowShapeFallback)
-                    targetType = ApplyShapeFallback(t, targetType);
-                else
-                    EnsureShapeCompatible(t, targetType);
-            }
-            else
-            {
-                // Tensor allowed for quantization but recipe doesn't
-                // mention it. Conservatively keep its source type rather
-                // than guessing. The recipe builder is responsible for
-                // emitting an entry for every weight tensor it cares
-                // about; uncategorized weights ride at source type.
-                targetType = srcTypeId;
-            }
-
-            progress?.Report(new LlamaCustomQuantizerProgress(
-                CompletedTensors: completed,
-                TotalTensors:     total,
-                CurrentTensor:    t.Name,
-                AppliedType:      targetType));
-
-            if (targetType == srcTypeId)
-            {
-                // No conversion — copy bytes through. Zero-copy via the
-                // writer's file-backed tensor source.
                 writer.AddTensorFromFile(
                     name:               t.Name,
                     typeId:             t.TypeId,
@@ -157,16 +193,8 @@ public static class LlamaCustomQuantizer
             }
             else
             {
-                // Dequant source → F32 → requant to targetType.
-                var srcF32 = ReadTensorAsFloat32(src, t);
-                float[]? imatRow = null;
-                if (imatrix is not null && imatrix.TryGetValue(t.Name, out var w))
-                    imatRow = w;
-                var dstBytes = QuantizeF32(srcF32, targetType, t.Dimensions, imatRow);
-                writer.AddTensor(t.Name, (uint)(int)targetType, t.Dimensions, dstBytes);
+                writer.AddTensor(t.Name, (uint)(int)targets[i], t.Dimensions, quantizedBytes[i]);
             }
-
-            completed++;
         }
 
         progress?.Report(new LlamaCustomQuantizerProgress(
