@@ -2,71 +2,123 @@
   "schemaVersion": 1,
   "architectureId": "qwen3",
   "layerCount": 28,
-  "familyNotes": "QK-norm architecture (attn_q/attn_k/attn_v have RMSNorm applied post-projection). Per-tensor sensitivity for K/Q is markedly elevated vs classical MHA (Run 5/12). ffn_up tops the Q4_K ranking, ffn_down has the steepest Q2_K cliff (Run 9/11/13).",
+  "familyNotes": "QK-norm architecture (attn_q/attn_k/attn_v have RMSNorm applied post-projection). Per-tensor sensitivity for K/Q is markedly elevated vs classical MHA (Run 5/12). ffn_up tops the Q4_K ranking, ffn_down has the steepest Q2_K cliff (Run 9/11/13/17).",
   "provenance": {
     "method": "ablation",
     "sourceModel": "Qwen3-0.6B.F16.gguf",
-    "sourceParameterCount": 751630000,
+    "sourceParameterCount": 751632384,
     "corpus": "wiki.test.raw",
-    "builtAtUtc": "2026-04-27T17:01:54.3393838Z",
+    "builtAtUtc": "2026-04-27T22:11:49.7338167Z",
     "builderVersion": "LlamaSensitivityProfileBuilder/1.0.0.0"
   },
-  "f16BaselinePerplexity": 21.472002391459817,
+  "f16BaselinePerplexity": 21.471008871249207,
   "baselineContextSize": 512,
   "categories": {
     "attn_q.weight": {
       "deltaPplByType": {
-        "Q2_K": 1.277168986871068,
-        "Q4_K": 0.11427021768154688,
-        "Q6_K": 0.002117242457423174
+        "Q2_K": 1.2770738013071465,
+        "Q3_K": 0.707973064245742,
+        "Q4_K": 0.11426052327730574,
+        "Q5_K": 0.0025244548594933747,
+        "Q6_K": 0.002117932081286966,
+        "Q8_0": -0.0041992818687326405,
+        "IQ4_XS": 0.019956348925298073
       },
       "recommendedFloor": "Q2_K"
     },
     "attn_k.weight": {
       "deltaPplByType": {
-        "Q2_K": 2.019646426554665,
-        "Q4_K": 0.11491150938386596,
-        "Q6_K": -0.056697358600498404
+        "Q2_K": 2.019523635008202,
+        "Q3_K": 0.714497065532754,
+        "Q4_K": 0.11489876003092192,
+        "Q5_K": 0.15310950586119176,
+        "Q6_K": -0.0566957475253993,
+        "Q8_0": -0.023338143990908833,
+        "IQ4_XS": 0.18301645131814936
       },
       "recommendedFloor": "Q2_K"
     },
     "attn_v.weight": {
       "deltaPplByType": {
-        "Q2_K": 2.7204394133244136,
-        "Q4_K": 0.14185386394338906,
-        "Q6_K": -0.053612813155655914
+        "Q2_K": 2.7201986874005257,
+        "Q3_K": 0.7525136698309645,
+        "Q4_K": 0.14187386766633736,
+        "Q5_K": 0.10428539309249629,
+        "Q6_K": -0.05361579857607168,
+        "Q8_0": -0.021287056620586498,
+        "IQ4_XS": 0.29340093998325045
       },
       "recommendedFloor": "Q2_K"
     },
     "attn_output.weight": {
       "deltaPplByType": {
-        "Q2_K": 2.3261887991391212,
-        "Q4_K": 0.09103974417186578,
-        "Q6_K": 0.02635942558172033
+        "Q2_K": 2.3259230120239103,
+        "Q3_K": 0.5445986912844916,
+        "Q4_K": 0.0910260773217999,
+        "Q5_K": 0.06336553012599921,
+        "Q6_K": 0.02635896336292376,
+        "Q8_0": 0.007306754616635658,
+        "IQ4_XS": 0.2534408821399303
       },
       "recommendedFloor": "Q2_K"
     },
     "ffn_up": {
       "deltaPplByType": {
-        "Q2_K": 3.825110494961695,
-        "Q4_K": 0.22730212536070127,
-        "Q6_K": 0.028808177703403715
+        "Q2_K": 3.8247797670446744,
+        "Q3_K": 0.6713686322663897,
+        "Q4_K": 0.2272881239262503,
+        "Q5_K": 0.1700163723931034,
+        "Q6_K": 0.02880208446062582,
+        "Q8_0": -0.0002597959403232153,
+        "IQ4_XS": 0.20551952154755782
       },
       "recommendedFloor": "Q2_K"
     },
     "ffn_gate": {
       "deltaPplByType": {
-        "Q2_K": 2.9458990094483966,
-        "Q4_K": 0.10633479432708626,
-        "Q6_K": -0.0008744782376091109
+        "Q2_K": 2.945673598458196,
+        "Q3_K": 0.8551044937252641,
+        "Q4_K": 0.10632110524307237,
+        "Q5_K": 0.08247826163746197,
+        "Q6_K": -0.0008764793721169895,
+        "Q8_0": 0.013429541662706157,
+        "IQ4_XS": 0.2326772956541241
       },
       "recommendedFloor": "Q2_K"
     },
     "ffn_down": {
       "deltaPplByType": {
-        "Q2_K": 4.40208454361008,
-        "Q4_K": -0.00035897828302822177,
-        "Q6_K": -0.04374562099301471
+        "Q2_K": 4.4018231206842735,
+        "Q3_K": 1.9594211129618984,
+        "Q4_K": -0.0003685647267950287,
+        "Q5_K": 0.13726699135197507,
+        "Q6_K": -0.04375318094735903,
+        "Q8_0": -0.021450418139355776,
+        "IQ4_XS": 0.5392754626622605
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "output.weight": {
+      "deltaPplByType": {
+        "Q2_K": 6.92331562369397,
+        "Q3_K": 1.456426107642141,
+        "Q4_K": 0.06692442710045299,
+        "Q5_K": 0.08208853003834804,
+        "Q6_K": 0.06692442710045299,
+        "Q8_0": 0.005113983279905199,
+        "IQ4_XS": 0.2872917078381221
+      },
+      "recommendedFloor": "Q3_K"
+    },
+    "token_embd.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.6444975740827488,
+        "Q3_K": 0.12314410910108009,
+        "Q4_K": 0.0018327310373003058,
+        "Q5_K": 0.011006268945898512,
+        "Q6_K": -0.0007566744309031037,
+        "Q8_0": 0.00153059514587639,
+        "IQ4_XS": -0.037481274789659125
       },
       "recommendedFloor": "Q2_K"
     }

@@ -34,7 +34,11 @@ public class SensitivityProfileTests
             Assert.Equal("ablation", p.Provenance.Method);
             Assert.NotNull(p.Provenance.SourceParameterCount);
             Assert.True(p.Provenance.SourceParameterCount > 0);
-            Assert.Equal(7, p.Categories.Count);
+            // Run 17 expanded profiles add output.weight + token_embd.weight
+            // as proper categories on top of the original 7 (Run 16) — the
+            // recipe builder needs per-tensor sensitivity for these to
+            // avoid the over-protective UncategorizedProtections fallback.
+            Assert.Equal(9, p.Categories.Count);
             // ffn_up is the most-sensitive Q4_K category on both reference
             // profiles — Run 9 / 13 finding. Lock it in.
             Assert.Equal("ffn_up", p.CategoriesByDescendingSensitivityAtQ4K.First());
