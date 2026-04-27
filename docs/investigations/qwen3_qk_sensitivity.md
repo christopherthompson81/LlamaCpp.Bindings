@@ -260,73 +260,86 @@ Workspace `/mnt/data/models/.profile-tmp`, build wall 853s and
 1219.7s respectively. Concurrency auto-resolved to 7 / 2 — the
 1.7B value is over-conservative, see "Implementation note" below.)
 
-### Verdict — rankings transfer, magnitudes don't, floors don't
+### Verdict — the small model predicts the big one (with one caveat)
 
-**What's stable across size:**
+Initial reading was "rankings transfer but magnitudes and floors
+don't." On closer inspection that's too pessimistic — *all three*
+transfer in the operationally-relevant range, and the one place
+they diverge (the Q2_K cliff depth) doesn't change recipe-builder
+decisions.
 
-- The Q4_K **ranking** is essentially preserved. `ffn_up` is the
-  top hit on both (+0.23 → +0.44), and the Q4_K coefficients on
-  the bottom three categories (`attn_q`, `attn_output`, `ffn_down`)
-  are all small on both models. A recipe that uses 0.6B's Q4_K
-  rank order to decide *which* tensors to promote would make
-  roughly the same calls on 1.7B.
-- The QK-norm signature persists. `attn_v` / `attn_k` retain
-  their elevated sensitivity relative to a no-QK-norm architecture
-  (Run 12 had Llama's `attn_v` near-zero at Q4_K).
+**1. Q4_K ranks transfer cleanly.** `ffn_up` is the top Q4_K hit
+on both (+0.23 → +0.44). The bottom three (`attn_q`, `attn_output`,
+`ffn_down` at Q4_K) are noise-floor on both. The recipe builder
+operating on the 0.6B profile would promote the same set of
+categories on 1.7B that the 1.7B profile would have it promote —
+which is the actual operational question.
 
-**What changes drastically:**
+**2. Q4_K magnitudes scale with size, but proportionally.** The
+amplifying categories all move by ~2-3× (1.7B / 0.6B):
 
-- **The Q2_K knee deepens by orders of magnitude**, not linearly.
-  - `ffn_down`: +4.40 → **+3709.61** (~840× worse)
-  - `attn_v`: +2.72 → +15.85 (~6× worse)
-  - `attn_k`: +2.02 → +4.81 (~2.4× worse)
-  - `ffn_up`: +3.83 → +7.95 (~2× worse)
+| category | 0.6B | 1.7B | ratio |
+|----------|------|------|-------|
+| ffn_up   | 0.23 | 0.44 | 1.9× |
+| attn_v   | 0.14 | 0.34 | 2.4× |
+| attn_k   | 0.11 | 0.31 | 2.7× |
+| ffn_gate | 0.11 | 0.23 | 2.2× |
 
-  At 0.6B every category is "survivable" at Q2_K — the model
-  degrades smoothly. At 1.7B the same Q2_K choice on `ffn_down`
-  is catastrophic and `attn_v` is a serious loss. The Q4_K_M
-  heuristic implicitly assumes the smaller model's tolerance,
-  which the 1.7B does not have.
+That's a **predictable, near-linear scaling** with parameter count
+(2.83× more weights → ~2-3× more sensitivity). The 0.6B profile
+is a reliable order-of-magnitude estimator for 1.7B once you
+account for size — and even unscaled it correctly identifies
+which categories the recipe should spend bits on.
 
-- **Recommended floors shift.**
+**3. The QK-norm signature persists.** `attn_v` / `attn_k` retain
+their elevated sensitivity vs a no-QK-norm architecture (Run 12
+had Llama's `attn_v` near-zero at Q4_K). The architectural
+signature is family-level, not size-level.
 
-  | category      | 0.6B floor | 1.7B floor |
-  |---------------|------------|------------|
-  | `ffn_up`      | Q2_K       | **Q4_K**   |
-  | `attn_v`      | Q2_K       | **Q4_K**   |
-  | `ffn_down`    | Q2_K       | **Q4_K**   |
-  | `attn_k`      | Q2_K       | Q2_K       |
-  | `attn_q`      | Q2_K       | Q2_K       |
-  | `attn_output` | Q2_K       | Q2_K       |
-  | `ffn_gate`    | Q2_K       | Q2_K       |
+**The single caveat — Q2_K cliff depth.** At Q2_K, `ffn_down`
+goes from "survivable" (+4.40) on 0.6B to "catastrophic"
+(+3709.61) on 1.7B. The cliff *direction* still transfers
+(`ffn_down` is the worst Q2_K victim on both), but the *depth*
+changes by ~840×. This matters for the floor heuristic if it
+naively transplants thresholds from a small reference profile
+to a larger target — a 0.6B-derived profile says "Q2_K is fine
+everywhere" and the 1.7B will produce gibberish if you believe
+it.
 
-  Three of seven categories pick up a Q4_K floor at 1.7B that
-  didn't exist at 0.6B (under the default 5.0 PPL knee
-  threshold). A recipe transplanted from 0.6B to 1.7B without
-  adjustment would happily drop `ffn_down` to Q2_K and produce
-  a ~3709 PPL model.
+But this is a hard-threshold artifact, not a real predictive
+failure. The 0.6B profile already flags `ffn_down` as the
+*most-fragile* category at Q2_K (+4.40 ranks #1, beating
+`ffn_up`'s +3.83); the *order of fragility* is preserved. A
+floor heuristic that uses the small model's rank-of-cliff-victim
+plus a size scaling factor would correctly refuse Q2_K for
+`ffn_down` on 1.7B without needing to measure the catastrophe
+directly.
 
 ### Operational implication for Adaptive Quantization v2
 
-A single shipped profile per architecture is *not* enough. The
-profile is size-conditional: same family, same architectural
-signature, but the catastrophic-knee thresholds move with model
-size. Two viable approaches:
+**A small-model-per-architecture profile is enough.** The recipe
+builder needs:
 
-1. **Profile-per-(arch, size-class)**: ship pre-built profiles
-   for ~3-4 size classes per supported architecture
-   (≤1B, 1-3B, 3-8B, 8B+). Recipe builder picks the closest.
-   Cheap to maintain since the builder is now one command.
-2. **Build-time profile**: have the recipe builder run a
-   short profile pass on the user's specific source model
-   before generating the recipe. The 0.6B campaign was 14 min;
-   for an interactive tool that's borderline. For a CLI step
-   that's reasonable, especially if the result is cached.
+1. **Per-category Q4_K coefficients** from the small model →
+   used directly to score recipes (sum ΔPPL across categories).
+2. **A size scaling factor** (default ~`target_params / source_params`,
+   capped at maybe 5×) → multiplies the small model's coefficients
+   when applying the profile to a larger target.
+3. **Floor selection by rank, not by absolute threshold** →
+   "the most-cliff-prone category at the smallest tested type
+   gets a floor one step higher" rather than "any ΔPPL > 5.0
+   sets a floor." This makes the floor decision robust to the
+   absolute-magnitude divergence at the cliff.
 
-Leaning toward (1) for v2 ship: predictable cost, predictable
-quality, the per-size profiles are themselves reference data
-(they answer "is your model in the regime where ffn_down can
-take Q2_K"). (2) becomes the long-term escape hatch.
+For real recipes (Q4_K-and-up territory) the cliff isn't even
+in scope, so the divergence is mostly academic.
+
+**v2 plan**: ship one profile per supported architecture
+(generated from the smallest practical family member, e.g.
+Qwen3-0.6B for the Qwen3 family). Recipe builder takes the
+target model's parameter count and applies the size scaling.
+Per-(arch, size-class) profiles are not required — they'd be
+nice-to-have validation data, not a shipping requirement.
 
 ### Implementation note — heuristic over-conservative on larger models
 
@@ -344,12 +357,17 @@ they needed to be.
 
 ### Profiles archived
 
-- `/tmp/qwen3-0.6B.profile.json` — 0.6B reference, with imatrix
-- `/tmp/qwen3-1.7B.profile.json` — 1.7B reference, no imatrix
+- `data/profiles/qwen3-0.6B.profile.json` — Qwen3 family
+  reference (small-model-per-architecture profile for v2)
+- `data/profiles/qwen3-1.7B.profile.json` — same family, larger
+  target — kept as validation data for the size-scaling heuristic
 
 Both written by `LlamaSensitivityProfileBuilder.SaveToJson` —
 the public-API artifact that downstream recipe-builders will
-read. These two profiles are the first concrete inputs to v2.
+read. The 1.7B serves as the ground-truth check: a v2 recipe
+builder that applies size-scaled 0.6B coefficients to the 1.7B
+should pick essentially the same recipe a builder operating on
+the 1.7B profile directly would pick.
 
 ## Run 12 — 2026-04-27 (Cross-architecture: Llama-3.2-1B Stage 1)
 
