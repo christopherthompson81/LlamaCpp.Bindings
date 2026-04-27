@@ -225,6 +225,110 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 14 — 2026-04-27 12:30  (End-to-end: profile recipe vs stock Q4_K_M on 1.7B)
+
+First real PPL test of Adaptive Quantization v2: build three recipes
+for Qwen3-1.7B at matched-ish bpw and score wikitext-2 PPL:
+
+1. **Stock Q4_K_M** — llama.cpp's heuristic, the baseline to beat
+2. **Recipe(1.7B → 1.7B)** — 1.7B profile applied directly (same-size,
+   no scaling). Upper bound: best we can do *with* same-model data.
+3. **Recipe(0.6B → 1.7B)** — 0.6B profile with size-scaling exp=1.0
+   applied to the 1.7B target. The v2 ship path: does the cross-size
+   transfer Run 13 predicted actually hold under real PPL?
+
+All quantizations targeted ~5.05 weighted bpw (matching stock Q4_K_M's
+actual file bpw on this model). Recipes were the bpw-budget-aware
+output from `LlamaQuantRecipeFromProfile.Build` (committed in 8ac9288).
+
+### Result
+
+| recipe                  | predicted bpw | actual file bpw | wikitext-2 PPL | Δ vs stock |
+|-------------------------|---------------|------------------|----------------|------------|
+| stock Q4_K_M            | —             | 5.03             | 18.6841        | —          |
+| recipe (1.7B → 1.7B)    | 5.10          | 5.59             | **17.3094**    | **−1.37**  |
+| recipe (0.6B → 1.7B)    | 5.10          | 5.59             | **17.4129**    | **−1.27**  |
+
+(Build wall: 17.8s stock + 14.8s + 14.7s recipes; PPL 59-63s each.
+n_ctx=512, second-half scoring — same as Run 9/11/13.)
+
+### Two findings — one expected, one *very* expected
+
+**1. Cross-size transfer is essentially free.** The 0.6B-derived
+recipe lands within **0.10 PPL** of the 1.7B-derived recipe — well
+inside measurement noise on PPL. Run 13's hypothesis is confirmed
+end-to-end: a small-model-per-architecture profile, scaled linearly
+to the target's parameter count, produces a recipe that's
+operationally indistinguishable from a same-model profile recipe.
+Adaptive Quantization v2 does *not* need a profile per
+(architecture, size-class). One profile per architecture, scaled
+at apply time, is the ship plan.
+
+**2. Profile recipes meaningfully beat stock Q4_K_M on PPL** —
+~7% relative improvement (1.37 PPL drop) on wikitext-2. This
+matches the Run 9/13 prediction: the heuristic under-protects
+`ffn_up` and over-protects `ffn_down`, and the profile correctly
+re-allocates bits in line with measured sensitivity.
+
+### The caveat that turns "free" into "not free"
+
+Stock Q4_K_M lands at 5.03 bpw on the file; the recipes both land
+at 5.59 bpw — 11% larger files. The v2 recipe is not a free
+improvement; it's a "spend 0.5 bpw to drop PPL by 1.4" trade. Plus,
+this isn't what the recipe builder *intended* — it predicted 5.10
+bpw and was overruled by llama-quant.
+
+Root cause (confirmed via `llama-quant.cpp:682`):
+
+```cpp
+if (qtype != new_type) {           // override only fires when it CHANGES type
+    new_type = qtype;
+    manual = true;
+}
+// if !manual: fall through to heuristic, which can promote
+```
+
+`tt_overrides` only triggers as "manual" when the override differs
+from the default ftype's pick. Setting the recipe's "ffn_down →
+Q4_K" override on a Q4_K_M base hits `qtype == default_type`,
+`manual` stays false, and llama-quant's `use_more_bits` heuristic
+runs and re-promotes ffn_down → Q6_K on alternating layers. Same
+for `output.weight`. Net effect: our recipe can only
+*elevate* tensors above the heuristic's pick, never demote.
+
+That ~120 MiB of stuck Q6_K = the 0.5 bpw discrepancy between
+predicted (5.10) and actual (5.59).
+
+### What this means for v2
+
+- **The cross-size transfer finding is real and unaffected** by the
+  override quirk — both the 1.7B and 0.6B-derived recipes hit the
+  same actual bpw (5.59) and produced PPLs within 0.1 of each
+  other. Run 13's hypothesis is validated regardless.
+- **The "beats stock" claim is preliminary.** Comparing 5.59 vs
+  5.03 isn't a fair size-matched test. The honest follow-up is
+  Q5_K_M (closer to 5.4 bpw) as the baseline at this size class —
+  if our recipe still beats Q5_K_M on PPL, the bit-allocation is
+  genuinely smarter; if it loses, we're just buying PPL with bits.
+- **The bpw budget is broken at Q4_K-base.** To make recipes
+  actually realize their predicted bpw, run with `--ftype Q3_K_S`
+  (or similar small base) so every recipe choice is an upgrade
+  the override system applies cleanly. Track as Run 15.
+
+### Memory captured
+
+- `feedback_recipe_stock_match.md`: when our recipe matches a
+  stock heuristic, surface as warning not blocker (user feedback
+  during plan).
+
+### Next
+
+Run 15: rerun this same comparison with `--ftype Q3_K_S` as the
+base for the recipe quants, so the recipe builder's predicted bpw
+is what actually ships. Plus a Q5_K_M baseline at matched bpw —
+the proper apples-to-apples test of whether profile-built bit
+allocation beats heuristic bit allocation at the same size.
+
 ## Run 13 — 2026-04-27 11:32  (Cross-size: Qwen3-0.6B vs Qwen3-1.7B, same family)
 
 Run 12 settled cross-architecture (Qwen3 ≠ Llama). Run 13 asks a
