@@ -33,10 +33,17 @@ studied — the heuristic should be approximately right.
   doesn't show up loudly in the MSE measurement at all. So the
   recipe makes 3 of 4 worst-possible category choices.
 
-**Path forward**: per-category PPL coefficients (Stage 1, this run)
-+ per-(category × bpw) coefficients (Stage 2, future) → recipe v2
+**Path forward**: per-category PPL coefficients (Stage 1, Run 9)
++ per-(category × bpw) coefficients (Stage 2, future) → recipe
 that minimizes predicted ΔPPL subject to budget rather than per-
-tensor MSE thresholds. See Run 9 for full proposal.
+tensor MSE thresholds.
+
+**Recipe v2 (Run 10) validates this path** — a hand-coded swap of
+`ffn_up` ↔ `ffn_down` use_more_bits bumps, derived directly from
+Stage 1's ranking, beats stock Q4_K_M by 0.29 PPL at near-matched
+bpw (5.17 vs 5.09). The ablation coefficients are actionable; the
+heuristic has at least one exploitable mistake on this architecture.
+See Run 10 for the full table and the future-work shortlist.
 
 The QK-norm signature stays a useful diagnostic; the recipe-builder
 needs a different objective function. Per-tensor imat-weighted MSE
@@ -198,6 +205,94 @@ empirically the loudest), can't see this — it's hard-coded to the
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
+
+## Run 10 — 2026-04-27 (Recipe v2: validate the ablation findings)
+
+Stage 1 (Run 9) said the Q4_K_M heuristic over-protects `ffn_down` and
+under-protects `ffn_up`. Recipe v2 swaps just that — keep the rest of
+the heuristic identical, but move the `use_more_bits` bumps from
+`ffn_down` to `ffn_up`. If the ablation coefficients are actionable,
+this should beat stock Q4_K_M at near-matched bpw.
+
+**Recipe v2** (per-category):
+
+  | category    | Q4_K_M heuristic              | recipe v2                     | change |
+  |-------------|-------------------------------|-------------------------------|--------|
+  | attn_v      | Q6_K via use_more_bits, else Q5_K | (unchanged)                | —      |
+  | ffn_up      | Q4_K (default)                | Q6_K for first n/16; Q5_K via use_more_bits; else Q4_K | **bumped** |
+  | ffn_down    | Q6_K for first n/16; Q5_K via use_more_bits; else Q4_K | Q4_K (default) | **demoted** |
+  | attn_q,k,output, ffn_gate | Q4_K           | Q4_K                          | —      |
+  | output      | Q6_K                          | Q6_K                          | —      |
+  | token_embd  | Q4_K                          | Q4_K                          | —      |
+
+The swap is approximately bpw-neutral on Qwen3-0.6B because both
+`ffn_up` and `ffn_down` are 3M-param tensors per layer.
+
+**Result**:
+
+  | variant                          | bpw  | size    | PPL          | ΔPPL vs F16 |
+  |----------------------------------|------|---------|--------------|-------------|
+  | F16 baseline                     | 16.00| 1439 MB | 21.4720      | 0           |
+  | stock Q4_K_M (heuristic)         | 5.09 | 484 MB  | 22.4027      | +0.93       |
+  | **recipe v2** (ablation-informed)| **5.17**| 492 MB | **22.1103**| **+0.64**   |
+  | recipe at τ=0.00456 (Run 8)      | 5.11 | 486 MB  | 26.2425      | +4.77       |
+
+Recipe v2 delivers 0.29 PPL lower than stock Q4_K_M with 1.6 % more
+bytes (5.17 vs 5.09 BPW). To rule out "won on extra budget" — the
+marginal Q4_K_M → F16 yields ~0.085 PPL/BPW, so 0.08 BPW of extra
+budget alone would buy ~0.007 PPL improvement. Recipe v2's measured
+improvement is ~40× that — **the win is in the allocation, not the
+budget**.
+
+### Verdict — the ablation methodology works
+
+Three things this confirms:
+
+1. **The ablation rankings translate into PPL impact.** Stage 1 said
+   `ffn_up` is the most-sensitive category and `ffn_down` is the
+   least-sensitive; swapping just the protection between them moved
+   PPL by 0.29.
+2. **The Q4_K_M heuristic has a real, exploitable mistake on Qwen3-
+   0.6B.** Two of its seven category-level decisions are inverted
+   for this architecture; fixing one of them (the ffn_up/ffn_down
+   swap) is a buildable improvement.
+3. **A coefficient-driven recipe builder is the right next step.**
+   v2 was a hand-coded swap based on the Stage-1 ranking. A v3
+   could solve a real optimization (minimize ΔPPL subject to bpw
+   budget) over the (category, bpw) coefficient table from Stage 2.
+
+### Where to go from here (the real future-work list)
+
+1. **Stage 2: (category × bpw) coefficient table.** Repeat single-
+   category ablation at Q2_K and Q6_K. Yields per-category marginal
+   PPL/BPW. Lets us answer "should `attn_v` be Q5_K/Q6_K (heuristic)
+   or Q6_K-uniform?" by direct measurement.
+2. **Stage 3: depth bucketing.** For each category, ablate
+   early/middle/late thirds separately. Probably matters most for
+   attention tensors (Run 5 showed late-layer attn_k MSE is wildly
+   different from early). The use_more_bits rule already does
+   something like this implicitly; we can do better with measured
+   coefficients.
+3. **Recipe v3 (constrained optimization).** Given the (category,
+   depth, bpw) coefficient table, find the recipe that minimizes
+   predicted ΔPPL subject to total bpw ≤ target. Solvable as
+   integer programming or simple greedy with budget tracking.
+4. **Cross-architecture validation.** Build the same table for
+   Llama-3.2-1B (no QK-norm) and a bigger Qwen3 (1.7B / 4B) to
+   confirm the coefficient pattern is family-stable. The
+   GGUFLab tool would then ship per-architecture tables.
+5. **Re-examine the imatrix's role.** The imat-weighted MSE didn't
+   predict PPL at the *category* level (Run 8 lost), but it might
+   still predict PPL at the *per-tensor-within-a-category* level
+   ("which `ffn_up` of which layer should I bump first?"). Worth
+   testing — that would integrate the QK-norm finding back into
+   the recipe builder usefully.
+
+The QK-norm story (Runs 1-5) is now correctly contextualized: it's
+a real measurement finding about K/Q tensors, but those tensors
+are mid-PPL-coefficient, so chasing the MSE signal alone leads
+the recipe astray. The fix is a different objective function, not
+a different MSE measurement.
 
 ## Run 9 — 2026-04-27 (Stage 1 ablation: per-category PPL coefficients)
 
