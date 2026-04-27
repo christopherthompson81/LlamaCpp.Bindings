@@ -368,18 +368,26 @@ public static class LlamaSensitivityProfileBuilder
                         break;
                     }
                 }
-                categories[cat] = new LlamaSensitivityCategoryCoefficient(cat, deltas, floor);
+                categories[cat] = new LlamaSensitivityCategoryCoefficient(deltas, floor);
             }
 
             progress?.Report(new Progress(Stage.Done, scored, totalJobs));
+            var provenance = new LlamaSensitivityProvenance(
+                Method:               "ablation",
+                SourceModel:          Path.GetFileName(sourceModelPath),
+                SourceParameterCount: ResolveParameterCount(ggufFile),
+                Corpus:               Path.GetFileName(corpusPath),
+                BuiltAtUtc:           DateTime.UtcNow,
+                BuilderVersion:       BuilderVersionString);
             return new LlamaSensitivityProfile(
+                SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
                 ArchitectureId:        architectureId,
                 LayerCount:            layerCount,
-                SourceModelPath:       sourceModelPath,
-                CalibrationCorpusName: Path.GetFileName(corpusPath),
+                FamilyNotes:           null,
+                Provenance:            provenance,
                 F16BaselinePerplexity: baseline,
-                Categories:            categories,
-                BuiltAtUtc:            DateTime.UtcNow);
+                BaselineContextSize:   pplOpts.ContextSize,
+                Categories:            categories);
         }
         finally
         {
@@ -536,6 +544,28 @@ public static class LlamaSensitivityProfileBuilder
             _                    => -1,
         };
     }
+
+    /// <summary>
+    /// Total parameter count = sum over all weight tensors of the
+    /// product of their dimensions. Used by the recipe builder's
+    /// size-scaling factor (target_params / source_params), so we
+    /// store it in the profile's provenance rather than recomputing
+    /// it later from a possibly-missing source file.
+    /// </summary>
+    private static long ResolveParameterCount(LlamaGgufFile file)
+    {
+        long total = 0;
+        foreach (var t in file.Tensors)
+        {
+            long n = 1;
+            foreach (var d in t.Dimensions) n *= (long)d;
+            total += n;
+        }
+        return total;
+    }
+
+    private static readonly string BuilderVersionString =
+        $"LlamaSensitivityProfileBuilder/{typeof(LlamaSensitivityProfileBuilder).Assembly.GetName().Version}";
 
     /// <summary>
     /// Quantize <paramref name="source"/> to <paramref name="output"/>
