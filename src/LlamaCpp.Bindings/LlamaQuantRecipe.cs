@@ -22,7 +22,15 @@ public sealed record LlamaQuantRecipeEntry(
     /// as a flag in the GUI — they're either the threshold being too
     /// tight or a tensor that's fundamentally hard to quantize.
     /// </summary>
-    bool ExceededThreshold);
+    bool ExceededThreshold,
+    /// <summary>
+    /// Element count for this tensor (product of dimensions). Used to
+    /// compute element-weighted average bpw, which is what determines
+    /// actual file size. <c>0</c> when unknown — recipes built from
+    /// the v1 sensitivity sweep don't carry counts; recipes built from
+    /// a profile do (the builder reads them from the target GGUF).
+    /// </summary>
+    long ElementCount = 0);
 
 /// <summary>
 /// Per-tensor ftype assignment derived from a sensitivity-sweep score
@@ -178,31 +186,35 @@ public sealed record LlamaQuantRecipe(
     }
 
     /// <summary>
-    /// Estimate the average bits-per-element across this recipe's
-    /// covered tensors. Useful for "this recipe lands at ~5.2 bpw"
-    /// summaries in the GUI without re-quantizing.
+    /// Element-weighted average bits-per-element when the recipe carries
+    /// per-entry element counts (profile-built recipes do; older
+    /// MSE-sweep recipes don't). Falls back to the unweighted mean
+    /// otherwise, since that's the only thing we can compute without
+    /// counts. The weighted form is the honest "what bpw will this
+    /// recipe actually produce in the GGUF" estimate.
     /// </summary>
     public double AverageBitsPerElement
     {
         get
         {
             if (Entries.Count == 0) return double.NaN;
-            // Unweighted mean — every tensor counts equally. A weighted
-            // version (by element count) is a more honest "what's the
-            // file size going to be" estimate, but we don't carry
-            // element counts here yet; callers with the score table
-            // can compute it themselves.
-            double sum = 0;
-            int n = 0;
+            long totalElements = 0;
+            double weightedSum = 0;
+            int unweightedCount = 0;
+            double unweightedSum = 0;
             foreach (var e in Entries)
             {
-                if (!double.IsNaN(e.BitsPerElement))
+                if (double.IsNaN(e.BitsPerElement)) continue;
+                if (e.ElementCount > 0)
                 {
-                    sum += e.BitsPerElement;
-                    n++;
+                    totalElements += e.ElementCount;
+                    weightedSum += e.BitsPerElement * e.ElementCount;
                 }
+                unweightedCount++;
+                unweightedSum += e.BitsPerElement;
             }
-            return n > 0 ? sum / n : double.NaN;
+            if (totalElements > 0) return weightedSum / totalElements;
+            return unweightedCount > 0 ? unweightedSum / unweightedCount : double.NaN;
         }
     }
 
