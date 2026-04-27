@@ -202,14 +202,20 @@ public static class LlamaPerplexity
                 }
 
                 // Per-chunk wall is dominated by the GPU→CPU logit readback
-                // (65% on Qwen3-1.7B / RTX 3090, observed via temporary
-                // instrumentation): ~150 MB of logits per chunk transferred
-                // lazily as the softmax loop touches managed-memory pages.
-                // The compute (TensorPrimitives.Max/Subtract/Exp/Sum) is
-                // ~32%; GPU forward is just 2%. The eventual fix is a
-                // device-side logsumexp+gather subgraph that returns only
-                // (target_logit, logsumexp) per position — kills the
-                // readback. Until that lands, this is what we've got.
+                // (~65% on Qwen3-1.7B / RTX 3090 — confirmed via two
+                // trace iterations + a ComputeBatchedAsync sweep): ~150 MB
+                // of logits per chunk arrive lazily as managed-memory
+                // page faults during softmax touches. Softmax compute is
+                // ~16s genuine compute, already vectorized via
+                // TensorPrimitives. ComputeBatchedAsync (n_seq=2,4,8)
+                // gives at most 5% wall reduction over the sequential
+                // path — chunks share the GPU forward but readback still
+                // serializes. The only meaningful win from here is a
+                // device-side logsumexp+gather subgraph (return only
+                // target_logit + logsumexp per position) — ~3× wall.
+                // Tracked but not on the critical path; the parallel
+                // runner amortizes the per-job 50s cost when multiple
+                // PPL jobs run concurrently.
                 int firstScored = options.ScoreSecondHalfOnly ? chunkSize / 2 : 1;
                 var (chunkNllSum, chunkScored) = ParallelChunkScore(
                     context, tokens, start, firstScored, chunkSize, nVocab,
