@@ -16,6 +16,7 @@ internal static class Program
         string? input = null, output = null, corpus = null, imatrix = null, workDir = null;
         int concurrency = 0;  // 0 = auto (LlamaPerplexity.RecommendConcurrency)
         var candidateTypes = new List<LlamaTensorType> { LlamaTensorType.Q2_K, LlamaTensorType.Q4_K, LlamaTensorType.Q6_K };
+        List<string>? categories = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -28,6 +29,9 @@ internal static class Program
                 case "--work-dir"    when i + 1 < args.Length: workDir = args[++i]; break;
                 case "--concurrency" when i + 1 < args.Length: concurrency = int.Parse(args[++i]); break;
                 case "--candidates"  when i + 1 < args.Length: candidateTypes = ParseCandidates(args[++i]); break;
+                case "--categories"  when i + 1 < args.Length:
+                    categories = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                    break;
                 case "-h": case "--help": PrintUsage(); return 0;
                 default: Console.Error.WriteLine($"unknown arg: {args[i]}"); PrintUsage(); return 2;
             }
@@ -68,17 +72,19 @@ internal static class Program
             Console.Write($"\r[{p.Stage}] {p.CompletedJobs}/{p.TotalJobs}  {p.CurrentLabel ?? ""}                    ");
         });
 
+        var optionsBuilt = new LlamaSensitivityProfileBuilder.Options
+        {
+            CandidateTypes   = candidateTypes,
+            ImatrixPath      = imatrix,
+            MaxConcurrent    = concurrency,
+            WorkingDirectory = workDir,
+        };
+        if (categories is not null) optionsBuilt.Categories = categories;
         var profile = await LlamaSensitivityProfileBuilder.BuildAsync(
             sourceModelPath: input,
             corpusPath:      corpus,
-            options: new LlamaSensitivityProfileBuilder.Options
-            {
-                CandidateTypes   = candidateTypes,
-                ImatrixPath      = imatrix,
-                MaxConcurrent    = concurrency,
-                WorkingDirectory = workDir,
-            },
-            progress: progress);
+            options:         optionsBuilt,
+            progress:        progress);
         sw.Stop();
         profile.SaveToJson(output);
 
@@ -123,6 +129,9 @@ internal static class Program
           --imatrix <path>       imatrix GGUF for imatrix-aware quantization
           --output <path>        profile JSON destination (default: alongside input)
           --candidates <csv>     candidate types to ablate at (default: Q2_K,Q4_K,Q6_K)
+          --categories <csv>     weight categories to score (default: 7 standard
+                                 transformer cats; expand with output.weight,
+                                 token_embd.weight for per-tensor coverage)
           --concurrency <n>      concurrent PPL jobs (default: auto — picks based on
                                  file sizes vs available VRAM, capped at half the
                                  logical CPU cores). Pass an explicit value to override.
