@@ -6,16 +6,54 @@ namespace LlamaCpp.Bindings;
 public sealed class LlamaQuantRecipeFromProfileOptions
 {
     /// <summary>
-    /// Type to assign to weight tensors that don't match any of the
-    /// profile's categories (e.g. <c>token_embd.weight</c>,
-    /// <c>output.weight</c> when the profile doesn't include an
-    /// embedding category). Default Q4_K. The recipe builder applies
-    /// this type to uncategorized weights without optimizing them
-    /// against the bpw budget — they're assumed to be a small fraction
-    /// of total weight bytes. If your profile has dedicated categories
-    /// for token_embd / output, no uncategorized fallback is needed.
+    /// Pattern-based protection for uncategorized weight tensors.
+    /// Maps a tensor-name pattern (suffix-match if the pattern contains
+    /// a dot, contains-match otherwise — same matcher as profile
+    /// categories) to a minimum type to use when the tensor doesn't
+    /// match any profile category. First match wins.
     /// </summary>
-    public LlamaTensorType UncategorizedType { get; set; } = LlamaTensorType.Q4_K;
+    /// <remarks>
+    /// <para>
+    /// Why this exists: Run 15 showed that a profile without
+    /// <c>output.weight</c> as a category shipped a 4.7 bpw recipe
+    /// that put <c>output.weight</c> at Q4_K (the
+    /// <see cref="UncategorizedDefault"/>) and lost 3 PPL to stock
+    /// Q4_K_M, because llama-quant's heuristic protects
+    /// <c>output.weight</c> at Q6_K. Hand-rolled per-architecture
+    /// protection lists are brittle; this generic pattern map preserves
+    /// the spirit of llama-quant's <c>use_more_bits</c> table for the
+    /// few tensors known to be high-leverage across all architectures.
+    /// </para>
+    /// <para>
+    /// Defaults mirror what stock <c>llama_tensor_get_type</c> does on
+    /// the highest-impact non-categorical tensors. Override or extend
+    /// to cover architecture-specific cases (e.g. expert routers in
+    /// MoE architectures).
+    /// </para>
+    /// </remarks>
+    public IReadOnlyDictionary<string, LlamaTensorType> UncategorizedProtections { get; set; } =
+        new Dictionary<string, LlamaTensorType>(StringComparer.Ordinal)
+        {
+            // Stock Q4_K_M assigns output.weight → Q6_K via use_more_bits.
+            // The lm_head projection is the highest-leverage single tensor
+            // in most decoder-only models; demoting it to Q4_K loses
+            // ~3 PPL on Qwen3-1.7B (Run 15). Q6_K gives the protection
+            // back without completely fixing what a proper profile
+            // category would do.
+            ["output.weight"] = LlamaTensorType.Q6_K,
+            // Stock Q4_K_M leaves token_embd.weight at Q4_K. Keeping it
+            // there matches stock; uncategorized handling will respect
+            // this floor.
+            ["token_embd.weight"] = LlamaTensorType.Q4_K,
+        };
+
+    /// <summary>
+    /// Default type for uncategorized weight tensors that don't match
+    /// any pattern in <see cref="UncategorizedProtections"/>. Default
+    /// Q4_K — picks up the long tail of tensors the profile didn't
+    /// characterize and there's no "high leverage" prior on.
+    /// </summary>
+    public LlamaTensorType UncategorizedDefault { get; set; } = LlamaTensorType.Q4_K;
 
     /// <summary>
     /// Exponent applied to the parameter-count ratio when projecting
@@ -175,14 +213,27 @@ public static class LlamaQuantRecipeFromProfile
         }
 
         // ---- 5. Element-count totals per category (for bpw accounting) ----
+        // For uncategorized tensors we also resolve the per-tensor protection
+        // type up front, so bpw enumeration sees a constant uncategorized
+        // bit-contribution rather than a per-tensor calculation in the
+        // hot loop.
         var categoryElements = new Dictionary<string, long>(StringComparer.Ordinal);
+        var uncategorizedTypeByName = new Dictionary<string, LlamaTensorType>(StringComparer.Ordinal);
         long uncategorizedElements = 0;
+        double uncategorizedBitsTotal = 0;
         foreach (var (name, elements) in weightTensors)
         {
             if (tensorCategory.TryGetValue(name, out var cat))
+            {
                 categoryElements[cat] = categoryElements.GetValueOrDefault(cat) + elements;
+            }
             else
+            {
+                var resolved = ResolveUncategorizedType(name, opts);
+                uncategorizedTypeByName[name] = resolved;
                 uncategorizedElements += elements;
+                uncategorizedBitsTotal += LlamaQuantRecipe.GetBitsPerElement(resolved) * elements;
+            }
         }
         long totalElements = categoryElements.Values.Sum() + uncategorizedElements;
         if (totalElements <= 0)
@@ -235,7 +286,7 @@ public static class LlamaQuantRecipeFromProfile
                 bpwSum += LlamaQuantRecipe.GetBitsPerElement(type) * categoryElements.GetValueOrDefault(cat);
                 pplSum += ScaledDelta(cat, type);
             }
-            bpwSum += LlamaQuantRecipe.GetBitsPerElement(opts.UncategorizedType) * uncategorizedElements;
+            bpwSum += uncategorizedBitsTotal;
             var bpw = bpwSum / totalElements;
 
             if (pplSum < bestOverallPpl)
@@ -267,8 +318,8 @@ public static class LlamaQuantRecipeFromProfile
             }
             else
             {
-                chosen = opts.UncategorizedType;
-                estDelta = 0.0;  // no data — assume default is right
+                chosen = uncategorizedTypeByName[name];
+                estDelta = 0.0;  // no data — assume protection-table choice is right
             }
             entries.Add(new LlamaQuantRecipeEntry(
                 TensorName:        name,
@@ -312,6 +363,24 @@ public static class LlamaQuantRecipeFromProfile
             EnumerateAssignments(categories, index + 1, choices, current, visit);
         }
         current.Remove(cat);
+    }
+
+    /// <summary>
+    /// Resolve an uncategorized weight tensor's type by walking the
+    /// protection patterns. Returns the matched protection type, or
+    /// <see cref="LlamaQuantRecipeFromProfileOptions.UncategorizedDefault"/>
+    /// when nothing matches. Pattern-match semantics mirror
+    /// <see cref="CategoryMatch"/>: dot in pattern → suffix; no dot →
+    /// contains.
+    /// </summary>
+    private static LlamaTensorType ResolveUncategorizedType(
+        string tensorName, LlamaQuantRecipeFromProfileOptions opts)
+    {
+        foreach (var (pattern, type) in opts.UncategorizedProtections)
+        {
+            if (CategoryMatch(tensorName, pattern)) return type;
+        }
+        return opts.UncategorizedDefault;
     }
 
     /// <summary>Same matcher as <see cref="LlamaSensitivityProfileBuilder"/>.</summary>

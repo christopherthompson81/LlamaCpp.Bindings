@@ -106,6 +106,59 @@ public class QuantRecipeFromProfileTests
     }
 
     [Fact]
+    public void UncategorizedProtections_OutputWeightDefaultsToQ6K()
+    {
+        // The default protection table puts output.weight at Q6_K — even
+        // when the profile knows nothing about it. Run 15 showed that
+        // demoting output.weight to Q4_K (the old UncategorizedType
+        // default) costs ~3 PPL on Qwen3-1.7B. The protection should
+        // hold regardless of the bpw budget — we'd rather pay a bpw
+        // penalty than ship output.weight at Q4_K.
+        var profile = SyntheticProfile();
+        var layout = new List<(string Name, long Elements)>
+        {
+            ("blk.0.ffn_up.weight",   1_000_000L),
+            ("blk.0.ffn_gate.weight", 1_000_000L),
+            ("output.weight",         1_000_000L),    // uncategorized in synthetic profile
+            ("token_embd.weight",     1_000_000L),    // uncategorized in synthetic profile
+        };
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5);
+
+        var output = recipe.Entries.First(e => e.TensorName == "output.weight");
+        Assert.Equal(LlamaTensorType.Q6_K, output.ChosenType);
+
+        var embd = recipe.Entries.First(e => e.TensorName == "token_embd.weight");
+        Assert.Equal(LlamaTensorType.Q4_K, embd.ChosenType);
+    }
+
+    [Fact]
+    public void UncategorizedProtections_CallerCanOverride()
+    {
+        // The protection table is just a default — callers can replace
+        // it. Pass an empty map and observe everything fall to UncategorizedDefault.
+        var profile = SyntheticProfile();
+        var layout = new List<(string Name, long Elements)>
+        {
+            ("blk.0.ffn_up.weight",   1_000_000L),
+            ("blk.0.ffn_gate.weight", 1_000_000L),
+            ("output.weight",         1_000_000L),
+        };
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                UncategorizedProtections = new Dictionary<string, LlamaTensorType>(),
+                UncategorizedDefault = LlamaTensorType.Q4_K,
+            });
+
+        var output = recipe.Entries.First(e => e.TensorName == "output.weight");
+        Assert.Equal(LlamaTensorType.Q4_K, output.ChosenType);
+    }
+
+    [Fact]
     public void Floor_NeverChosenBelowFloorEvenAtAggressiveBudget()
     {
         // ffn_up has a Q4_K floor in the synthetic profile. Even when
