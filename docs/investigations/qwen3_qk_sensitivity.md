@@ -206,6 +206,111 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 11 — 2026-04-27 (Stage 2: per-(category × bpw) — and the ffn_down cliff)
+
+Stage 1 (Run 9) measured ΔPPL per category at one bpw point (Q4_K).
+Stage 2 fills in the curve at Q2_K and Q6_K to answer: are the
+per-category coefficients **linear in bpw**, or do some categories
+have non-linear "knees" where dropping below a threshold is
+catastrophic?
+
+**Setup**: same single-category ablation protocol, target type
+varied across {Q2_K, Q4_K, Q6_K}, others held at F16. Reuses the
+F16 baseline from Run 9 (PPL 21.4720). 14 new runs (7 categories ×
+2 new bpw points). Total bench time ~50 min.
+
+### Result — full (category × bpw) ΔPPL table
+
+ΔPPL when only this category is quantized to the listed type, vs
+F16 baseline. **Higher is worse.**
+
+| category       | Q6_K (6.6 bpw) | Q4_K (4.5 bpw) | Q2_K (2.6 bpw) |
+|----------------|-----|-----|-----|
+| `attn_q`       | −0.03 | +0.27 | +4.61   |
+| `attn_k`       | −0.05 | +0.30 | +4.69   |
+| `attn_v`       | −0.12 | +0.44 | **+18.32**  |
+| `attn_output`  | −0.02 | +0.08 | +4.02   |
+| `ffn_up`       | +0.03 | +0.46 | **+12.75**  |
+| `ffn_gate`     | −0.04 | +0.08 | +7.19   |
+| `ffn_down`     | +0.01 | +0.03 | **+124.64** |
+
+(Slightly-negative numbers at Q6_K are PPL measurement noise — Q6_K is
+essentially F16-equivalent for every category. The "improvement" is
+~±0.1 PPL, well within run-to-run variance.)
+
+### Key finding: `ffn_down` has a catastrophic knee between Q4_K and Q2_K
+
+At Q4_K, `ffn_down` is the *least* sensitive category (+0.03 PPL).
+At Q2_K, it's the *most* sensitive by a wide margin (+124.64 PPL —
+PPL goes from 21.47 to 146.11 from quantizing ffn_down alone). That's
+a ~4000× jump in ΔPPL for a 1.9 bpw drop. The category is essentially
+free to quantize down to Q4_K, then falls off a cliff.
+
+**This rehabilitates the heuristic's `ffn_down` protection.** Stage 1
+read as "the heuristic over-protects ffn_down." That was true *at
+Q4_K*. But the heuristic's `use_more_bits` bumps to Q5_K/Q6_K aren't
+wasted — they're keeping ffn_down safely above its knee. The
+heuristic's instinct here is correct *as a safety margin*, even if
+the bumps look like over-spending at Q4_K-and-above.
+
+Recipe v2 (Run 10) accidentally got this right by demoting ffn_down
+to *exactly* Q4_K (not lower). If v2 had pushed ffn_down to IQ4_XS
+or Q3_K, it would have started picking up the knee penalty.
+
+### Other categories' shape
+
+`attn_v` and `ffn_up` are also notably non-linear — both have
+significant Q2_K penalties (+18.32 and +12.75) compared to a steady-
+ish progression from Q6_K → Q4_K. Their knees are real but less
+extreme than `ffn_down`'s.
+
+The remaining four (`attn_q`, `attn_k`, `attn_output`, `ffn_gate`)
+have nearly-linear curves — Q2_K penalty is ~3-7 PPL, gradual not
+catastrophic. These are "robust" categories you can push to lower
+bpw with predictable degradation.
+
+### What Stage 2 means for recipe-builder design
+
+A τ-on-MSE rule (Recipe v1, retracted in Run 8) treats every tensor
+the same way. It can't see knees because it doesn't model the
+shape of each category's PPL curve.
+
+A coefficient-driven rule needs to know:
+1. The **per-category coefficient at Q4_K** (Stage 1) — first-order
+   ranking. ffn_up most sensitive, ffn_down least. Use this to fix
+   the ffn_up/ffn_down inversion in the heuristic.
+2. The **per-category knee bpw** (Stage 2) — minimum-safe bpw before
+   things go catastrophic. ffn_down: knee around Q3_K/Q2_K, do not
+   cross. attn_v: similar. ffn_up: similar.
+3. The **per-category slope between Q4_K and the knee** — for tensors
+   you might bump above Q4_K, what's the marginal PPL improvement?
+
+Stage 2 supplies (2) and gives a partial answer to (3). The right
+recipe-builder shape is now clearer:
+
+```
+allocate_budget(target_bpw, knees, slopes):
+  start every category at Q4_K            # known safe
+  rank categories by improvement-per-bpw: # high-slope = best ROI
+    [ffn_up, attn_v, ...] → bump to Q5_K / Q6_K while budget remains
+  never drop a category below its knee bpw
+```
+
+That's effectively what the Q4_K_M heuristic already does *if its
+priorities are correct*. Recipe v2 (Run 10) was the heuristic with
+the priorities corrected for `ffn_up`. v3 with the full Stage-2
+table could squeeze out more.
+
+### Open question still: cross-architecture
+
+Everything so far is on Qwen3-0.6B. The heuristic's `ffn_down` cliff
+might be QK-norm-specific, or it might be universal. **Run 12
+(Llama-3.2-1B Stage 1)** is in flight to find out — if Llama also
+shows ffn_up > ffn_down at Q4_K, the inversion is universal and the
+heuristic just needs an update. If the ranking matches the
+heuristic's priorities on Llama, the user's prediction is right and
+the GGUFLab tool needs **per-architecture sensitivity profiles**.
+
 ## Run 10 — 2026-04-27 (Recipe v2: validate the ablation findings)
 
 Stage 1 (Run 9) said the Q4_K_M heuristic over-protects `ffn_down` and
