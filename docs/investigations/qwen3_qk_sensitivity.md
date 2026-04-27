@@ -17,10 +17,18 @@ the most-sensitive attention tensor.
 ## Run 1 — 2026-04-26 16:01
 
 **Command**: GGUFLab → Adaptive Quantization → Run sensitivity sweep
-on `~/.cache/llama-models/Qwen/Qwen3-0.6B/Qwen3-0.6B.F16.gguf`. No
-imatrix supplied. Default 11 candidates: F16, BF16, Q8_0, Q6_K, Q5_K,
-Q4_K, IQ4_XS, Q3_K, IQ3_S, Q2_K, IQ2_S. 198 tensors scored after
-filtering 1-D norms.
+on `~/.cache/llama-models/Qwen/Qwen3-0.6B/Qwen3-0.6B.F16.gguf`.
+The GUI's `ResolveImatrixForGguf` auto-fill picked up the sidecar
+`Qwen3-0.6B.F16.imatrix.gguf` next to the model, so **this sweep
+was imatrix-weighted** (every score row carries `imatrixWeighted=true`,
+and `result.ImatrixPath` is set). The first writeup of this run
+incorrectly described it as unweighted; that was sloppy and is
+corrected here. The imatrix-weighted MSE formula uses per-column
+importance, so the absolute numbers below differ in units from a
+naive sweep — see Run 4 for the unweighted re-run with matching units.
+Default 11 candidates: F16, BF16, Q8_0, Q6_K, Q5_K, Q4_K, IQ4_XS,
+Q3_K, IQ3_S, Q2_K, IQ2_S. 198 tensors scored after filtering 1-D
+norms.
 
 **Output**: `~/.cache/llama-models/Qwen/Qwen3-0.6B/Qwen3-0.6B.F16.scores.json`
 (2178 rows = 198 tensors × 11 candidates).
@@ -106,10 +114,12 @@ empirically the loudest), can't see this — it's hard-coded to the
 
 ## Caveats
 
-- **No imatrix**. The sweep was unweighted. With imatrix the late
-  `attn_k`/`attn_q` numbers might come down somewhat (the imatrix
-  picks up activation scale), but the contrast with the heuristic's
-  `attn_v` priority is unlikely to flip.
+- **Imatrix-weighted measurement**. The sweep used the sidecar
+  imatrix (see corrected note in Run 1 above). Imatrix weighting
+  tends to *reduce* worst-case rel-MSE because errors in low-importance
+  columns get small weight — so the 0.76 rel-MSE on late `attn_k`
+  is the *favorable* measurement. An unweighted re-run can only go
+  the same way or worse (Run 4 confirms which).
 - **Round-trip MSE ≠ output PPL**. A 0.74 rel-MSE on one tensor is
   not by itself a 0.74 PPL hit on the model — downstream layers can
   partially compensate. The right next step is a real Q4_K_M vs
@@ -124,9 +134,11 @@ empirically the loudest), can't see this — it's hard-coded to the
    (16 layers, no QK-norm) is the cleanest counterfactual at
    ~2.5 GB F16. If the heuristic's pattern matches the recipe's
    on that model, QK-norm is confirmed as the divergence cause.
-2. Re-sweep Qwen3-0.6B *with* an imatrix (built from wikitext-2 in
-   the Imatrix tool) and re-run the analysis to see how column
-   weighting shifts the picks.
+   *(Done in Run 3.)*
+2. Re-sweep Qwen3-0.6B *without* an imatrix to put the units on the
+   same footing as Run 3 (Llama-3.2-1B was unweighted). The Run 1
+   numbers were imatrix-weighted, which is the *favorable* form;
+   the unweighted re-run is more conservative.  *(Pending in Run 4.)*
 3. Side-by-side perplexity: stock Q4_K_M vs the recipe at the same
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
@@ -146,7 +158,10 @@ ladder fully populated.
 
 **Source**: `bartowski/Llama-3.2-1B-Instruct-GGUF` →
 `Llama-3.2-1B-Instruct-f16.gguf` (2.4 GB). 16 layers, MHA without
-QK-norm. Sweep ran in 6.4 min wall, 3.4× CPU speedup vs serial.
+QK-norm. **Sweep was unweighted** — no imatrix sidecar exists for
+this model in our cache, so the comparison numbers below are naive
+MSE. Run 4 re-runs Qwen3-0.6B unweighted to put the contrast on
+matching units. Sweep ran in 6.4 min wall, 3.4× CPU speedup vs serial.
 
 **Command**:
 ```bash
