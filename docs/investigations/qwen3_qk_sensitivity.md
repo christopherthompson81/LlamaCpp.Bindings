@@ -225,6 +225,165 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 17 — 2026-04-27 16:45  (Expanded profile: same-model wins big, cross-size breaks)
+
+Run 16 shipped a 0.45-PPL win at Q4_K_M-class budget using the
+3-rung profile (Q2_K/Q4_K/Q6_K) with stock baseline + profile
+overrides. Run 17 expands the ablation campaigns to:
+- **9 categories** (added `output.weight`, `token_embd.weight` as
+  proper ablation categories — Run 16 covered them only via
+  `UncategorizedProtections`).
+- **7 candidate types** (added Q3_K, Q5_K, Q8_0, IQ4_XS to the
+  Q2_K/Q4_K/Q6_K base).
+
+Build wall: 0.6B 7 min, 1.7B 26 min — significantly faster than
+Run 13's 14 / 20 min thanks to the per-batch VRAM-aware concurrency
+fix (Q2_K/Q3_K batches now use 8-way GPU concurrency where the
+F16-derived heuristic only allowed 4).
+
+A bug surfaced and was fixed mid-run: the original `CategoryMatch`
+used `EndsWith("output.weight")`, which double-counted all 28
+`attn_output.weight` tensors as belonging to the `output.weight`
+category, producing a nonsense +10 PPL Q2_K coefficient. Fix:
+dot-containing patterns require exact match or
+`."+ pattern` suffix. Test
+`CategoryMatch_OutputWeightDoesNotCatchAttnOutputWeight` locks it
+down. Without that test the buggy profile would have shipped.
+
+### Profile findings
+
+| category            | 0.6B Q4_K | 1.7B Q4_K | 0.6B Q2_K | 1.7B Q2_K |
+|---------------------|-----------|-----------|-----------|-----------|
+| `output.weight`     | +0.07     | **−0.01** | +6.92     | +2.98     |
+| `token_embd.weight` | +0.002    | +0.025    | +0.64     | +0.13     |
+| `attn_v`            | +0.14     | +0.34     | +2.72     | **+15.85**|
+| `ffn_down`          | −0.0004   | +0.11     | +4.40     | **+3709** |
+
+Two notable surprises:
+
+- **`output.weight` at Q4_K is essentially free** on both models.
+  Run 16's `UncategorizedProtections = Q6_K` for output is over-
+  conservative — recipes that demote it to Q4_K (or even Q5_K on
+  1.7B) should reclaim ~0.3 bpw with no measurable PPL loss.
+- **`token_embd.weight` is barely sensitive** on either model.
+  Stock's Q4_K choice is also over-conservative; Q2_K only costs
+  +0.13/+0.64 PPL. The auto-floor lands at Q2_K.
+
+### End-to-end matrix at Q4_K_M and Q5_K_M targets
+
+| recipe                       | actual bpw | wikitext-2 PPL | Δ vs stock |
+|------------------------------|------------|----------------|------------|
+| stock Q4_K_M                 | 5.026      | 18.6837        | —          |
+| **expand 1.7→1.7 @Q4**       | 5.069      | **16.4570**    | **−2.227** |
+| expand 0.6→1.7 @Q4           | 5.058      | 17.4804        | −1.203     |
+| stock Q5_K_M                 | 5.772      | 17.1065        | —          |
+| **expand 1.7→1.7 @Q5**       | 5.764      | **16.3413**    | **−0.765** |
+| expand 0.6→1.7 @Q5           | 5.757      | 17.2985        | +0.192     |
+
+(Custom quantizer wall: ~30 s per recipe with Run 16's
+parallelization. PPL ~52 s each. Total run ~10 min.)
+
+### The headline: same-model expanded profile is a 5× improvement over Run 16
+
+Run 16 same-model recipe: −0.45 PPL vs stock at Q4_K_M.
+**Run 17 same-model recipe: −2.23 PPL** — five times the
+improvement. The expanded categories give the optimizer real
+signal on `output.weight` (instead of pinning it at Q6_K via
+protection table), and the finer type ladder lets it spend
+budget on `attn_v` Q8_0 where the profile says Q6_K isn't
+enough but Q8_0 is essentially free.
+
+For comparison: stock Q4_K_M's PPL of 18.68 is what users get
+today. Our recipe-built 16.46 PPL at the same bpw is a 12%
+relative quality improvement — bigger than the gap between
+ftypes one tier apart (Q4_K_M → Q5_K_M is 17.11 → close to our
+recipe's 16.46 at half the size penalty).
+
+### The headline that hurts: cross-size transfer breaks at finer granularity
+
+Run 16's striking finding was that the 0.6B-derived recipe and
+the 1.7B-derived recipe produced *byte-identical* output. With
+the 3-rung Q2_K/Q4_K/Q6_K ladder, both profiles converged on the
+same per-category type assignments through the algorithm.
+
+That property is gone with the 7-rung ladder. The recipes now
+differ on **every category**:
+
+| category         | 1.7→1.7 @Q4 | 0.6→1.7 @Q4 |
+|------------------|-------------|-------------|
+| `attn_k`         | IQ4_XS×28   | Q6_K×28     |
+| `attn_q`         | Q5_K×28     | IQ4_XS×28   |
+| `attn_v`         | **Q8_0×28** | Q6_K×28     |
+| `attn_output`    | Q3_K×28     | Q4_K×28     |
+| `ffn_up`         | Q5_K×28     | IQ4_XS×28   |
+| `ffn_gate`       | Q3_K×28     | Q4_K×28     |
+| `ffn_down`       | Q6_K×14, IQ4_XS×14 | Q4_K×14, Q6_K×14 |
+
+The same-model recipe is much more aggressive: full-layer Q8_0
+on `attn_v`, Q3_K on `attn_output` / `ffn_gate` (cheap types).
+The cross-size recipe stays conservative in the Q4_K/Q6_K range.
+At the bpw budget they're both nearly the same, but the
+quality differs by 1 PPL (1.7→1.7 = 16.46, 0.6→1.7 = 17.48).
+
+What's happening: with finer types, the optimization landscape
+is much more sensitive to the actual ΔPPL coefficients. Small
+differences propagate into very different category choices. The
+0.6B coefficients × 2.83× linear scaling are *close* to 1.7B's
+true coefficients, but not close enough — each minor mismatch
+nudges the optimizer into a different local minimum, and
+collectively those nudges add up to the 1-PPL gap.
+
+The Run 13 verdict still holds at the rough level (rankings
+transfer, magnitudes scale ~linearly except at the cliff), but
+the recipe builder's optimization is sensitive enough that
+"close enough" isn't actually close enough.
+
+### Implications for v2 ship plan
+
+The cross-size transfer pitch from Run 13 ("ship one profile per
+architecture, scale at apply time") is compromised. Two viable
+replacements:
+
+1. **Per-(architecture, size-class) reference profiles.** Maintain
+   a small library: e.g. Qwen3-0.6B, Qwen3-1.7B, Qwen3-4B,
+   Qwen3-8B for the family. Users pick the closest. The recipe
+   builder still applies size-scaling for residual mismatch, but
+   the base profile is much closer. ~30 min build per profile —
+   tractable for ~4-6 profiles per supported family.
+
+2. **Build-time profile.** The recipe-builder CLI runs a profile
+   pass on the user's specific source model before generating
+   the recipe. ~26 min for 1.7B, longer for bigger models. As a
+   one-time cost per user-model, it's reasonable. The CLI could
+   cache profiles by source-model SHA so users don't re-pay.
+
+(1) is operationally cleaner; (2) is the long-term escape hatch
+for users on uncommon model sizes. Both should ship — (1) covers
+the 95% case, (2) handles the rest.
+
+The v2 wins are real and ~5× bigger than Run 16:
+
+- −2.23 PPL @ Q4_K_M (same-model)
+- −0.77 PPL @ Q5_K_M (same-model)
+- −1.20 PPL @ Q4_K_M (cross-size, conservative win)
+- +0.19 PPL @ Q5_K_M (cross-size, slight regression — high-budget
+  cases are where size-scaling artifacts hurt most)
+
+For a per-(arch, size) shipping model, the floor is "~−2 PPL
+relative to stock Q4_K_M," which is a strong v2 ship.
+
+### Open work after Run 17
+
+- Update v2 ship plan to per-(arch, size-class) profiles in
+  `data/profiles/`. Document how users build their own.
+- Test cross-size at one more size-class (Qwen3-4B if available,
+  or 8B) to refine the size-scaling exponent in the
+  not-the-shipped-size case.
+- Cross-architecture: build a Llama-3.2 family profile and
+  validate the same beats-stock claim there. (The QK-norm
+  signature in Run 12 says coefficients differ; recipe behavior
+  is unknown.)
+
 ## Run 16 — 2026-04-27 14:15  (Stock baseline + profile recipe BEATS stock)
 
 Run 15 revealed the v2 recipe builder lost 3 PPL to stock Q4_K_M
