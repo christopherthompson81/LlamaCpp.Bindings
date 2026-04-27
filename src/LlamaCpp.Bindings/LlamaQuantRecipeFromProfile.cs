@@ -476,9 +476,15 @@ public static class LlamaQuantRecipeFromProfile
         return opts.UncategorizedDefault;
     }
 
-    /// <summary>Same matcher as <see cref="LlamaSensitivityProfileBuilder"/>.</summary>
+    /// <summary>
+    /// Same matcher as <see cref="LlamaSensitivityProfileBuilder"/>:
+    /// exact-or-period-prefixed-suffix for dot-containing category
+    /// names so <c>output.weight</c> doesn't catch
+    /// <c>blk.N.attn_output.weight</c>.
+    /// </summary>
     private static bool CategoryMatch(string tensorName, string category) =>
         category.Contains('.')
-            ? tensorName.EndsWith(category, StringComparison.Ordinal)
+            ? tensorName == category ||
+              tensorName.EndsWith("." + category, StringComparison.Ordinal)
             : tensorName.Contains(category, StringComparison.Ordinal);
 }

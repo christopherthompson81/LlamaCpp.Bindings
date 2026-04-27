@@ -495,9 +495,20 @@ public static class LlamaSensitivityProfileBuilder
     /// the Run 9/11 investigation scripts and llama-quant.cpp's
     /// <c>tensor_get_category</c>.
     /// </summary>
+    /// <remarks>
+    /// For category strings containing a dot (e.g. <c>attn_q.weight</c>,
+    /// <c>output.weight</c>), match by exact equality OR suffix preceded
+    /// by a period: this keeps <c>blk.0.attn_q.weight</c> matching
+    /// <c>attn_q.weight</c> while preventing <c>blk.0.attn_output.weight</c>
+    /// from spuriously matching the top-level <c>output.weight</c>
+    /// category. (Found Run 17 prep: a naive <c>EndsWith("output.weight")</c>
+    /// double-counted all 28 attention outputs into the output category,
+    /// producing nonsense ΔPPL of +10 PPL at Q2_K.)
+    /// </remarks>
     private static bool CategoryMatch(string tensorName, string category) =>
         category.Contains('.')
-            ? tensorName.EndsWith(category, StringComparison.Ordinal)
+            ? tensorName == category ||
+              tensorName.EndsWith("." + category, StringComparison.Ordinal)
             : tensorName.Contains(category, StringComparison.Ordinal);
 
     private static double GetBitsPerElement(LlamaTensorType t) => t switch

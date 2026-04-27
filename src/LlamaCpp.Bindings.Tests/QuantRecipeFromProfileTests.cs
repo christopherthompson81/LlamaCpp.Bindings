@@ -212,6 +212,72 @@ public class QuantRecipeFromProfileTests
     }
 
     [Fact]
+    public void CategoryMatch_OutputWeightDoesNotCatchAttnOutputWeight()
+    {
+        // The matcher's old EndsWith("output.weight") logic double-counted
+        // attn_output.weight tensors as belonging to the "output.weight"
+        // category, producing nonsense ΔPPL coefficients on the Run 17
+        // expanded profile build. The fix: dot-containing categories
+        // require either exact match or "." + category suffix.
+        //
+        // Build a profile that distinguishes the two — output.weight gets
+        // a high penalty at Q4_K, attn_output.weight gets a low one. If
+        // the matcher is correct, the recipe at a tight budget will
+        // promote the tensor mapped to attn_output.weight (because its
+        // ΔPPL is small at Q4_K and we save by leaving it there), while
+        // the tensor mapped to output.weight gets promoted heavily.
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId:        "test",
+            LayerCount:            2,
+            FamilyNotes:           null,
+            Provenance:            new LlamaSensitivityProvenance(
+                "test", null, 100_000_000, null, null, null),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize:   512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["attn_output.weight"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q4_K] = 0.01,    // benign
+                        [LlamaTensorType.Q6_K] = 0.0,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q4_K),
+                ["output.weight"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q4_K] = 5.0,     // catastrophic
+                        [LlamaTensorType.Q6_K] = 0.0,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q4_K),
+            });
+        var layout = new List<(string Name, long Elements)>
+        {
+            ("blk.0.attn_output.weight", 1_000_000L),
+            ("output.weight",            1_000_000L),
+        };
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 5.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline = false,    // don't let baseline mask the routing
+                UncategorizedProtections = new Dictionary<string, LlamaTensorType>(),
+            });
+
+        var attn = recipe.Entries.First(e => e.TensorName == "blk.0.attn_output.weight");
+        var outp = recipe.Entries.First(e => e.TensorName == "output.weight");
+        // attn_output should ride at Q4_K (cheap, benign).
+        Assert.Equal(LlamaTensorType.Q4_K, attn.ChosenType);
+        // output.weight should be promoted (high penalty at Q4_K → algorithm
+        // pays the bpw to promote it). If the matcher were wrong and both
+        // tensors ended up in the same category, both would land at the
+        // same type — this test would fail.
+        Assert.Equal(LlamaTensorType.Q6_K, outp.ChosenType);
+    }
+
+    [Fact]
     public void EndToEnd_FromQwen3Profile_BuildsWithoutTargetGguf()
     {
         // Real reference profile + synthetic target the same size as the
