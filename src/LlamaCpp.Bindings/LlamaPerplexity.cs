@@ -477,10 +477,31 @@ public static class LlamaPerplexity
     /// <c>ThreadCount</c> defaults to <c>ProcessorCount / maxConcurrent</c>
     /// when not set explicitly on the job's options. Override by setting
     /// <see cref="LlamaPerplexityOptions.ThreadCount"/> on the job.
+    ///
+    /// <para>
+    /// <b>Default <c>maxConcurrent = 8</c> rationale</b> — measured on
+    /// i7-10700K (8C/16T) + RTX 3090 with Qwen3-0.6B, 8-job ablation
+    /// campaign:
+    /// <code>
+    ///   concurrency  threads/job  wall (s)  speedup  CPU time (s)
+    ///       1           16         401.4    1.00x    5902  (softmax-bound)
+    ///       2            8         349.8    1.15x    4703
+    ///       4            4         283.1    1.42x    3944
+    ///       8            2         252.3    1.59x    3777  ← best
+    ///      16            1         295.0    1.36x    2335  (cores idle)
+    /// </code>
+    /// At 16 the per-job softmax falls to single-threaded (235 s/job)
+    /// and only N_jobs slots are filled — half the cores idle. At 8 the
+    /// softmax stays usefully parallel and the GPU contention amortizes
+    /// well across 8 concurrent forwards. Counter-intuitive observation
+    /// is that concurrency=8 uses LESS total CPU than concurrency=1
+    /// despite finishing in 63 % the wall time — the GPU has become the
+    /// new bottleneck and CPU slots free up productively.
+    /// </para>
     /// </remarks>
     public static async IAsyncEnumerable<PerplexityJobResult> RunParallelAsync(
         IEnumerable<PerplexityJob> jobs,
-        int maxConcurrent = 4,
+        int maxConcurrent = 8,
         IProgress<LlamaPerplexityProgress>? sharedProgress = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken cancellationToken = default)
