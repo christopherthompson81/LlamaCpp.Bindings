@@ -8,7 +8,25 @@ answers a concrete question: *given the same overall bit budget, does
 the heuristic allocate bits to the right tensors?*
 
 The expectation going in was that for Qwen3-0.6B — small, dense, well-
-studied — the heuristic should be approximately right. Result: it isn't.
+studied — the heuristic should be approximately right.
+
+**Status (after Run 4)**: the original "the heuristic destroys late-
+layer attn_k/attn_q at Q4_K" claim was based on imatrix-weighted MSE
+compared against unweighted MSE on Llama-3.2-1B — apples vs oranges.
+With matching units (both unweighted) the catastrophic 0.76 rel-MSE
+disappears; raw Q4_K reconstruction of Qwen3 weights is normal. The
+original *imatrix-weighted* signal is still real and operationally
+meaningful, but the causal story is different: it's about QK-norm
+giving K/Q activations wider per-column dynamic range, which a
+column-importance-weighted metric amplifies. Run 5 (pending) tests
+whether non-QK-norm Llama-3.2-1B also amplifies under imatrix
+weighting; that pins down whether QK-norm is the cause or whether
+imatrix is just an MSE inflator on every architecture.
+
+The early sections below are preserved as-is so the chronological
+reasoning is visible. The corrected synthesis is in the Run 4
+section.
+
 The heuristic over-protects `attn_v` and badly under-protects late-layer
 `attn_k` / `attn_q`, almost certainly because Qwen3 uses QK-norm and the
 heuristic was tuned in the Llama-1/2 era when `attn_v` was empirically
@@ -143,6 +161,86 @@ empirically the loudest), can't see this — it's hard-coded to the
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
+
+## Run 4 — 2026-04-26 18:43  (Qwen3-0.6B re-swept WITHOUT imatrix — conclusion reversed)
+
+**Why this run**: Run 1's imatrix-weighted Qwen3 numbers were
+compared against Run 3's unweighted Llama numbers — apples vs
+oranges. Re-running Qwen3 without imatrix puts both models on the
+same footing, naive per-element MSE.
+
+**Command**:
+```bash
+llama-sensitivity-sweep \
+  --input ~/.cache/llama-models/Qwen/Qwen3-0.6B/Qwen3-0.6B.F16.gguf \
+  --output ~/.cache/llama-models/Qwen/Qwen3-0.6B/Qwen3-0.6B.F16.unweighted.scores.json \
+  --benchmark
+```
+
+**Result** — wall 233 s, 3.4× CPU speedup (matches Run 1 timings).
+
+### The headline finding flips
+
+Worst rel-MSE at the heuristic's pick, by category:
+
+| category   | Qwen3 (Run 1, w/ imatrix) | Qwen3 (Run 4, unweighted) | Llama-3.2-1B (Run 3, unweighted) |
+|------------|---------------------------|---------------------------|----------------------------------|
+| attn_k     | **7.59e-1**               | 5.53e-3                   | 6.19e-3                          |
+| attn_q     | **5.65e-1**               | 5.38e-3                   | 5.54e-3                          |
+| attn_v     | 5.13e-2                   | 1.40e-3                   | 1.44e-3                          |
+| attn_output| 2.59e-2                   | 5.30e-3                   | 5.38e-3                          |
+| ffn_gate   | 1.60e-2                   | 5.36e-3                   | 5.37e-3                          |
+| ffn_up     | 1.51e-2                   | 5.36e-3                   | 5.32e-3                          |
+| ffn_down   | 7.41e-3                   | 5.67e-3                   | 5.43e-3                          |
+| TOKEN_EMBD | 5.08e-3                   | 5.08e-3                   | 5.45e-3                          |
+
+Tensors with rel-MSE ≥ 0.05 at heuristic-pick:
+- Qwen3 imatrix-weighted: 21 / 198
+- Qwen3 unweighted:       **0 / 198**
+- Llama-3.2-1B:           0 / 113
+
+### What this means
+
+The "QK-norm makes attention weights catastrophically hard to
+quantize at Q4_K" claim from Run 2 was **wrong**. Without imatrix
+weighting, Qwen3-0.6B's late-layer `attn_k` quantizes to Q4_K
+about as cleanly as Llama-3.2-1B's. The raw weight reconstruction
+isn't unusual.
+
+The 0.76 number in Run 1 came from imatrix-weighted MSE. The
+imatrix-weighted formula multiplies each per-element error by
+the per-column importance:
+
+`rel_MSE_imat = (1/N) Σ imatrix[col] · (src - rt)² / mean(W²)`
+
+If `imatrix` has very wide dynamic range across columns (some
+columns ~1000×, others ~1), then a normal-magnitude error landing
+in a heavy-weight column blows up the sum while a similar error
+in a light column contributes nothing. The denominator
+(`mean(W²)`) doesn't include the imatrix weighting, so the ratio
+inflates.
+
+So what Run 1 actually measured was: *in the columns the model
+heavily uses during inference, are the Q4_K-quantized errors big*?
+The answer for late-layer Qwen3 attn_k was yes, dramatically.
+That's still a meaningful operational signal — errors in dead
+columns don't hurt inference, errors in live columns do — but
+the cause story changes.
+
+### The new (open) hypothesis
+
+QK-norm probably *causes* per-column activation dynamic range to
+be wider on K and Q tensors (because the per-element norm relaxes
+the constraint on raw activation magnitudes). Wider activation
+range → wider imatrix → more amplification of any per-element
+error in heavy columns. The raw weights themselves quantize fine.
+
+But "probably" is doing work here. To confirm or deny, we need
+**Run 5**: build an imatrix for Llama-3.2-1B and re-sweep with it.
+If Llama also goes to 0.5+ rel-MSE on attn_k under imatrix
+weighting, the imatrix is just an MSE inflator and QK-norm is a
+red herring. If Llama stays under ~0.05, the QK-norm specificity
+holds.
 
 ## Run 3 — 2026-04-26 18:23  (QK-norm hypothesis test on Llama-3.2-1B)
 
