@@ -225,6 +225,132 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 13 — 2026-04-27 11:32  (Cross-size: Qwen3-0.6B vs Qwen3-1.7B, same family)
+
+Run 12 settled cross-architecture (Qwen3 ≠ Llama). Run 13 asks a
+narrower question: *within a single architecture family, does the
+profile transfer across model sizes, or do we need a per-size
+profile?* This is the call we have to make for Adaptive Quantization
+v2 — if profiles are size-stable we can ship one Qwen3 profile and
+let recipe builders extrapolate; if they're not, the builder has
+to be parameterized by the target model size.
+
+Method: ran `LlamaSensitivityProfileBuilder` end-to-end on
+Qwen3-0.6B and Qwen3-1.7B (no imatrix on the 1.7B — it's the
+delta-magnitude across categories we care about, not the absolute
+imat-vs-not effect). Both at n_ctx=512 to match Run 9/11
+convention. Two campaigns ran back-to-back via the new builder,
+which is itself the validation: we now have a one-shot tool to
+characterize an architecture in 14 / 20 minutes wall-clock.
+
+### Result — side-by-side ΔPPL
+
+| category       | 0.6B Q2_K    | 1.7B Q2_K    | 0.6B Q4_K | 1.7B Q4_K | 0.6B Q6_K | 1.7B Q6_K |
+|----------------|--------------|--------------|-----------|-----------|-----------|-----------|
+| `ffn_down`     | **+4.4021**  | **+3709.61** | -0.0004   | +0.1121   | -0.0437   | -0.0094   |
+| `ffn_up`       | +3.8251      | **+7.9517**  | **+0.2273** | **+0.4425** | +0.0288 | +0.0448 |
+| `ffn_gate`     | +2.9459      | +2.6121      | +0.1063   | +0.2322   | -0.0009   | -0.0035   |
+| `attn_v`       | +2.7204      | **+15.8469** | +0.1419   | +0.3403   | -0.0536   | +0.0015   |
+| `attn_output`  | +2.3262      | +2.4240      | +0.0910   | +0.0789   | +0.0264   | +0.0227   |
+| `attn_k`       | +2.0196      | +4.8127      | +0.1149   | +0.3140   | -0.0567   | -0.0598   |
+| `attn_q`       | +1.2772      | +1.9758      | +0.1143   | +0.0398   | +0.0021   | +0.0180   |
+
+(F16 baselines: 0.6B = 21.4720 PPL, 1.7B = 16.8869 PPL.
+Workspace `/mnt/data/models/.profile-tmp`, build wall 853s and
+1219.7s respectively. Concurrency auto-resolved to 7 / 2 — the
+1.7B value is over-conservative, see "Implementation note" below.)
+
+### Verdict — rankings transfer, magnitudes don't, floors don't
+
+**What's stable across size:**
+
+- The Q4_K **ranking** is essentially preserved. `ffn_up` is the
+  top hit on both (+0.23 → +0.44), and the Q4_K coefficients on
+  the bottom three categories (`attn_q`, `attn_output`, `ffn_down`)
+  are all small on both models. A recipe that uses 0.6B's Q4_K
+  rank order to decide *which* tensors to promote would make
+  roughly the same calls on 1.7B.
+- The QK-norm signature persists. `attn_v` / `attn_k` retain
+  their elevated sensitivity relative to a no-QK-norm architecture
+  (Run 12 had Llama's `attn_v` near-zero at Q4_K).
+
+**What changes drastically:**
+
+- **The Q2_K knee deepens by orders of magnitude**, not linearly.
+  - `ffn_down`: +4.40 → **+3709.61** (~840× worse)
+  - `attn_v`: +2.72 → +15.85 (~6× worse)
+  - `attn_k`: +2.02 → +4.81 (~2.4× worse)
+  - `ffn_up`: +3.83 → +7.95 (~2× worse)
+
+  At 0.6B every category is "survivable" at Q2_K — the model
+  degrades smoothly. At 1.7B the same Q2_K choice on `ffn_down`
+  is catastrophic and `attn_v` is a serious loss. The Q4_K_M
+  heuristic implicitly assumes the smaller model's tolerance,
+  which the 1.7B does not have.
+
+- **Recommended floors shift.**
+
+  | category      | 0.6B floor | 1.7B floor |
+  |---------------|------------|------------|
+  | `ffn_up`      | Q2_K       | **Q4_K**   |
+  | `attn_v`      | Q2_K       | **Q4_K**   |
+  | `ffn_down`    | Q2_K       | **Q4_K**   |
+  | `attn_k`      | Q2_K       | Q2_K       |
+  | `attn_q`      | Q2_K       | Q2_K       |
+  | `attn_output` | Q2_K       | Q2_K       |
+  | `ffn_gate`    | Q2_K       | Q2_K       |
+
+  Three of seven categories pick up a Q4_K floor at 1.7B that
+  didn't exist at 0.6B (under the default 5.0 PPL knee
+  threshold). A recipe transplanted from 0.6B to 1.7B without
+  adjustment would happily drop `ffn_down` to Q2_K and produce
+  a ~3709 PPL model.
+
+### Operational implication for Adaptive Quantization v2
+
+A single shipped profile per architecture is *not* enough. The
+profile is size-conditional: same family, same architectural
+signature, but the catastrophic-knee thresholds move with model
+size. Two viable approaches:
+
+1. **Profile-per-(arch, size-class)**: ship pre-built profiles
+   for ~3-4 size classes per supported architecture
+   (≤1B, 1-3B, 3-8B, 8B+). Recipe builder picks the closest.
+   Cheap to maintain since the builder is now one command.
+2. **Build-time profile**: have the recipe builder run a
+   short profile pass on the user's specific source model
+   before generating the recipe. The 0.6B campaign was 14 min;
+   for an interactive tool that's borderline. For a CLI step
+   that's reasonable, especially if the result is cached.
+
+Leaning toward (1) for v2 ship: predictable cost, predictable
+quality, the per-size profiles are themselves reference data
+(they answer "is your model in the regime where ffn_down can
+take Q2_K"). (2) becomes the long-term escape hatch.
+
+### Implementation note — heuristic over-conservative on larger models
+
+The 1.7B build used concurrency=2; live monitoring showed total
+GPU memory at ~7 GB and ~3.5 GB / instance. The 0.80 × 24 GB
+usable budget would have fit 4-5 instances. The current
+heuristic (`weights × 1.85`) overestimates because it's
+multiplicative, but the actual compute buffer is essentially
+size-independent at fixed n_ctx (~298 MiB on 0.6B, ~300 MiB on
+1.7B per llama.cpp's own log lines). Switching to additive
+(`weights + ~700 MiB headroom`) is the obvious fix and roughly
+doubles realistic concurrency on 1.7B-class models. Filed as
+follow-up; the 1.7B numbers are still correct, just slower than
+they needed to be.
+
+### Profiles archived
+
+- `/tmp/qwen3-0.6B.profile.json` — 0.6B reference, with imatrix
+- `/tmp/qwen3-1.7B.profile.json` — 1.7B reference, no imatrix
+
+Both written by `LlamaSensitivityProfileBuilder.SaveToJson` —
+the public-API artifact that downstream recipe-builders will
+read. These two profiles are the first concrete inputs to v2.
+
 ## Run 12 — 2026-04-27 (Cross-architecture: Llama-3.2-1B Stage 1)
 
 The user predicted that quantization sensitivity profiles would be

@@ -1,0 +1,82 @@
+{
+  "architectureId": "qwen3",
+  "layerCount": 28,
+  "sourceModelPath": "/home/chris/.cache/llama-models/Qwen/Qwen3-0.6B/Qwen3-0.6B.F16.gguf",
+  "calibrationCorpusName": "wiki.test.raw",
+  "f16BaselinePerplexity": 21.472002391459817,
+  "categories": {
+    "attn_q.weight": {
+      "category": "attn_q.weight",
+      "deltaPplByType": {
+        "Q2_K": 1.277168986871068,
+        "Q4_K": 0.11427021768154688,
+        "Q6_K": 0.002117242457423174
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_k.weight": {
+      "category": "attn_k.weight",
+      "deltaPplByType": {
+        "Q2_K": 2.019646426554665,
+        "Q4_K": 0.11491150938386596,
+        "Q6_K": -0.056697358600498404
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_v.weight": {
+      "category": "attn_v.weight",
+      "deltaPplByType": {
+        "Q2_K": 2.7204394133244136,
+        "Q4_K": 0.14185386394338906,
+        "Q6_K": -0.053612813155655914
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_output.weight": {
+      "category": "attn_output.weight",
+      "deltaPplByType": {
+        "Q2_K": 2.3261887991391212,
+        "Q4_K": 0.09103974417186578,
+        "Q6_K": 0.02635942558172033
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_up": {
+      "category": "ffn_up",
+      "deltaPplByType": {
+        "Q2_K": 3.825110494961695,
+        "Q4_K": 0.22730212536070127,
+        "Q6_K": 0.028808177703403715
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_gate": {
+      "category": "ffn_gate",
+      "deltaPplByType": {
+        "Q2_K": 2.9458990094483966,
+        "Q4_K": 0.10633479432708626,
+        "Q6_K": -0.0008744782376091109
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_down": {
+      "category": "ffn_down",
+      "deltaPplByType": {
+        "Q2_K": 4.40208454361008,
+        "Q4_K": -0.00035897828302822177,
+        "Q6_K": -0.04374562099301471
+      },
+      "recommendedFloor": "Q2_K"
+    }
+  },
+  "builtAtUtc": "2026-04-27T17:01:54.3393838Z",
+  "categoriesByDescendingSensitivityAtQ4K": [
+    "ffn_up",
+    "attn_v.weight",
+    "attn_k.weight",
+    "attn_q.weight",
+    "ffn_gate",
+    "attn_output.weight",
+    "ffn_down"
+  ]
+}

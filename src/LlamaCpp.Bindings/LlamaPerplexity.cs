@@ -501,13 +501,20 @@ public static class LlamaPerplexity
     /// </remarks>
     public static async IAsyncEnumerable<PerplexityJobResult> RunParallelAsync(
         IEnumerable<PerplexityJob> jobs,
-        int maxConcurrent = 8,
+        int maxConcurrent = 0,
         IProgress<LlamaPerplexityProgress>? sharedProgress = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken cancellationToken = default)
     {
-        if (maxConcurrent < 1)
-            throw new ArgumentOutOfRangeException(nameof(maxConcurrent), "Must be >= 1.");
+        // Resolve auto-concurrency from the job sizes. Materialize once so
+        // the iteration below sees the same list the heuristic measured.
+        var jobsList = jobs as IReadOnlyList<PerplexityJob> ?? jobs.ToList();
+        if (maxConcurrent <= 0)
+        {
+            maxConcurrent = RecommendConcurrency(
+                jobsList.Select(j => j.ModelPath),
+                expectedJobCount: jobsList.Count);
+        }
 
         using var slot = new SemaphoreSlim(maxConcurrent, maxConcurrent);
         // Split the full logical-core budget across concurrent jobs.
@@ -518,7 +525,7 @@ public static class LlamaPerplexity
         int autoThreadsPerJob = Math.Max(1, Environment.ProcessorCount / maxConcurrent);
 
         var inFlight = new List<Task<PerplexityJobResult>>();
-        foreach (var job in jobs)
+        foreach (var job in jobsList)
         {
             await slot.WaitAsync(cancellationToken).ConfigureAwait(false);
             var captured = job;  // closure capture
@@ -562,6 +569,98 @@ public static class LlamaPerplexity
             inFlight.Remove(done);
             yield return await done.ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Pick a sensible <c>maxConcurrent</c> for
+    /// <see cref="RunParallelAsync"/> given the actual job sizes. Two
+    /// constraints: per-instance VRAM (model weights + KV cache + compute
+    /// buffers) and per-instance CPU thread budget (softmax wants &gt;= 2
+    /// threads to be useful — see thread sweep in
+    /// <c>docs/investigations/qwen3_qk_sensitivity.md</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The hardware (24 GB VRAM, 16 logical cores) stays fixed; what
+    /// changes between profile builds is the model size. A 0.6B-class
+    /// F16 file is ~1.5 GB / instance → 8 concurrent fits with room to
+    /// spare. A 1.7B at F16 is ~3.5 GB → 5 concurrent. A 4B class is
+    /// ~8 GB → only 2 concurrent. The runner default of 8 was tuned on
+    /// Qwen3-0.6B and silently saturated VRAM (or hung waiting on
+    /// allocation) on bigger models; this heuristic auto-scales.
+    /// </para>
+    /// <para>
+    /// Per-instance VRAM estimate is **additive**, not multiplicative:
+    /// <c>weights + 700 MiB headroom</c> (compute buffer + KV cache +
+    /// allocator slack). Empirically the CUDA compute buffer at
+    /// n_ctx=512 is ~300 MiB and is essentially independent of model
+    /// size (Qwen3-0.6B logged 298.75 MiB, Qwen3-1.7B logged 300.75
+    /// MiB — same order of magnitude as the KV cache). A previous
+    /// multiplicative form (<c>weights × 1.85</c>) over-reserved
+    /// badly on larger models — the 1.7B build resolved
+    /// concurrency=2 while only using ~3.5 GB / instance, leaving
+    /// half the GPU idle (Run 13). Additive matches the actual
+    /// behavior. Users on tight VRAM can pass an explicit
+    /// <paramref name="availableVramBytes"/>.
+    /// </para>
+    /// <para>
+    /// CPU ceiling is half the logical cores (8 on a 16-thread box) —
+    /// matches the empirically-best concurrency for softmax-bound PPL
+    /// scoring on the reference machine. With CPU/2 jobs, each gets
+    /// ~2 threads, which the thread sweep showed retains most of the
+    /// softmax-parallelism win.
+    /// </para>
+    /// </remarks>
+    /// <param name="modelPaths">Paths to size representatives. The heuristic uses the *largest* file size as the per-instance VRAM estimate. May be a single representative file (e.g. the source model) when called from a builder before ablation files exist.</param>
+    /// <param name="availableVramBytes">Override the assumed available VRAM. Defaults to 24 GB (RTX 3090 / 4090 class). Pass smaller for laptops or shared GPUs.</param>
+    /// <param name="cpuConcurrencyCap">Override the CPU ceiling. Defaults to <c>Environment.ProcessorCount / 2</c>.</param>
+    /// <param name="expectedJobCount">Optional cap by job count. When unset, the heuristic does not cap by <c>modelPaths.Count</c> — that's important for callers that pass a single representative file but expect to run many jobs. The runner overload calls this with the actual job count to also cap there.</param>
+    public static int RecommendConcurrency(
+        IEnumerable<string> modelPaths,
+        long? availableVramBytes = null,
+        int cpuConcurrencyCap = 0,
+        int? expectedJobCount = null)
+    {
+        ArgumentNullException.ThrowIfNull(modelPaths);
+        long maxFile = 0;
+        int count = 0;
+        foreach (var p in modelPaths)
+        {
+            count++;
+            try
+            {
+                long sz = new FileInfo(p).Length;
+                if (sz > maxFile) maxFile = sz;
+            }
+            catch { /* unreadable file — let the runner surface the error later */ }
+        }
+        if (count == 0) return 1;
+        if (maxFile <= 0) maxFile = 4L * 1024 * 1024 * 1024;  // 4 GB fallback
+
+        // Per-instance VRAM ≈ weights + 700 MiB. The 700 MiB absorbs
+        // the CUDA compute buffer (~300 MiB at n_ctx=512, observed
+        // identical on Qwen3-0.6B and 1.7B), KV cache (tens to ~150
+        // MiB at n_ctx=512), and allocator overhead, with margin.
+        // Earlier multiplicative form (weights × 1.85) was tuned on
+        // a single 0.6B run; on 1.7B-class models it over-reserved
+        // by ~2× and halved usable concurrency (Run 13).
+        const long PerInstanceHeadroom = 700L * 1024 * 1024;
+        long perInstance = maxFile + PerInstanceHeadroom;
+        long vram = availableVramBytes ?? 24L * 1024 * 1024 * 1024;
+        long usableVram = (long)(vram * 0.80);       // 20 % left for the OS/DE/other GPU users
+
+        int byVram = Math.Max(1, (int)(usableVram / perInstance));
+        int byCpu  = cpuConcurrencyCap > 0
+            ? cpuConcurrencyCap
+            : Math.Max(1, Environment.ProcessorCount / 2);
+
+        int recommended = Math.Min(byVram, byCpu);
+        if (expectedJobCount is int n && n > 0)
+        {
+            // Don't ask for more concurrency than there are jobs.
+            recommended = Math.Min(recommended, n);
+        }
+        return Math.Max(1, recommended);
     }
 
     /// <summary>

@@ -5,6 +5,7 @@
     <Project Path="samples/Imatrix.Cli/Imatrix.Cli.csproj" />
     <Project Path="samples/Perplexity.Cli/Perplexity.Cli.csproj" />
     <Project Path="samples/Quantize.Cli/Quantize.Cli.csproj" />
+    <Project Path="samples/SensitivityProfile.Cli/SensitivityProfile.Cli.csproj" />
     <Project Path="samples/SensitivitySweep.Cli/SensitivitySweep.Cli.csproj" />
   </Folder>
   <Folder Name="/src/">
