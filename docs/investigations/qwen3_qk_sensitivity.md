@@ -225,6 +225,109 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 16 — 2026-04-27 14:15  (Stock baseline + profile recipe BEATS stock)
+
+Run 15 revealed the v2 recipe builder lost 3 PPL to stock Q4_K_M
+because single-tensor profile ablation can't capture stock's per-
+layer alternation pattern (`use_more_bits` protects ffn_down and
+attn_v on layers 0..n/8, last n/8, and every third middle layer —
+about half the layers per category). The user proposed: keep
+stock's per-layer wisdom as a hard floor, layer profile-driven
+optimizations on top. This run validates that approach.
+
+Build (committed as 6156215):
+- `LlamaStockBaseline.cs` ports `use_more_bits` from
+  `llama-quant.cpp:417`. The Q4_K_M-flavored baseline assigns
+  `output.weight` → Q6_K, `token_embd.weight` → Q4_K, and
+  `attn_v` / `ffn_down` → Q6_K on `use_more_bits` layers.
+- `LlamaQuantRecipeFromProfileOptions.ApplyStockBaseline = true`
+  by default. The recipe enumeration uses `effective_type =
+  max(baseline(t), recipe_pick_for_category(t))` per tensor —
+  recipe can promote above stock, never demote below.
+- ΔPPL prediction is pro-rated by the fraction of category
+  elements actually riding the recipe type (vs stuck at baseline).
+
+Validation against the same Run 15 matrix:
+
+| recipe                       | actual bpw | wikitext-2 PPL | Δ vs stock |
+|------------------------------|------------|----------------|------------|
+| stock Q4_K_M                 | 5.026      | 18.6841        | —          |
+| recipe (1.7B → 1.7B) + base  | 5.084      | **18.2320**    | **−0.45**  |
+| recipe (0.6B → 1.7B) + base  | 5.084      | **18.2320**    | **−0.45**  |
+| Run 15 recipe (no base)      | 4.979      | 21.6730        | +2.99      |
+
+(Custom quantizer wall: ~27 s per recipe — 5× the 140s of pre-
+parallelization. PPL ~52 s each. Total run ~3 min including the
+Run 15 baselines for reference.)
+
+### Findings
+
+**1. v2 recipe beats stock at Q4_K_M-class budget.** −0.45 PPL at
++0.06 bpw vs stock — meaningful improvement at small size cost.
+This is the first run where Adaptive Quantization v2 is genuinely
+better than the heuristic, validating the hypothesis the
+investigation has chased since Run 8.
+
+**2. Cross-size transfer is byte-identical.** The 0.6B-derived
+and 1.7B-derived recipes produce *the same exact recipe* under
+this configuration — both PPL 18.2320 to four decimals. The size-
+scaling math + baseline floor + budget-aware enumeration converges
+to the same per-tensor type assignment regardless of which family
+profile you start from. The "ship one profile per architecture"
+plan from Run 13 is operationally validated.
+
+**3. The profile alone wasn't enough.** Run 15's recipe (no
+baseline) at 4.98 bpw was 21.67 PPL — 3 PPL worse than stock at
+similar bpw. Adding the baseline took us from "+3 PPL worse" to
+"−0.45 PPL better" without changing anything about the profile
+data. The single-tensor ablation captures useful signal but misses
+per-layer interactions; layering it on top of stock's per-layer
+heuristic recovers what we couldn't measure directly.
+
+**4. The recipe at 5.084 bpw is mostly stock-baseline.** Looking
+at per-layer breakdown:
+- `output.weight` Q6_K (baseline)
+- `token_embd.weight` Q4_K (baseline)
+- `attn_v` Q6_K ×14, Q4_K ×14 (baseline use_more_bits alternation)
+- `ffn_down` Q6_K ×14, Q4_K ×14 (baseline use_more_bits alternation)
+- `attn_k` Q6_K ×28 (profile-driven full promote, on top of baseline)
+- `attn_q` Q4_K ×28, `attn_output` Q4_K ×28, `ffn_gate` Q4_K ×28,
+  `ffn_up` Q4_K ×28 (profile says default-type is fine)
+
+The profile contributes one full-category promote (`attn_k`); the
+baseline contributes the rest. The +0.45 PPL improvement vs stock
+is essentially "promote attn_k.weight to Q6_K everywhere on top of
+stock's per-layer pattern." Future profile expansions (more
+categories, finer types) should give the profile more to
+contribute beyond a single promote.
+
+### v2 ship recipe
+
+What ships:
+- `LlamaSensitivityProfile` (JSONC) — declarative, schema-versioned.
+- `LlamaSensitivityProfileBuilder` — per-arch ablation campaign,
+  resumable, parallel-PPL.
+- `LlamaQuantRecipeFromProfile.Build` — bpw-budget-aware, exhaustive
+  enumeration, stock-baseline floor, per-tensor protections.
+- `LlamaCustomQuantizer.QuantizeWithRecipeAsync` — realizes recipe
+  per-tensor verbatim, parallelized.
+- One profile per architecture (Qwen3 today; Llama / others later).
+
+What we measure: at Q4_K_M-class budget on Qwen3-1.7B, v2
+delivers a 0.45-PPL improvement over stock at +0.06 bpw, and the
+same improvement holds whether the profile was built on the 0.6B
+or 1.7B target.
+
+### Open questions for Run 17
+
+- Does the win hold at higher budgets (Q5_K_M, ~5.77 bpw)? Run 15
+  showed the no-baseline recipe tied stock there (17.13 vs 17.11);
+  with baseline it should be a clean win.
+- Does it hold on Llama (no QK-norm, different sensitivity profile)?
+- Does expanding the candidate ladder (Q3_K, Q5_K, Q8_0, IQ4_XS)
+  let the profile contribute *more* on top of baseline, or do we
+  hit diminishing returns?
+
 ## Run 15 — 2026-04-27 13:30  (Custom quantizer + matched-bpw stock baselines — Run 14 inverts)
 
 Run 14 had a confounder: `tt_overrides` only fires as "manual" when
