@@ -769,9 +769,18 @@ public static class LlamaQuantRecipeFromProfile
         {
             if (!perTensor.TryGetValue(name, out var coef)) continue;
             var clamped = new Dictionary<LlamaTensorType, double>();
-            // Per-family running max — see BuildClampedScaledDeltas for
-            // the full rationale. Cross-family monotone would suppress
-            // genuine IQ-vs-K-quant signal.
+            // Per-family running max at per-tensor scope. Within a
+            // family the monotone rule still suppresses ablation noise
+            // (a higher-bpw K-quant should be at least as good as a
+            // lower-bpw K-quant); across families it doesn't hold (an
+            // IQ-quant can genuinely beat a higher-bpw K-quant on the
+            // same tensor). Per-tensor refinement only swaps a small
+            // number of tensors at a time, so the multi-tensor IQ
+            // compounding cost we observed at category scope (Run 21
+            // follow-up) is much smaller here. Variant A in those
+            // experiments — entire attn_k category swapped K→IQ4_XS —
+            // cost only +0.04 PPL beyond the all-K Run 21 recipe; an
+            // individual-tensor swap is far below noise.
             var runningMaxByFamily = new Dictionary<LlamaQuantFamily, double>();
             foreach (var T in ladder.OrderByDescending(LlamaQuantRecipe.GetBitsPerElement))
             {
@@ -898,40 +907,40 @@ public static class LlamaQuantRecipeFromProfile
 
     /// <summary>
     /// Build a per-(category, ladder type) table of size-scaled
-    /// per-category ΔPPL coefficients with zero-floor + per-family
+    /// per-category ΔPPL coefficients with zero-floor + cross-family
     /// monotone-from-above-bpw clamping applied.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Why clamp:
+    /// Two clamps applied jointly via a single descending-bpw pass:
+    /// </para>
     /// <list type="number">
     ///   <item><b>Zero-floor.</b> Quantization is a strict information
     ///     loss vs F16. A measured δ &lt; 0 means the F16-vs-quantized
     ///     PPL difference is below the corpus's PPL measurement
     ///     variance — noise, not signal. Floor at 0 to refuse phantom
     ///     "free wins" (Run 20 case: 4B attn_v Q2_K = −0.45).</item>
-    ///   <item><b>Per-family monotone-from-above-bpw.</b> A lower-bpw
-    ///     type from the <em>same algorithm family</em> (K, I, Legacy,
-    ///     Float, …) can't strictly cause less PPL impact than a
-    ///     higher-bpw type from that family — within a family,
-    ///     non-monotonicity signals ablation noise. <b>Across families</b>
-    ///     monotone does NOT hold: IQ-quants use codebook + importance-
-    ///     aware machinery that genuinely outperforms higher-bpw K-quants
-    ///     on certain tensor distributions, and treating that as noise
-    ///     would suppress real signal. Run 21's ffn_down case exposed
-    ///     this — IQ4_XS @ 4.25 bpw measured Δ = +0.007, K-family
-    ///     Q5_K @ 5.5 bpw measured Δ = +0.296 (noisy), and the old
-    ///     cross-family monotone clamp pulled IQ4_XS up to Q5_K's
-    ///     value, causing the optimizer to pick Q6_K (cheap-by-clamp
-    ///     in the global running max) instead of the genuinely better
-    ///     IQ4_XS. Per-family clamping preserves the IQ signal.</item>
+    ///   <item><b>Cross-family monotone-from-above-bpw.</b> Each lower-bpw
+    ///     type's clamped δ is at least the running max of every higher-bpw
+    ///     type (regardless of family). Theoretically this is over-conservative
+    ///     across families — IQ-quants use different machinery than K-quants
+    ///     and can genuinely outperform higher-bpw K-quants on the same tensor
+    ///     — but empirically (Run 21 follow-up isolation experiments,
+    ///     2026-04-28) per-category single-category ablation
+    ///     <em>under-predicts</em> the category-in-mix cost when the
+    ///     optimizer picks IQ-types for whole categories. ffn_down at IQ4_XS
+    ///     measured +0.007 PPL in single-category ablation but cost +0.31 PPL
+    ///     when applied as the recipe pick across all 28 layers. The
+    ///     cross-family clamp's accidental side-effect of biasing the
+    ///     optimizer away from "all IQ4_XS for category X" turned out to
+    ///     be the empirically correct behavior. Per-family clamping at this
+    ///     scope was tried and produced a measurably worse recipe.</item>
     /// </list>
-    /// </para>
     /// <para>
-    /// Implementation: walk the ladder in <em>descending</em> bpw order,
-    /// tracking a per-family running max (each family's max initialized
-    /// to 0 — the zero-floor). Each type's clamped δ = max(raw, family's
-    /// running_max). One pass; both clamps fall out simultaneously.
+    /// Per-family clamping <em>is</em> the right rule at per-tensor
+    /// refinement scope, where individual tensors can be moved to IQ
+    /// types without the multi-tensor compounding regression. See
+    /// <see cref="RefineCategoryPerTensor"/>.
     /// </para>
     /// </remarks>
     private static Dictionary<(string Cat, LlamaTensorType T), double>
@@ -946,19 +955,13 @@ public static class LlamaQuantRecipeFromProfile
             .ToList();
         foreach (var (cat, coef) in profile.Categories)
         {
-            // Track running max per family. Missing entries default to
-            // 0 (the zero-floor), so a family seen for the first time
-            // gets clamped against zero rather than a foreign family's
-            // accumulated max.
-            var runningMaxByFamily = new Dictionary<LlamaQuantFamily, double>();
+            double runningMax = 0.0;    // zero-floor seed
             foreach (var T in byBpwDescending)
             {
-                var family = LlamaQuantRecipe.GetFamily(T);
-                var familyMax = runningMaxByFamily.GetValueOrDefault(family, 0.0);
                 var raw = coef.DeltaPplByType.GetValueOrDefault(T, 0.0) * sizeScale;
-                var clamped = Math.Max(raw, familyMax);
+                var clamped = Math.Max(raw, runningMax);
                 result[(cat, T)] = clamped;
-                runningMaxByFamily[family] = clamped;
+                runningMax = clamped;
             }
         }
         return result;

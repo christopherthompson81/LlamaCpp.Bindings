@@ -529,69 +529,6 @@ public class QuantRecipeFromProfileTests
     }
 
     [Fact]
-    public void NoiseClamp_PerFamilyMonotone_PreservesIQuantSignalAgainstNoisyKQuant()
-    {
-        // Run-21 case: a noisy K-family Q5_K reading was inflating the
-        // clamped delta of every K-family type below it (Q4_K, Q3_K…)
-        // AND of the I-family IQ4_XS sitting between Q5_K and Q4_K in
-        // bpw. The cross-family monotone propagation suppressed IQ4_XS's
-        // genuine signal; per-family monotone preserves it.
-        //
-        // Profile: Q5_K is noisy (Δ = 0.30), Q4_K is moderate (0.10),
-        // IQ4_XS measures very low (0.01) — its true signal. Under
-        // per-family clamping, IQ4_XS should land at 0.01 (not pulled
-        // up by Q5_K), and the optimizer at a 4.5 bpw target should
-        // prefer IQ4_XS (lower bpw, better delta).
-        var profile = new LlamaSensitivityProfile(
-            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
-            ArchitectureId:        "test",
-            LayerCount:            1,
-            FamilyNotes:           null,
-            Provenance:            new LlamaSensitivityProvenance(
-                "ablation", "test.gguf", 100_000_000, null, DateTime.UtcNow, "test"),
-            F16BaselinePerplexity: 10.0,
-            BaselineContextSize:   512,
-            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
-            {
-                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
-                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
-                    {
-                        [LlamaTensorType.Q6_K]   = 0.001,    // K-family, near-zero
-                        [LlamaTensorType.Q5_K]   = 0.30,     // K-family, NOISY (worse than Q4_K)
-                        [LlamaTensorType.Q4_K]   = 0.10,     // K-family, moderate
-                        [LlamaTensorType.IQ4_XS] = 0.01,     // I-family, low — preserved by per-family clamp
-                    },
-                    // Floor at Q3_K (3.4375 bpw) so IQ4_XS (4.25) is
-                    // above floor. Floor semantics for cross-family
-                    // ladders is its own design question; this test
-                    // isolates the clamp behaviour.
-                    RecommendedFloor: LlamaTensorType.Q3_K),
-            });
-        var layout = SyntheticLayout(1, 1_000_000);
-        // Reuse one ffn_up tensor name pattern; only ffn_up matters.
-        var ffnUpLayout = layout.Where(t => t.Name.Contains("ffn_up")).ToList();
-
-        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
-            profile, ffnUpLayout, targetParameterCount: 100_000_000,
-            targetBitsPerElement: 4.5,    // Q4_K-class budget
-            options: new LlamaQuantRecipeFromProfileOptions
-            {
-                ApplyStockBaseline = false,
-                MinPredictedGainPpl = 0.0,    // disable snap so the optimizer freely picks
-                MinPplGainPerBpw   = 0.05,
-            });
-
-        // Optimizer should pick IQ4_XS (lower bpw 4.25, lower clamped Δ 0.01)
-        // over Q4_K (4.5 bpw, clamped 0.30 from Q5_K propagation)
-        // and over Q5_K (5.5 bpw, 0.30) and Q6_K (6.5625 bpw, 0).
-        // The score function prefers IQ4_XS:
-        //   IQ4_XS: 0.01 + 0.05 × 4.25 = 0.2225
-        //   Q6_K:   0    + 0.05 × 6.56 = 0.328
-        var ffnUp = recipe.Entries.First(e => e.TensorName.Contains("ffn_up"));
-        Assert.Equal(LlamaTensorType.IQ4_XS, ffnUp.ChosenType);
-    }
-
-    [Fact]
     public void EndToEnd_FromQwen3Profile_BuildsWithoutTargetGguf()
     {
         // Real reference profile + synthetic target the same size as the
