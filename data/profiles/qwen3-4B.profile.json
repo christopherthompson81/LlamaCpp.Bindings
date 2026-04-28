@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "architectureId": "qwen3",
+  "layerCount": 36,
+  "familyNotes": "QK-norm architecture (Qwen3 family, 36 layers). Tied embeddings \u2014 no separate output.weight tensor. Profile is much milder than smaller Qwen3 sizes: no Q2_K cliffs, all categories auto-floor at Q2_K. attn_v Q2_K is actually slightly negative (regularization helps). Stock Q4_K_M should be near-optimal for this model \u2014 recipe builder wins are likely small.",
+  "provenance": {
+    "method": "ablation",
+    "sourceModel": "Qwen3-4B.f16.gguf",
+    "sourceParameterCount": 4022468096,
+    "corpus": "wiki.test.raw",
+    "builtAtUtc": "2026-04-28T03:39:39.2299733Z",
+    "builderVersion": "LlamaSensitivityProfileBuilder/1.0.0.0"
+  },
+  "f16BaselinePerplexity": 14.084034925340731,
+  "baselineContextSize": 512,
+  "categories": {
+    "attn_q.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.5091466220839269,
+        "Q3_K": 0.19861593804339783,
+        "Q4_K": 0.1011642243706099,
+        "Q5_K": -0.00012141624169359488,
+        "Q6_K": 0.008447969005271005,
+        "Q8_0": 0.023863321132845172,
+        "IQ4_XS": 0.2743118135612992
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_k.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.18369554164252655,
+        "Q3_K": 0.028671938963567456,
+        "Q4_K": 0.33910723929640163,
+        "Q5_K": -0.016216853135126996,
+        "Q6_K": -0.011505434562774752,
+        "Q8_0": -0.011562861235558941,
+        "IQ4_XS": 0.13090255625788672
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_v.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.44618456625221015,
+        "Q3_K": 0.9308861690150483,
+        "Q4_K": -0.05790147836617798,
+        "Q5_K": 0.06615685591393117,
+        "Q6_K": 0.030408831637240397,
+        "Q8_0": -0.006517043428864611,
+        "IQ4_XS": 0.23138921702166115
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_output.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.13834730048005817,
+        "Q3_K": 0.0619885020517188,
+        "Q4_K": 0.09602700854000723,
+        "Q5_K": 0.004582281473751948,
+        "Q6_K": 0.0051792614668890735,
+        "Q8_0": 4.2367950198851645e-05,
+        "IQ4_XS": 0.17856179726142507
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_up": {
+      "deltaPplByType": {
+        "Q2_K": 0.991694400437753,
+        "Q3_K": 0.44458602054891294,
+        "Q4_K": 0.1327291152039205,
+        "Q5_K": 0.07142245515990453,
+        "Q6_K": 0.07752157580940633,
+        "Q8_0": -0.0007608349567931327,
+        "IQ4_XS": 0.17622385203183732
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_gate": {
+      "deltaPplByType": {
+        "Q2_K": 0.4237264412808255,
+        "Q3_K": 0.6629173344781236,
+        "Q4_K": 0.011357658155320749,
+        "Q5_K": -0.01414907344676486,
+        "Q6_K": 0.03965609992469332,
+        "Q8_0": 0.005934230392730555,
+        "IQ4_XS": 0.02623189621551525
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_down": {
+      "deltaPplByType": {
+        "Q2_K": 1.19101272503557,
+        "Q3_K": 0.19018302593342717,
+        "Q4_K": -0.0334367082182343,
+        "Q5_K": 0.09813316906646286,
+        "Q6_K": -0.044110518515156016,
+        "Q8_0": 0.0249633815651098,
+        "IQ4_XS": 0.06492170175444123
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "token_embd.weight": {
+      "deltaPplByType": {
+        "Q2_K": 2.346366045871285,
+        "Q3_K": 0.28972073252739605,
+        "Q4_K": 0.0009518837853121909,
+        "Q5_K": 0.012364575703468716,
+        "Q6_K": 0.0009518837853121909,
+        "Q8_0": 0.016040392610197074,
+        "IQ4_XS": 0.26644812188606437
+      },
+      "recommendedFloor": "Q2_K"
+    }
+  }
+}

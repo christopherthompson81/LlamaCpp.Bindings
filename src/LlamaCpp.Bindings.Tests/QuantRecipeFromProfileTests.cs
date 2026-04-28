@@ -278,6 +278,45 @@ public class QuantRecipeFromProfileTests
     }
 
     [Fact]
+    public void ProfileCategory_WithoutMatchingTensorInTarget_IsSkipped()
+    {
+        // Cross-size scenario: profile measured `output.weight` as a
+        // category (e.g. Qwen3-1.7B has a separate output tensor) but
+        // the target model uses tied embeddings (Qwen3-4B). Build
+        // should skip the orphan category instead of crashing the
+        // enumeration with a missing-key lookup.
+        var profile = SyntheticProfile();
+        // Add a category that has profile data but no matching target tensor.
+        var cats = new Dictionary<string, LlamaSensitivityCategoryCoefficient>(profile.Categories)
+        {
+            ["output.weight"] = new LlamaSensitivityCategoryCoefficient(
+                DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                {
+                    [LlamaTensorType.Q2_K] = 5.0,
+                    [LlamaTensorType.Q4_K] = 0.1,
+                    [LlamaTensorType.Q6_K] = 0.0,
+                },
+                RecommendedFloor: LlamaTensorType.Q4_K),
+        };
+        var profileWithOutput = profile with { Categories = cats };
+
+        var layout = new List<(string Name, long Elements)>
+        {
+            ("blk.0.ffn_up.weight",   1_000_000L),
+            ("blk.0.ffn_gate.weight", 1_000_000L),
+            // Note: no output.weight tensor — tied embeddings.
+        };
+
+        // Without the skip, the algorithm would crash on the
+        // categoryBitsAtType lookup for ("output.weight", *).
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profileWithOutput, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5);
+        Assert.NotEmpty(recipe.Entries);
+        Assert.DoesNotContain(recipe.Entries, e => e.TensorName == "output.weight");
+    }
+
+    [Fact]
     public void EndToEnd_FromQwen3Profile_BuildsWithoutTargetGguf()
     {
         // Real reference profile + synthetic target the same size as the

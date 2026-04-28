@@ -356,9 +356,17 @@ public static class LlamaQuantRecipeFromProfile
         double ScaledDelta(string cat, LlamaTensorType type) =>
             profile.Categories[cat].DeltaPplByType.GetValueOrDefault(type, 0.0) * sizeScale;
 
+        // Only enumerate over categories that have at least one matching
+        // tensor in the target model. This skips e.g. <c>output.weight</c>
+        // when the profile has data for it but the target uses tied
+        // embeddings (Qwen3-4B, Llama-3.2-1B): the profile category is
+        // present but no target tensor matches, so it contributes nothing
+        // and would otherwise crash the per-(cat, T) lookup below.
         var perCategoryChoices = new Dictionary<string, IReadOnlyList<LlamaTensorType>>();
         foreach (var (cat, coef) in profile.Categories)
         {
+            if (!categoryElements.ContainsKey(cat)) continue;  // no matching target tensors
+
             var allowed = ladder
                 .Where(t => coef.RecommendedFloor is not LlamaTensorType f ||
                             LlamaQuantRecipe.GetBitsPerElement(t) >= LlamaQuantRecipe.GetBitsPerElement(f))
