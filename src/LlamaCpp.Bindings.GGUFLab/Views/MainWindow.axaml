@@ -147,6 +147,9 @@
                 <DataTemplate DataType="vm:AdaptiveQuantizeViewModel">
                     <v:AdaptiveQuantizeView />
                 </DataTemplate>
+                <DataTemplate DataType="vm:ProfileBuilderViewModel">
+                    <v:ProfileBuilderView />
+                </DataTemplate>
                 <DataTemplate DataType="vm:PerplexityViewModel">
                     <v:PerplexityView />
                 </DataTemplate>
