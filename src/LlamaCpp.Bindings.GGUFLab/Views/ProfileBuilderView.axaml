@@ -72,8 +72,40 @@
                               Click="OnBrowseSource" />
 
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Corpus" VerticalAlignment="Top" Margin="0,6,0,0" />
-                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding CorpusPath}"
-                              PlaceholderText="Calibration text (e.g. wiki.test.raw)" />
+                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
+                        <TextBox Text="{Binding CorpusPath}"
+                                 PlaceholderText="Calibration text (e.g. wiki.test.raw) — or click 'Load wikitext-2' below" />
+                        <!-- Corpus remedy card. Same shape as the Imatrix /
+                             Perplexity / KL pages: info-blue means optional
+                             (paste your own works just as well), one-click
+                             fetches and caches the canonical corpus. -->
+                        <Border Background="#332563EB"
+                                BorderBrush="#2563EB"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="10,8"
+                                IsVisible="{Binding ShowLoadWikitextRemedy}">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                <Viewbox Grid.Column="0" Width="20" Height="20" VerticalAlignment="Center">
+                                    <Path Data="{StaticResource BriefcaseMedicalIcon}"
+                                          Stroke="#2563EB"
+                                          StrokeThickness="2"
+                                          StrokeLineCap="Round"
+                                          StrokeJoin="Round" />
+                                </Viewbox>
+                                <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="No calibration corpus yet."
+                                               FontWeight="SemiBold" FontSize="12" TextWrapping="Wrap" />
+                                    <TextBlock Text="The campaign measures PPL on this text. wikitext-2 (~700 KB) matches published numbers and is what GGUFLab's other PPL tools use; cached after first fetch."
+                                               FontSize="11" Opacity="0.8" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="Load wikitext-2"
+                                        Command="{Binding LoadWikitextCommand}"
+                                        VerticalAlignment="Center"
+                                        ToolTip.Tip="Fetch (or read from cache) the standard calibration corpus from HuggingFace." />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
                     <Button   Grid.Row="1" Grid.Column="2" Content="Browse…"
                               VerticalAlignment="Top"
                               Click="OnBrowseCorpus" />

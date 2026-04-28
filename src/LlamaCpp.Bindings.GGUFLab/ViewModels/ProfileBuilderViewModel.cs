@@ -38,7 +38,16 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     private string _sourceModelPath = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowLoadWikitextRemedy))]
     private string _corpusPath = string.Empty;
+
+    /// <summary>
+    /// True when the user hasn't picked a corpus yet — surfaces the
+    /// "load wikitext-2" remedy card, same pattern as the Imatrix /
+    /// Perplexity / KL pages. Hidden as soon as a corpus path is set
+    /// (own-data routes are always faster than the canonical fetch).
+    /// </summary>
+    public bool ShowLoadWikitextRemedy => string.IsNullOrEmpty(CorpusPath);
 
     [ObservableProperty]
     private string _imatrixPath = string.Empty;
@@ -244,6 +253,45 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     {
         _logBus = logBus;
         Categories.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CostEstimateText));
+    }
+
+    /// <summary>
+    /// Fetch (or read from cache) the standard wikitext-2 raw test set
+    /// and assign it as the calibration corpus. Same pattern as the
+    /// Imatrix / Perplexity / KL Divergence pages — first call downloads
+    /// (~700 KB), subsequent calls hit the cache.
+    /// </summary>
+    [RelayCommand]
+    private async Task LoadWikitextAsync()
+    {
+        if (IsRunning) return;
+        try
+        {
+            StatusLine = WikitextCorpus.IsCached()
+                ? "Loading cached wikitext-2 test set…"
+                : "Downloading wikitext-2 test set from HuggingFace (~700 KB)…";
+
+            var progress = new Progress<(long downloaded, long? total)>(p =>
+            {
+                if (p.total is long t && t > 0)
+                {
+                    int pct = (int)(100L * p.downloaded / t);
+                    StatusLine = $"Downloading wikitext-2 test set… {p.downloaded / 1024:N0} / {t / 1024:N0} KB ({pct}%)";
+                }
+                else
+                {
+                    StatusLine = $"Downloading wikitext-2 test set… {p.downloaded / 1024:N0} KB";
+                }
+            });
+
+            var path = await WikitextCorpus.EnsureTestRawAsync(progress);
+            CorpusPath = path;
+            StatusLine = $"Loaded wikitext-2 test corpus from {Path.GetFileName(path)}.";
+        }
+        catch (Exception ex)
+        {
+            StatusLine = $"Failed to load wikitext-2: {ex.Message}";
+        }
     }
 
     [RelayCommand]
