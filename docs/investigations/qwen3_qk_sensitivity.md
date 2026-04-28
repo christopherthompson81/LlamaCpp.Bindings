@@ -225,6 +225,161 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 20 — 2026-04-27 21:50  (Cross-size at scale: Qwen3-4B with imatrix)
+
+Run 17 added Qwen3-1.7B and showed cross-size transfer breaks
+when the candidate ladder gets finer; Run 19 added Llama-3.2-1B
+and showed v2 ships at parity on classical-MHA arches. Run 20
+adds **Qwen3-4B** — the next size in the QK-norm family — to test
+two questions:
+
+1. Does the v2 win persist at larger sizes within the same family?
+2. Does cross-size scaling work in the larger-target direction
+   (0.6B→4B, 1.7B→4B)?
+
+Setup: Qwen3-4B downloaded as F16 (8.05 GB, mradermacher), imatrix
+built on wikitext-2.test (181 s wall after the imatrix-perf
+detour), expanded ablation campaign (8 cats × 7 types) built with
+imatrix in 60 min. Validation matrix uses imatrix for both stock
+and recipe sides — the production-realistic comparison Run 18
+flagged as needed.
+
+### Profile shape — 4B is barely sensitive
+
+Per-Q4_K coefficient comparison across the family:
+
+| category    | 0.6B  | 1.7B  | 4B    |
+|-------------|-------|-------|-------|
+| ffn_up      | +0.227 | +0.443 | **+0.133** |
+| attn_v      | +0.142 | +0.340 | **−0.058** |
+| attn_k      | +0.115 | +0.314 | +0.339 |
+| ffn_gate    | +0.106 | +0.232 | +0.011 |
+| attn_q      | +0.114 | +0.040 | +0.101 |
+| attn_output | +0.091 | +0.079 | +0.096 |
+| ffn_down    | −0.000 | +0.112 | **−0.033** |
+
+And the Q2_K cliff that dominated 1.7B is gone:
+
+| category | 0.6B Q2_K | 1.7B Q2_K | 4B Q2_K |
+|----------|-----------|-----------|---------|
+| ffn_down | +4.40     | **+3709** | +1.19   |
+| attn_v   | +2.72     | **+15.85**| **−0.45** |
+| attn_k   | +2.02     | +4.81     | +0.18   |
+
+`attn_v Q2_K = −0.45` on 4B — quantizing actually slightly
+**helps** PPL. All categories auto-floor at Q2_K because nothing
+crosses the catastrophic threshold. **4B is more like Llama than
+like 1.7B from a sensitivity profile standpoint.** The QK-norm
+signature persists in the sense that attn_k is still elevated,
+but the overall profile is much milder than the 1.7B that drove
+v2's headline result.
+
+### Validation matrix at Q4_K_M and Q5_K_M
+
+(All builds use imatrix on stock and recipe sides — Run 20 is the
+first apples-to-apples-with-imatrix comparison in the
+investigation.)
+
+| recipe                        | actual bpw | wikitext-2 PPL | Δ vs stock |
+|-------------------------------|------------|----------------|------------|
+| stock Q4_K_M                  | 4.955      | 14.5940        | —          |
+| **recipe 4B→4B @Q4**          | 4.974      | **14.4559**    | **−0.138** |
+| recipe 1.7B→4B @Q4 (cross)    | 4.823      | 14.8944        | +0.301     |
+| recipe 0.6B→4B @Q4 (cross)    | 4.942      | 14.8083        | +0.214     |
+| stock Q5_K_M                  | 5.735      | 14.0846        | —          |
+| recipe 4B→4B @Q5              | 5.620      | 14.3788        | +0.294     |
+| recipe 1.7B→4B @Q5 (cross)    | 5.777      | 14.3389        | +0.254     |
+| recipe 0.6B→4B @Q5 (cross)    | 5.688      | 14.7047        | +0.620     |
+
+### Verdict — the v2 pitch narrows further
+
+**1. Same-model wins shrink with size.** Q4_K_M on 4B is −0.14
+PPL — a real win, but 16× smaller than 1.7B's −2.26. The reason
+is structural: 4B's profile has no Q2_K cliffs, so stock's
+`use_more_bits` heuristic is already near-optimal. v2 has less
+headroom to find. The pattern across the family at Q4_K_M:
+
+  - Qwen3-0.6B: not run as target  (size class too small for the
+    Q4_K_M-class budget to be informative)
+  - Qwen3-1.7B: **−2.26 PPL** (12% relative)
+  - Qwen3-4B:   **−0.14 PPL** (1% relative)
+  - Llama-3.2-1B: **−0.03 PPL** (0.2% relative)
+
+The 1.7B win is **the cliff-rich case**; 4B is closer to Llama
+in profile shape and gets a Llama-sized improvement.
+
+**2. Cross-size in the larger-target direction is a clear loss
+on 4B.** Both 0.6B→4B and 1.7B→4B regress by +0.2 to +0.3 PPL at
+Q4_K_M. Run 17 had hinted at this with the 0.6B→1.7B step
+(byte-identical recipes there masked the divergence at finer
+ladders); Run 20 makes it concrete. Smaller-model profiles bake
+in cliff structures that the larger model doesn't have, so
+size-scaled recipes are over-protective in places where 4B could
+ride lower bpw, and under-protective in places where 4B's mild
+profile suggests more aggressive choices.
+
+**3. Q5_K_M is a stock-heuristic-wins tier across the board.**
+Even same-model 4B→4B regresses by +0.29. At Q5_K_M's higher
+bpw budget, stock has enough bits to be near-optimal, and v2's
+exhaustive enumeration finds local optima that don't survive
+non-additive compound effects (the Run 17b lesson).
+
+### Implication for v2 ship plan
+
+The honest read crystallizes:
+
+- **v2 ships per-(arch, size-class) profiles.** Same-model
+  recipes are the only reliably-non-regressing path. Build a
+  profile for each (arch, size) pair you intend to serve.
+- **The biggest wins concentrate on small-to-medium QK-norm
+  models with cliff-rich profiles.** Qwen3-1.7B-class is the
+  sweet spot. Larger sizes within the family have less headroom;
+  classical-MHA architectures don't have the cliffs that drive
+  the gap.
+- **Don't push v2 above ~Q4_K_M-class budgets for the headline
+  pitch.** At Q5_K_M-class, ship stock; the heuristic is already
+  good and v2 is a wash or slight regression.
+
+### Now in `data/profiles/`
+
+- `qwen3-0.6B.profile.json` (9 cats × 7 types, with imatrix)
+- `qwen3-1.7B.profile.json` (9 cats × 7 types) — built without
+  imatrix in Run 17, follow-up: rebuild with imatrix for
+  cross-comparison consistency
+- `qwen3-4B.profile.json`   (8 cats × 7 types, with imatrix —
+  tied embeddings, no separate output.weight)
+- `llama-3.2-1B.profile.json` (8 cats × 7 types, with imatrix —
+  tied embeddings)
+
+### Bug fix uncovered while running
+
+Run 20 surfaced a crash in the recipe builder when the source
+profile has a category (e.g. `output.weight`) that doesn't exist
+as a tensor in the target model — common in cross-size builds
+across architectures with vs without tied embeddings. Fixed in
+c8defad: the per-category enumeration skips orphan categories
+that have no matching target tensor. Locked in by
+`ProfileCategory_WithoutMatchingTensorInTarget_IsSkipped`.
+
+### Imatrix-generation perf detour
+
+Building Run 20 required adding imatrix support throughout. The
+first 4B imatrix run was projected at ~16 min on the original
+scalar imatrix collector. Two rounds of optimization landed:
+
+- **Round 1 (vectorized math):** TensorPrimitives.Multiply for
+  the row-square + Vector256 manual SIMD float→double accumulator.
+  1.68× wall on Qwen3-1.7B.
+- **Round 2 (producer/consumer worker pool):** Eval callback only
+  copies activation bytes and queues; N background workers do the
+  math in parallel. ConcurrentDictionary + per-Entry locks for
+  fine-grained sync. **4.7× total wall on 1.7B**, 5× on 4B.
+- **Round 3 (chunkSize=1024):** 3% improvement, within noise —
+  d2h sync per matmul is the real floor, not per-callback fixed
+  overhead. Not pursued.
+
+4B imatrix went from ~16 min (scalar projection) to **3:06 actual**.
+
 ## Run 19 — 2026-04-27 18:45  (Cross-architecture: v2 on Llama-3.2-1B)
 
 Run 18 closed v2 with a clean −2.26 PPL win on Qwen3-1.7B at
