@@ -228,6 +228,16 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     /// </summary>
     private int _refreshSeq;
 
+    /// <summary>
+    /// True while a background refresh is in flight. Drives an
+    /// indeterminate progress indicator in the UI so the user has a
+    /// visual cue during the GGUF read + recipe enumeration (a few
+    /// hundred ms on a fresh page; longer when picking a multi-GB
+    /// model for the first time).
+    /// </summary>
+    [ObservableProperty]
+    private bool _isRefreshing;
+
     partial void OnInputPathChanged(string value)
     {
         NotifyRemediesChanged();
@@ -272,6 +282,13 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
             PerTensorPromotionThresholdPpl  = PerTensorPromotionThresholdPpl,
         };
 
+        // Spinner state. Only the most recent in-flight refresh drives
+        // the IsRefreshing flag — superseded runs return without
+        // touching it, so when several rapid changes coalesce the
+        // spinner stays on through the whole burst and only turns off
+        // when the latest run actually lands.
+        if (seq == _refreshSeq) IsRefreshing = true;
+
         try
         {
             var result = await Task.Run(() => ComputeRefresh(inputPath, profilePath, targetBpw, opts));
@@ -282,6 +299,10 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         {
             if (_refreshSeq != seq) return;
             RecipeSummaryLine = $"Refresh failed: {ex.Message}";
+        }
+        finally
+        {
+            if (_refreshSeq == seq) IsRefreshing = false;
         }
     }
 

@@ -10,6 +10,15 @@
         <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,18">
             <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
             <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+            <!-- Indeterminate refresh indicator. Visible while the
+                 background pipeline (GGUF read + profile resolution +
+                 recipe build + rails) is in flight; lets the user know
+                 the page is doing work even though the UI thread stays
+                 responsive. -->
+            <ProgressBar IsIndeterminate="True"
+                         IsVisible="{Binding IsRefreshing}"
+                         Height="2"
+                         Margin="0,4,0,0" />
         </StackPanel>
 
         <!-- Footer: progress + status + log -->
