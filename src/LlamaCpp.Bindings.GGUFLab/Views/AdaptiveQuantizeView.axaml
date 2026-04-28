@@ -189,6 +189,31 @@
                     </StackPanel>
                 </Expander>
 
+                <!-- Apply-time rails (warnings + blocks) -->
+                <Border BorderBrush="#d49a3a"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="10"
+                        IsVisible="{Binding HasAnyRail}">
+                    <ItemsControl ItemsSource="{Binding Rails}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="vm:AdaptiveQuantizeViewModel+RailMessage">
+                                <Grid ColumnDefinitions="20,*" Margin="0,2">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Glyph}"
+                                               FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                               FontSize="13"
+                                               VerticalAlignment="Top" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Text}"
+                                               FontSize="12"
+                                               TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+
                 <!-- Recipe summary + preview -->
                 <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
                         BorderThickness="1"
@@ -257,7 +282,7 @@
                             IsEnabled="{Binding HasRecipe}" />
                     <Button Content="Quantize"
                             Command="{Binding QuantizeCommand}"
-                            IsEnabled="{Binding HasRecipe}"
+                            IsEnabled="{Binding CanQuantize}"
                             Classes="accent" />
                     <Button Content="Cancel"
                             Command="{Binding CancelCommand}"

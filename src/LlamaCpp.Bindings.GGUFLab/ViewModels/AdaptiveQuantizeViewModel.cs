@@ -146,11 +146,28 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     /// <summary>Recipe rebuilt whenever any input affecting the recipe changes.</summary>
     public ObservableCollection<RecipeRow> RecipeRows { get; } = new();
 
+    /// <summary>
+    /// Apply-time rails: warnings and blocks against avoidable bad
+    /// decisions (cross-arch, cross-size, missing profile data, target
+    /// bpw out of measured range). Recomputed on every input change.
+    /// </summary>
+    public ObservableCollection<RailMessage> Rails { get; } = new();
+
+    /// <summary>True when any rail is at <see cref="RailSeverity.Block"/>; disables Quantize.</summary>
+    public bool HasBlockingRail => Rails.Any(r => r.Severity == RailSeverity.Block);
+
+    /// <summary>True when at least one rail is currently active — drives the rails panel visibility.</summary>
+    public bool HasAnyRail => Rails.Count > 0;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasRecipe))]
+    [NotifyPropertyChangedFor(nameof(CanQuantize))]
     private LlamaQuantRecipe? _builtRecipe;
 
     public bool HasRecipe => BuiltRecipe is not null && BuiltRecipe.Entries.Count > 0;
+
+    /// <summary>Quantize is enabled when we have a recipe AND no rail is blocking.</summary>
+    public bool CanQuantize => HasRecipe && !HasBlockingRail;
 
     [ObservableProperty]
     private string _recipeSummaryLine = string.Empty;
@@ -316,6 +333,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         RecipeRows.Clear();
         BuiltRecipe = null;
         RecipeSummaryLine = string.Empty;
+        RefreshRails();
 
         if (LoadedProfile is null) return;
         if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath)) return;
@@ -469,6 +487,102 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         }
     }
 
+    /// <summary>
+    /// Recompute the apply-time rails from the current inputs. The
+    /// rails are designed to catch the specific avoidable bad-decision
+    /// patterns we know about — cross-arch, cross-size extrapolation,
+    /// out-of-band target bpw, partial profile coverage. Any rail at
+    /// <see cref="RailSeverity.Block"/> disables the Quantize button.
+    /// </summary>
+    private void RefreshRails()
+    {
+        Rails.Clear();
+
+        if (LoadedProfile is not { } profile) goto Done;
+        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath)) goto Done;
+
+        // 1) Cross-arch: profile arch must match target arch.
+        try
+        {
+            var gguf = LlamaGgufFile.Open(InputPath);
+            var targetArch = gguf.Metadata.FirstOrDefault(m => m.Key == "general.architecture")?.Value.AsString();
+            if (!string.IsNullOrEmpty(targetArch) && !string.Equals(targetArch, profile.ArchitectureId, StringComparison.Ordinal))
+            {
+                Rails.Add(new RailMessage(RailSeverity.Block,
+                    $"Architecture mismatch: profile is for {profile.ArchitectureId}, model is {targetArch}. " +
+                    "Recipe would mostly miss the target's tensors. Pick a profile built for {targetArch}."));
+            }
+
+            // 2) Cross-size ratio.
+            long targetParams = gguf.Tensors.Sum(t => t.Dimensions.Aggregate(1L, (a, b) => a * (long)b));
+            long sourceParams = profile.Provenance.SourceParameterCount ?? 0;
+            if (targetParams > 0 && sourceParams > 0)
+            {
+                var ratio = (double)targetParams / sourceParams;
+                if (ratio > 5.0 || ratio < 0.2)
+                {
+                    Rails.Add(new RailMessage(RailSeverity.Warn,
+                        $"Cross-size ratio is {ratio:F2}× (target/source). " +
+                        "Linear coefficient scaling extrapolates poorly past ~5×; expect predicted ΔPPLs to be " +
+                        "either far too optimistic (large→small) or pessimistic (small→large)."));
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort — if we can't read the GGUF, skip these rails;
+            // the build/apply path will surface the real error.
+        }
+
+        // 3) Target bpw outside profile's measured ladder.
+        var measuredTypes = profile.Categories.Values
+            .SelectMany(c => c.DeltaPplByType.Keys)
+            .Distinct()
+            .OrderBy(LlamaQuantRecipe.GetBitsPerElement)
+            .ToList();
+        if (measuredTypes.Count > 0)
+        {
+            var minBpw = LlamaQuantRecipe.GetBitsPerElement(measuredTypes[0]);
+            var maxBpw = LlamaQuantRecipe.GetBitsPerElement(measuredTypes[^1]);
+            if (TargetBitsPerElement < minBpw - 0.05)
+            {
+                Rails.Add(new RailMessage(RailSeverity.Block,
+                    $"Target {TargetBitsPerElement:F2} bpw is below the profile's lowest measured rung " +
+                    $"({measuredTypes[0]} = {minBpw:F2} bpw). Recipe builder can't extrapolate below; " +
+                    "build a profile that covers lower types or raise the target."));
+            }
+            else if (TargetBitsPerElement > maxBpw + 0.5)
+            {
+                Rails.Add(new RailMessage(RailSeverity.Warn,
+                    $"Target {TargetBitsPerElement:F2} bpw is well above the profile's highest measured rung " +
+                    $"({measuredTypes[^1]} = {maxBpw:F2} bpw). Above this, the recipe pins everything to the highest measured type — no further refinement possible."));
+            }
+        }
+
+        // 4) Profile completeness.
+        if (measuredTypes.Count > 0)
+        {
+            var completeness = profile.ComputeCompleteness(profile.Categories.Keys.ToList(), measuredTypes);
+            if (!completeness.IsComplete)
+            {
+                var missing = completeness.MissingCategoryCells.Take(3)
+                    .Select(c => $"{c.Category}@{c.Type}");
+                var more = completeness.MissingCategoryCells.Count > 3
+                    ? $" (+{completeness.MissingCategoryCells.Count - 3} more)"
+                    : "";
+                Rails.Add(new RailMessage(RailSeverity.Warn,
+                    $"Profile is partial: {completeness.MeasuredCategoryCells}/{completeness.TotalCategoryCells} cells measured. " +
+                    $"Missing: {string.Join(", ", missing)}{more}. " +
+                    "Recipe builder will still work but choices are limited to what's measured."));
+            }
+        }
+
+    Done:
+        OnPropertyChanged(nameof(HasBlockingRail));
+        OnPropertyChanged(nameof(HasAnyRail));
+        OnPropertyChanged(nameof(CanQuantize));
+    }
+
     public override void ApplyActiveModel(string? path)
     {
         if (string.IsNullOrEmpty(InputPath)
@@ -484,6 +598,19 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     protected override bool HasImatrixInputValue => !string.IsNullOrEmpty(ImatrixPath);
     protected override string? CurrentSourceGguf =>
         string.IsNullOrEmpty(InputPath) ? ResolveGgufFromActive(Active?.Path) : InputPath;
+
+    /// <summary>
+    /// Severity of an apply-time rail. <see cref="Block"/> disables the
+    /// Quantize button outright; <see cref="Warn"/> only annotates.
+    /// </summary>
+    public enum RailSeverity { Warn, Block }
+
+    /// <summary>One rail row in the warnings panel.</summary>
+    public sealed record RailMessage(RailSeverity Severity, string Text)
+    {
+        public string Glyph => Severity == RailSeverity.Block ? "✗" : "⚠";
+        public bool IsBlock => Severity == RailSeverity.Block;
+    }
 
     public sealed record RecipeRow(
         string TensorName,
