@@ -184,9 +184,26 @@
                                   ToolTip.Tip="Treats llama.cpp's hand-tuned per-layer protection table as a hard floor: recipe can promote above it but never demote below. Recommended on.">
                             <TextBlock Text="Apply stock baseline (Q4_K_M-style per-layer protection)" />
                         </CheckBox>
-                        <CheckBox Content="Use per-tensor data (when present) to demote individual tensors"
-                                  IsChecked="{Binding UsePerTensorData, Mode=TwoWay}"
-                                  ToolTip.Tip="When the profile has per-layer ablation data, demote tensors below the category-level pick where the per-tensor sensitivity is below the category average. Demote-only — never promotes. Requires per-layer profile data; ignored when only per-category data exists." />
+                        <CheckBox IsChecked="{Binding UsePerTensorData, Mode=TwoWay}"
+                                  ToolTip.Tip="When the profile has per-layer ablation data, refine tensors below the category-level pick where the per-tensor sensitivity is below the category average. Requires per-layer profile data; ignored when only per-category data exists.">
+                            <TextBlock Text="Use per-tensor data (when present) to refine individual tensors" />
+                        </CheckBox>
+                        <CheckBox IsChecked="{Binding AllowPerTensorPromotion, Mode=TwoWay}"
+                                  IsEnabled="{Binding UsePerTensorData}"
+                                  ToolTip.Tip="Allow per-tensor PROMOTION alongside demotion. Promotions are paid for by concurrent demote savings within the same category — total bpw stays within the category-level optimizer's budget. Off by default. Useful when individual tensors disagree sharply with the category average.">
+                            <TextBlock Text="↳ Allow per-tensor promotion (paid for by concurrent demotions)" />
+                        </CheckBox>
+                        <Grid ColumnDefinitions="200,*,90" ColumnSpacing="10"
+                              IsEnabled="{Binding AllowPerTensorPromotion}">
+                            <TextBlock Grid.Column="0" Text="↳ Promotion threshold (PPL)" VerticalAlignment="Center"
+                                       ToolTip.Tip="Per-tensor ΔPPL above which a tensor at the chosen type qualifies as a promotion candidate. Default 0.05 PPL — above measurement noise but below catastrophic. Lower to be more aggressive, higher to be conservative." />
+                            <Slider Grid.Column="1" Minimum="0.01" Maximum="0.5"
+                                    SmallChange="0.01" LargeChange="0.05"
+                                    Value="{Binding PerTensorPromotionThresholdPpl, Mode=TwoWay}" />
+                            <TextBox Grid.Column="2"
+                                     Text="{Binding PerTensorPromotionThresholdPpl, Mode=TwoWay, StringFormat=F3}"
+                                     VerticalAlignment="Center" />
+                        </Grid>
                     </StackPanel>
                 </Expander>
 

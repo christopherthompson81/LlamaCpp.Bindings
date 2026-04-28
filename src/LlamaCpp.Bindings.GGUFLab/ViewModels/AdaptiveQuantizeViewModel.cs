@@ -79,6 +79,22 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     [ObservableProperty]
     private bool _usePerTensorData = true;
 
+    /// <summary>
+    /// Allow per-tensor promotion paired with concurrent demotion within
+    /// the same category. Default off — turn on once you've measured
+    /// per-tensor data and want to spend demote savings on tensors that
+    /// individually need more bits than the category average suggests.
+    /// </summary>
+    [ObservableProperty]
+    private bool _allowPerTensorPromotion;
+
+    /// <summary>
+    /// Per-tensor ΔPPL threshold above which a tensor at the chosen
+    /// type qualifies as a promotion candidate. Default 0.05 PPL.
+    /// </summary>
+    [ObservableProperty]
+    private double _perTensorPromotionThresholdPpl = 0.05;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle))]
     private bool _isRunning;
@@ -227,6 +243,8 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     partial void OnApplyStockBaselineChanged(bool value)        => _ = ScheduleRefreshAsync();
     partial void OnSizeScalingExponentChanged(double value)     => _ = ScheduleRefreshAsync();
     partial void OnUsePerTensorDataChanged(bool value)          => _ = ScheduleRefreshAsync();
+    partial void OnAllowPerTensorPromotionChanged(bool value)   => _ = ScheduleRefreshAsync();
+    partial void OnPerTensorPromotionThresholdPplChanged(double value) => _ = ScheduleRefreshAsync();
 
     /// <summary>
     /// Snapshot inputs on the UI thread, run the heavy work
@@ -245,11 +263,13 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         var targetBpw   = TargetBitsPerElement;
         var opts = new LlamaQuantRecipeFromProfileOptions
         {
-            MinPredictedGainPpl  = MinPredictedGainPpl,
-            MinPplGainPerBpw     = MinPplGainPerBpw,
-            ApplyStockBaseline   = ApplyStockBaseline,
-            SizeScalingExponent  = SizeScalingExponent,
-            UsePerTensorData     = UsePerTensorData,
+            MinPredictedGainPpl             = MinPredictedGainPpl,
+            MinPplGainPerBpw                = MinPplGainPerBpw,
+            ApplyStockBaseline              = ApplyStockBaseline,
+            SizeScalingExponent             = SizeScalingExponent,
+            UsePerTensorData                = UsePerTensorData,
+            AllowPerTensorPromotion         = AllowPerTensorPromotion,
+            PerTensorPromotionThresholdPpl  = PerTensorPromotionThresholdPpl,
         };
 
         try

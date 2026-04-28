@@ -175,16 +175,51 @@ public sealed class LlamaQuantRecipeFromProfileOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Why demote-only: a full per-tensor optimization would re-run the
-    /// budget allocation across all tensors with their individual
-    /// sensitivities, which is a different (harder) optimization
-    /// problem. Demote-only refinement is safe: it strictly under-runs
-    /// the budget the per-category optimizer chose, so the recipe is
-    /// guaranteed to fit. Promotions are deferred to a future pass that
-    /// can rebalance saved bpw into other tensors.
+    /// Why demote-only by default: an ill-paired promotion violates the
+    /// budget the per-category optimizer chose. Set
+    /// <see cref="AllowPerTensorPromotion"/> to enable a per-category
+    /// rebalance pass that spends demote savings on promotions where the
+    /// per-tensor signal warrants it.
     /// </para>
     /// </remarks>
     public bool UsePerTensorData { get; set; } = true;
+
+    /// <summary>
+    /// Enable per-tensor <em>promotion</em> alongside the existing
+    /// demote-only refinement. When on, the per-tensor refinement
+    /// works per-category: demotes and promotes share a common budget
+    /// pool such that the category's total bpw never exceeds what the
+    /// category-level optimizer's pick would have allocated. Useful
+    /// when individual tensors disagree sharply with the category
+    /// average — Qwen3-1.7B ffn_down has 3 layers with Q4_K Δ &gt;
+    /// 0.05 PPL while the category average is ~0.004; promoting just
+    /// those layers is funded by demoting the much larger set of
+    /// near-zero-Δ layers.
+    /// </summary>
+    /// <remarks>
+    /// Default <c>false</c> preserves the demote-only behavior. Turn
+    /// on after measuring per-tensor data and confirming individual
+    /// layers materially deviate from the category average. Bpw is
+    /// strictly conserved within the category — the recipe builder
+    /// won't blow its budget.
+    /// </remarks>
+    public bool AllowPerTensorPromotion { get; set; } = false;
+
+    /// <summary>
+    /// Absolute per-tensor ΔPPL threshold (in PPL units) above which
+    /// a tensor at the category-chosen type is considered "materially
+    /// sensitive" and becomes a promotion candidate. Below this
+    /// threshold the per-tensor signal is treated as noise-level and
+    /// not worth committing budget to.
+    /// </summary>
+    /// <remarks>
+    /// Default <c>0.05</c> PPL — comfortably above measured noise on
+    /// our wiki.test corpus, captures genuinely-sensitive layers like
+    /// Qwen3-1.7B blk.3/7 ffn_down (Δ ≈ 0.06–0.07 at Q4_K) without
+    /// over-promoting on noise. Lower it to be more aggressive with
+    /// promotions; raise it to be more conservative.
+    /// </remarks>
+    public double PerTensorPromotionThresholdPpl { get; set; } = 0.05;
 }
 
 /// <summary>
@@ -557,41 +592,69 @@ public static class LlamaQuantRecipeFromProfile
         }
 
         // ---- 7. Materialize per-tensor entries ----
-        // Each tensor's effective type = max(baseline, recipe choice).
-        // When per-tensor data is available + opt-in, refine the
-        // category-level pick: demote individual tensors to lower-bpw
-        // types where their per-tensor sensitivity says it's safe.
-        // Demote-only — never promote. The category-level optimizer
-        // committed to a budget; per-tensor refinement only saves bpw,
-        // never spends more.
+        // ---- 7. Per-category per-tensor refinement (optional) ----
+        // Run RefineCategoryPerTensor once per category before the entry
+        // materialization loop. The category function does demote-only
+        // by default; with AllowPerTensorPromotion on, it also runs a
+        // promotion pass funded by demote savings within the same
+        // category. Bpw is strictly conserved at the category level —
+        // the recipe builder never blows the budget the per-category
+        // optimizer chose.
+        var perTensorRefined = new Dictionary<string, (LlamaTensorType Type, double Delta)>(StringComparer.Ordinal);
+        if (opts.UsePerTensorData && profile.PerTensor is { } perTensorMap)
+        {
+            // Group weight tensors by category so we can refine each
+            // category independently.
+            var byCategory = new Dictionary<string, List<(string Name, long Elements)>>(StringComparer.Ordinal);
+            foreach (var (name, elements) in weightTensors)
+            {
+                if (!tensorCategory.TryGetValue(name, out var cat)) continue;
+                if (!byCategory.TryGetValue(cat, out var list))
+                    byCategory[cat] = list = new List<(string, long)>();
+                list.Add((name, elements));
+            }
+
+            foreach (var (cat, tensorsInCat) in byCategory)
+            {
+                if (!pick.TryGetValue(cat, out var picked)) continue;
+                // Skip refinement when no tensor in this category has per-tensor data.
+                var perTensorInCat = tensorsInCat
+                    .Where(t => perTensorMap.ContainsKey(t.Name))
+                    .ToDictionary(t => t.Name, t => perTensorMap[t.Name], StringComparer.Ordinal);
+                if (perTensorInCat.Count == 0) continue;
+
+                var refined = RefineCategoryPerTensor(
+                    cat, picked, ScaledDelta(cat, picked),
+                    tensorsInCat,
+                    perTensorInCat,
+                    ladder, sizeScale,
+                    floor: profile.Categories[cat].RecommendedFloor,
+                    baseline: baseline,
+                    minPplGainPerBpw: opts.MinPplGainPerBpw,
+                    allowPromotion: opts.AllowPerTensorPromotion,
+                    promotionThreshold: opts.PerTensorPromotionThresholdPpl);
+                foreach (var kv in refined)
+                    perTensorRefined[kv.Key] = kv.Value;
+            }
+        }
+
+        // Each tensor's effective type = the per-category-refined pick
+        // when available, otherwise max(baseline, category pick).
         var entries = new List<LlamaQuantRecipeEntry>(weightTensors.Count);
         foreach (var (name, elements) in weightTensors)
         {
             LlamaTensorType chosen;
             double estDelta;
-            if (tensorCategory.TryGetValue(name, out var cat))
+            if (perTensorRefined.TryGetValue(name, out var refined))
+            {
+                chosen = refined.Type;
+                estDelta = refined.Delta;
+            }
+            else if (tensorCategory.TryGetValue(name, out var cat))
             {
                 var picked = pick[cat];
-                var categoryChosen = baseline.TryGetValue(name, out var b) ? MaxType(b, picked) : picked;
-                var categoryDelta  = categoryChosen == picked ? ScaledDelta(cat, picked) : 0.0;
-
-                if (opts.UsePerTensorData &&
-                    profile.PerTensor is { } perTensorMap &&
-                    perTensorMap.TryGetValue(name, out var perTensorCoef))
-                {
-                    var refined = RefinePerTensor(
-                        name, categoryChosen, categoryDelta,
-                        perTensorCoef, ladder, sizeScale,
-                        floor: profile.Categories[cat].RecommendedFloor,
-                        baselineFloor: baseline.TryGetValue(name, out var bb) ? bb : (LlamaTensorType?)null);
-                    chosen = refined.Type;
-                    estDelta = refined.Delta;
-                }
-                else
-                {
-                    chosen = categoryChosen;
-                    estDelta = categoryDelta;
-                }
+                chosen = baseline.TryGetValue(name, out var b) ? MaxType(b, picked) : picked;
+                estDelta = chosen == picked ? ScaledDelta(cat, picked) : 0.0;
             }
             else
             {
@@ -643,75 +706,189 @@ public static class LlamaQuantRecipeFromProfile
     }
 
     /// <summary>
-    /// Demote a per-tensor pick to a smaller-bpw type when the tensor's
-    /// per-tensor coefficient says it's safe. Returns the (refined type,
-    /// predicted delta) pair to use in the entry. Never promotes — the
-    /// category-level pass committed to a budget; refinement only
-    /// saves bpw.
+    /// Per-category refinement of per-tensor type choices given the
+    /// category-level optimizer's pick. Runs two passes:
     /// </summary>
     /// <remarks>
-    /// Algorithm:
     /// <list type="number">
-    ///   <item>Apply the same zero-floor + monotone-from-above-bpw clamps
-    ///     to the per-tensor coefficient as the category-level scoring uses.</item>
-    ///   <item>Walk the ladder from lowest bpw to highest. The first
-    ///     candidate type whose clamped per-tensor delta is ≤ the
-    ///     <em>category</em>-level predicted delta is the cheapest "no
-    ///     worse than the category average" pick — return it.</item>
-    ///   <item>If no candidate is at-or-better than the category prediction,
-    ///     stick with the category pick.</item>
+    ///   <item><b>Demote.</b> For each tensor with per-tensor data,
+    ///     walk the ladder from lowest bpw to highest. The first type
+    ///     whose clamped per-tensor delta is ≤ the category-level
+    ///     predicted delta is the cheapest "no worse than the category
+    ///     average" pick. The category-level delta is the right yardstick
+    ///     because it's what the optimizer used to commit to this
+    ///     tensor's bpw; a per-tensor coefficient below it means this
+    ///     specific tensor is less sensitive than its peers.</item>
+    ///   <item><b>Promote</b> (only when <paramref name="allowPromotion"/>).
+    ///     Identify tensors whose per-tensor delta at the
+    ///     currently-assigned type exceeds <paramref name="promotionThreshold"/>
+    ///     — these are individually sensitive in a way the category
+    ///     average smooths over. Find each such tensor's best higher-bpw
+    ///     target (highest gain-per-added-bpw), then apply promotions
+    ///     greedily until the savings pool from pass 1's demotions is
+    ///     exhausted. Bpw is strictly conserved at the category level.</item>
     /// </list>
     /// <para>
-    /// The category-level delta is the right yardstick because it's what
-    /// the optimizer used to commit to this tensor's bpw. A per-tensor
-    /// coefficient that comes in below the category average means this
-    /// specific tensor is less sensitive than its peers — exactly the
-    /// case where demotion is safe.
+    /// Per-tensor data not in the profile for a tensor leaves that tensor
+    /// at its category-level pick (with the baseline floor honored). The
+    /// returned dictionary contains an entry for every tensor in
+    /// <paramref name="tensorsInCategory"/> regardless of whether it
+    /// had per-tensor data, so callers can use it as a complete
+    /// per-tensor assignment for the category.
     /// </para>
     /// </remarks>
-    private static (LlamaTensorType Type, double Delta) RefinePerTensor(
-        string tensorName,
-        LlamaTensorType categoryChosen,
-        double categoryDelta,
-        LlamaSensitivityTensorCoefficient perTensor,
-        IReadOnlyList<LlamaTensorType> ladder,
-        double sizeScale,
-        LlamaTensorType? floor,
-        LlamaTensorType? baselineFloor)
+    private static IReadOnlyDictionary<string, (LlamaTensorType Type, double Delta)>
+        RefineCategoryPerTensor(
+            string categoryName,
+            LlamaTensorType categoryChosen,
+            double categoryDelta,
+            IReadOnlyList<(string Name, long Elements)> tensorsInCategory,
+            IReadOnlyDictionary<string, LlamaSensitivityTensorCoefficient> perTensor,
+            IReadOnlyList<LlamaTensorType> ladder,
+            double sizeScale,
+            LlamaTensorType? floor,
+            IReadOnlyDictionary<string, LlamaTensorType> baseline,
+            double minPplGainPerBpw,
+            bool allowPromotion,
+            double promotionThreshold)
     {
-        // Build the clamped per-tensor delta table over the ladder.
-        var clamped = new Dictionary<LlamaTensorType, double>();
-        double runningMax = 0.0;
-        foreach (var T in ladder.OrderByDescending(LlamaQuantRecipe.GetBitsPerElement))
+        var assignment = new Dictionary<string, (LlamaTensorType Type, double Delta)>(StringComparer.Ordinal);
+        var floorBpw = floor is { } f ? LlamaQuantRecipe.GetBitsPerElement(f) : 0.0;
+
+        // Build per-tensor clamped delta tables (zero-floor + monotone-from-above-bpw),
+        // and track which types each tensor actually has MEASURED data for.
+        // The clamp fills missing types via monotone-from-above so they
+        // appear "no worse than the next-higher measured type" — fine for
+        // noise smoothing on measured negatives, but treating monotone-
+        // filled types as valid demote/promote targets would extrapolate
+        // beyond the data. Restrict refinement decisions to measured types
+        // only.
+        var clampedByTensor = new Dictionary<string, Dictionary<LlamaTensorType, double>>(StringComparer.Ordinal);
+        var measuredByTensor = new Dictionary<string, HashSet<LlamaTensorType>>(StringComparer.Ordinal);
+        foreach (var (name, _) in tensorsInCategory)
         {
-            var raw = perTensor.DeltaPplByType.GetValueOrDefault(T, 0.0) * sizeScale;
-            var c = Math.Max(raw, runningMax);
-            clamped[T] = c;
-            runningMax = c;
+            if (!perTensor.TryGetValue(name, out var coef)) continue;
+            var clamped = new Dictionary<LlamaTensorType, double>();
+            double runningMax = 0.0;
+            foreach (var T in ladder.OrderByDescending(LlamaQuantRecipe.GetBitsPerElement))
+            {
+                var raw = coef.DeltaPplByType.GetValueOrDefault(T, 0.0) * sizeScale;
+                var c = Math.Max(raw, runningMax);
+                clamped[T] = c;
+                runningMax = c;
+            }
+            clampedByTensor[name] = clamped;
+            measuredByTensor[name] = new HashSet<LlamaTensorType>(coef.DeltaPplByType.Keys);
         }
 
-        var chosenBpw = LlamaQuantRecipe.GetBitsPerElement(categoryChosen);
-        var floorBpw = floor is LlamaTensorType f
-            ? LlamaQuantRecipe.GetBitsPerElement(f)
-            : 0.0;
-        var baselineBpw = baselineFloor is LlamaTensorType bf
-            ? LlamaQuantRecipe.GetBitsPerElement(bf)
-            : 0.0;
-        var minBpw = Math.Max(floorBpw, baselineBpw);
-
-        // Walk ascending; first safe type (per-tensor delta ≤ category's
-        // predicted delta at chosen type) wins, since smaller bpw is the
-        // savings we're after. ladder is already sorted ascending by bpw
-        // (ascending order is enforced where ladder is constructed).
-        foreach (var T in ladder)
+        // Initial assignment: max(baseline, categoryChosen) for every
+        // tensor. Tensors without per-tensor data stay here unchanged.
+        foreach (var (name, _) in tensorsInCategory)
         {
-            var bpw = LlamaQuantRecipe.GetBitsPerElement(T);
-            if (bpw > chosenBpw) break;        // beyond budget; rest is even higher
-            if (bpw < minBpw) continue;        // below floor / baseline — not allowed
-            if (!clamped.TryGetValue(T, out var d)) continue;
-            if (d <= categoryDelta) return (T, d);    // cheapest safe type wins
+            var initial = baseline.TryGetValue(name, out var b)
+                ? (LlamaQuantRecipe.GetBitsPerElement(b) >= LlamaQuantRecipe.GetBitsPerElement(categoryChosen) ? b : categoryChosen)
+                : categoryChosen;
+            var initialDelta = clampedByTensor.TryGetValue(name, out var c)
+                ? c.GetValueOrDefault(initial, categoryDelta)
+                : (initial == categoryChosen ? categoryDelta : 0.0);
+            assignment[name] = (initial, initialDelta);
         }
-        return (categoryChosen, categoryDelta);
+
+        // ---- Pass 1: demote ----
+        foreach (var (name, _) in tensorsInCategory)
+        {
+            if (!clampedByTensor.TryGetValue(name, out var clamped)) continue;
+            var measured = measuredByTensor[name];
+            var current = assignment[name].Type;
+            var currentBpw = LlamaQuantRecipe.GetBitsPerElement(current);
+            var baselineFloor = baseline.TryGetValue(name, out var bb) ? LlamaQuantRecipe.GetBitsPerElement(bb) : 0.0;
+            var minBpw = Math.Max(floorBpw, baselineFloor);
+
+            foreach (var T in ladder)
+            {
+                var bpw = LlamaQuantRecipe.GetBitsPerElement(T);
+                if (bpw > currentBpw) break;
+                if (bpw < minBpw) continue;
+                if (!measured.Contains(T)) continue;    // need actual data, not a monotone-fill
+                if (!clamped.TryGetValue(T, out var d)) continue;
+                if (d <= categoryDelta)
+                {
+                    assignment[name] = (T, d);
+                    break;
+                }
+            }
+        }
+
+        if (!allowPromotion) return assignment;
+
+        // ---- Pass 2: promote ----
+        // Compute the bpw savings produced by pass 1 vs the naive
+        // every-tensor-at-categoryChosen baseline. Promotions can spend
+        // up to that pool but no more.
+        long totalElements = tensorsInCategory.Sum(t => t.Elements);
+        double naiveBits = LlamaQuantRecipe.GetBitsPerElement(categoryChosen) * totalElements;
+        double currentBits = tensorsInCategory.Sum(t =>
+            LlamaQuantRecipe.GetBitsPerElement(assignment[t.Name].Type) * t.Elements);
+        double savings = naiveBits - currentBits;
+        if (savings <= 0) return assignment;
+
+        // Identify promotion candidates and their best higher-bpw target.
+        var candidates = new List<(string Name, LlamaTensorType Target, double NewDelta, double GainPerBpw, double Gain, double CostBits)>();
+        foreach (var (name, elements) in tensorsInCategory)
+        {
+            if (!clampedByTensor.TryGetValue(name, out var clamped)) continue;
+            var current = assignment[name].Type;
+            var currentBpw = LlamaQuantRecipe.GetBitsPerElement(current);
+            var currentDelta = clamped.GetValueOrDefault(current, 0.0);
+            // Threshold: tensor must be materially sensitive at the
+            // current type (above measurement noise) to justify spending
+            // budget on a promotion.
+            if (currentDelta <= promotionThreshold) continue;
+
+            LlamaTensorType? bestTarget = null;
+            double bestNewDelta = currentDelta;
+            double bestGainPerBpw = minPplGainPerBpw;
+            double bestGain = 0;
+            double bestCostBits = 0;
+            var measured = measuredByTensor[name];
+            foreach (var T in ladder)
+            {
+                var bpw = LlamaQuantRecipe.GetBitsPerElement(T);
+                if (bpw <= currentBpw) continue;
+                if (!measured.Contains(T)) continue;    // need actual data, not a monotone-fill
+                if (!clamped.TryGetValue(T, out var d)) continue;
+                if (d >= currentDelta) continue;    // promotion must measurably reduce delta
+
+                var deltaBpw = bpw - currentBpw;
+                var gain = currentDelta - d;
+                var gainPerBpw = gain / deltaBpw;
+                // Pick the highest gain-per-bpw above the efficiency
+                // floor — same metric the per-category optimizer uses
+                // for promotion decisions.
+                if (gainPerBpw > bestGainPerBpw)
+                {
+                    bestTarget = T;
+                    bestNewDelta = d;
+                    bestGainPerBpw = gainPerBpw;
+                    bestGain = gain;
+                    bestCostBits = deltaBpw * elements;
+                }
+            }
+
+            if (bestTarget is { } target)
+                candidates.Add((name, target, bestNewDelta, bestGainPerBpw, bestGain, bestCostBits));
+        }
+
+        // Apply highest-impact promotions first (most absolute gain per
+        // bit spent), stopping when the savings pool is exhausted.
+        foreach (var c in candidates.OrderByDescending(x => x.Gain / Math.Max(1.0, x.CostBits)))
+        {
+            if (c.CostBits > savings) continue;
+            assignment[c.Name] = (c.Target, c.NewDelta);
+            savings -= c.CostBits;
+        }
+
+        return assignment;
     }
 
     /// <summary>

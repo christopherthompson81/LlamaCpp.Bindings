@@ -241,6 +241,247 @@ public class SensitivityProfileDeriveTests
     }
 
     [Fact]
+    public void RecipeBuilder_PerTensorPromotion_PromotesSensitiveTensorFundedByDemoteSavings()
+    {
+        // Per-category data says ffn_up is fine at Q4_K (small Δ), so
+        // the optimizer picks Q4_K. Per-tensor data says blk.0 is
+        // unusually sensitive at Q4_K (above the promotion threshold)
+        // while blk.1, blk.2, blk.3 are unusually robust (Q3_K data
+        // shows they tolerate it). The refinement should:
+        //   - demote blk.1, blk.2, blk.3 to Q3_K (free bpw)
+        //   - promote blk.0 to Q6_K (paid for by demote savings)
+        // Bpw stays within the per-category budget.
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId:        "test",
+            LayerCount:            4,
+            FamilyNotes:           null,
+            Provenance:            new LlamaSensitivityProvenance(
+                "ablation", "test.gguf", 100_000_000, null, DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize:   512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 4.0,    // catastrophic at Q2_K (knee)
+                        [LlamaTensorType.Q3_K] = 1.0,    // measured so it appears in the ladder
+                        [LlamaTensorType.Q4_K] = 0.50,   // category average
+                        [LlamaTensorType.Q6_K] = 0.05,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q3_K),
+            },
+            PerTensor: new Dictionary<string, LlamaSensitivityTensorCoefficient>
+            {
+                // Sensitive at Q4_K — wants promotion
+                ["blk.0.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q3_K] = 1.0,     // far above category 0.50 → demote blocked
+                        [LlamaTensorType.Q4_K] = 0.20,    // > 0.05 promotion threshold
+                        [LlamaTensorType.Q6_K] = 0.01,    // gain ≈ 0.19, ΔBpw ≈ 2.06 → 0.092 PPL/bpw
+                    }),
+                // Robust at Q3_K — safe to demote
+                ["blk.1.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q3_K] = 0.01,    // ≤ category 0.50 → demote OK
+                        [LlamaTensorType.Q4_K] = 0.01,
+                        [LlamaTensorType.Q6_K] = 0.005,
+                    }),
+                ["blk.2.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q3_K] = 0.01,
+                        [LlamaTensorType.Q4_K] = 0.01,
+                        [LlamaTensorType.Q6_K] = 0.005,
+                    }),
+                ["blk.3.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q3_K] = 0.01,
+                        [LlamaTensorType.Q4_K] = 0.01,
+                        [LlamaTensorType.Q6_K] = 0.005,
+                    }),
+            });
+
+        var layout = new List<(string Name, long Elements)>
+        {
+            ("blk.0.ffn_up.weight", 1_000_000L),
+            ("blk.1.ffn_up.weight", 1_000_000L),
+            ("blk.2.ffn_up.weight", 1_000_000L),
+            ("blk.3.ffn_up.weight", 1_000_000L),
+        };
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,    // Q4_K-class budget
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline       = false,
+                UsePerTensorData         = true,
+                AllowPerTensorPromotion  = true,
+                PerTensorPromotionThresholdPpl = 0.05,
+                MinPredictedGainPpl      = 0.0,    // disable snap-to-stock so the recipe diverges
+            });
+
+        var byName = recipe.Entries.ToDictionary(e => e.TensorName);
+        // blk.0 promoted (sensitive at Q4_K, refinement found Q6_K worth the bpw)
+        Assert.Equal(LlamaTensorType.Q6_K, byName["blk.0.ffn_up.weight"].ChosenType);
+        // blk.1/2/3 stay at Q4_K (or below — IQ4_XS is also accepted as
+        // "no worse than category" demote target; at minimum they don't promote)
+        var bpw1 = byName["blk.1.ffn_up.weight"].BitsPerElement;
+        var bpw2 = byName["blk.2.ffn_up.weight"].BitsPerElement;
+        var bpw3 = byName["blk.3.ffn_up.weight"].BitsPerElement;
+        Assert.True(bpw1 <= 4.5, $"blk.1 unexpectedly promoted to {byName["blk.1.ffn_up.weight"].ChosenType}");
+        Assert.True(bpw2 <= 4.5, $"blk.2 unexpectedly promoted to {byName["blk.2.ffn_up.weight"].ChosenType}");
+        Assert.True(bpw3 <= 4.5, $"blk.3 unexpectedly promoted to {byName["blk.3.ffn_up.weight"].ChosenType}");
+    }
+
+    [Fact]
+    public void RecipeBuilder_PromotionDisabled_StillDemotesBugDoesNotPromote()
+    {
+        // Same shape as the previous test, but with AllowPerTensorPromotion=false.
+        // blk.0 should NOT promote (preserves the existing demote-only contract).
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId:        "test",
+            LayerCount:            2,
+            FamilyNotes:           null,
+            Provenance:            new LlamaSensitivityProvenance(
+                "ablation", "test.gguf", 100_000_000, null, DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize:   512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 4.0,
+                        [LlamaTensorType.Q4_K] = 0.50,
+                        [LlamaTensorType.Q6_K] = 0.05,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q4_K),
+            },
+            PerTensor: new Dictionary<string, LlamaSensitivityTensorCoefficient>
+            {
+                ["blk.0.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q4_K] = 0.20,
+                        [LlamaTensorType.Q6_K] = 0.01,
+                    }),
+            });
+        var layout = new List<(string Name, long Elements)>
+        {
+            ("blk.0.ffn_up.weight", 1_000_000L),
+            ("blk.1.ffn_up.weight", 1_000_000L),
+        };
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline      = false,
+                UsePerTensorData        = true,
+                AllowPerTensorPromotion = false,    // <-- promotion off
+                MinPredictedGainPpl     = 0.0,
+            });
+
+        var byName = recipe.Entries.ToDictionary(e => e.TensorName);
+        // blk.0 stays at category pick (Q4_K), no promotion despite high per-tensor delta
+        Assert.Equal(LlamaTensorType.Q4_K, byName["blk.0.ffn_up.weight"].ChosenType);
+    }
+
+    [Fact]
+    public void RecipeBuilder_PromotionBudgetExhausted_StopsBeforeBlowingBpw()
+    {
+        // Two sensitive tensors competing for promotion, only one cheap
+        // demote available to fund it. The greedy promotion should pick
+        // the higher gain-per-bit, leave the other at the category pick.
+        // Sized so blk.0 (small) fits within blk.2's demote savings while
+        // blk.1 (full size) does not.
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId:        "test",
+            LayerCount:            3,
+            FamilyNotes:           null,
+            Provenance:            new LlamaSensitivityProvenance(
+                "ablation", "test.gguf", 100_000_000, null, DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize:   512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 4.0,
+                        [LlamaTensorType.Q3_K] = 1.0,
+                        [LlamaTensorType.Q4_K] = 0.50,
+                        [LlamaTensorType.Q6_K] = 0.05,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q3_K),
+            },
+            PerTensor: new Dictionary<string, LlamaSensitivityTensorCoefficient>
+            {
+                // High gain-per-bit promotion target (very sensitive at Q4_K, small tensor)
+                ["blk.0.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q3_K] = 1.0,     // demote blocked
+                        [LlamaTensorType.Q4_K] = 0.40,
+                        [LlamaTensorType.Q6_K] = 0.01,
+                    }),
+                // Lower gain-per-bit promotion target (sensitive but less so, full size)
+                ["blk.1.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q3_K] = 1.0,
+                        [LlamaTensorType.Q4_K] = 0.15,
+                        [LlamaTensorType.Q6_K] = 0.01,
+                    }),
+                // Lone demote candidate — savings only fund the cheaper promotion
+                ["blk.2.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q3_K] = 0.01,
+                        [LlamaTensorType.Q4_K] = 0.01,
+                        [LlamaTensorType.Q6_K] = 0.005,
+                    }),
+            });
+        var layout = new List<(string Name, long Elements)>
+        {
+            ("blk.0.ffn_up.weight",   400_000L),    // small — promote cost ~825K bits
+            ("blk.1.ffn_up.weight", 1_000_000L),    // full — promote cost ~2.06M bits
+            ("blk.2.ffn_up.weight", 1_000_000L),    // demote saves ~1.06M bits
+        };
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline      = false,
+                UsePerTensorData        = true,
+                AllowPerTensorPromotion = true,
+                MinPredictedGainPpl     = 0.0,
+            });
+
+        var byName = recipe.Entries.ToDictionary(e => e.TensorName);
+        // blk.0 wins promotion (highest gain per bit)
+        Assert.Equal(LlamaTensorType.Q6_K, byName["blk.0.ffn_up.weight"].ChosenType);
+        // blk.1 doesn't fit within remaining savings → stays at category pick
+        Assert.Equal(LlamaTensorType.Q4_K, byName["blk.1.ffn_up.weight"].ChosenType);
+        // Total category bpw must not exceed the all-Q4_K naive budget
+        // (sum of elements × 4.5 bpw).
+        long totalElements = layout.Sum(l => l.Elements);
+        var totalBits = recipe.Entries
+            .Where(e => e.TensorName.Contains("ffn_up"))
+            .Sum(e => e.BitsPerElement * e.ElementCount);
+        Assert.True(totalBits <= totalElements * 4.5,
+            $"Category bpw blew budget: {totalBits} > {totalElements * 4.5}");
+    }
+
+    [Fact]
     public void RecipeBuilder_UsePerTensorDataDisabled_IgnoresPerTensorField()
     {
         // Same profile as above but with UsePerTensorData = false.
