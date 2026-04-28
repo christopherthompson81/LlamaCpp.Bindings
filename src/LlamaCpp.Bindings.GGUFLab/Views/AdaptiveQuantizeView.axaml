@@ -99,11 +99,16 @@
                         CornerRadius="4"
                         Padding="12"
                         IsVisible="{Binding HasProfile}">
-                    <StackPanel Spacing="6">
+                    <StackPanel Spacing="4">
                         <TextBlock Text="Profile" FontWeight="SemiBold" FontSize="11" Opacity="0.7" />
                         <TextBlock Text="{Binding ProfileSummaryLine}"
                                    FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
                                    FontSize="12"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding ProfileDetailLine}"
+                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                   FontSize="11"
+                                   Opacity="0.7"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
@@ -178,6 +183,9 @@
                         <CheckBox Content="Apply stock baseline (Q4_K_M-style per-layer protection)"
                                   IsChecked="{Binding ApplyStockBaseline, Mode=TwoWay}"
                                   ToolTip.Tip="Treats llama.cpp's hand-tuned per-layer protection table as a hard floor: recipe can promote above it but never demote below. Recommended on." />
+                        <CheckBox Content="Use per-tensor data (when present) to demote individual tensors"
+                                  IsChecked="{Binding UsePerTensorData, Mode=TwoWay}"
+                                  ToolTip.Tip="When the profile has per-layer ablation data, demote tensors below the category-level pick where the per-tensor sensitivity is below the category average. Demote-only — never promotes. Requires per-layer profile data; ignored when only per-category data exists." />
                     </StackPanel>
                 </Expander>
 

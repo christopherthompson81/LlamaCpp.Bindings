@@ -71,6 +71,14 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     [ObservableProperty]
     private double _sizeScalingExponent = 1.0;
 
+    /// <summary>
+    /// Use per-tensor data from the profile (when present) to demote
+    /// individual tensors below their category-level pick. See
+    /// <see cref="LlamaQuantRecipeFromProfileOptions.UsePerTensorData"/>.
+    /// </summary>
+    [ObservableProperty]
+    private bool _usePerTensorData = true;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle))]
     private bool _isRunning;
@@ -80,6 +88,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasProfile))]
     [NotifyPropertyChangedFor(nameof(ProfileSummaryLine))]
+    [NotifyPropertyChangedFor(nameof(ProfileDetailLine))]
     private LlamaSensitivityProfile? _loadedProfile;
 
     public bool HasProfile => LoadedProfile is not null;
@@ -100,6 +109,29 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
                 ? $" ({sourceParams / 1_000_000.0:F0}M params)"
                 : "";
             return $"arch={p.ArchitectureId}  layers={p.LayerCount}  source={src}{sizeText}  F16 PPL={p.F16BaselinePerplexity:F3}";
+        }
+    }
+
+    /// <summary>
+    /// Second-line detail: completeness count + per-tensor presence.
+    /// Tells the user at a glance whether the profile is fully measured
+    /// or partial (a rail against shipping recipes built from gaps).
+    /// </summary>
+    public string ProfileDetailLine
+    {
+        get
+        {
+            if (LoadedProfile is not { } p) return string.Empty;
+            var typesMeasured = p.Categories.Values
+                .SelectMany(c => c.DeltaPplByType.Keys).Distinct().ToList();
+            if (typesMeasured.Count == 0) return "no measurements in profile";
+            var completeness = p.ComputeCompleteness(p.Categories.Keys.ToList(), typesMeasured);
+            var line = $"{p.Categories.Count} categories × {typesMeasured.Count} types";
+            if (!completeness.IsComplete)
+                line += $"  ·  {completeness.MeasuredCategoryCells}/{completeness.TotalCategoryCells} cells measured (partial)";
+            if (p.PerTensor is { } perTensor && perTensor.Count > 0)
+                line += $"  ·  +{perTensor.Count} per-tensor entries";
+            return line;
         }
     }
 
@@ -162,6 +194,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     partial void OnMinPplGainPerBpwChanged(double value)     => RebuildRecipe();
     partial void OnApplyStockBaselineChanged(bool value)     => RebuildRecipe();
     partial void OnSizeScalingExponentChanged(double value)  => RebuildRecipe();
+    partial void OnUsePerTensorDataChanged(bool value)       => RebuildRecipe();
 
     /// <summary>
     /// Resolve the active profile: explicit path wins; otherwise scan
@@ -296,6 +329,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
                 MinPplGainPerBpw     = MinPplGainPerBpw,
                 ApplyStockBaseline   = ApplyStockBaseline,
                 SizeScalingExponent  = SizeScalingExponent,
+                UsePerTensorData     = UsePerTensorData,
             };
             var recipe = LlamaQuantRecipeFromProfile.Build(
                 LoadedProfile, InputPath, TargetBitsPerElement, opts);

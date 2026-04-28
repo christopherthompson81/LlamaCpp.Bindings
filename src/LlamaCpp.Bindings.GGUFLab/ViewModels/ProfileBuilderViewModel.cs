@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -11,20 +12,29 @@ using LlamaCpp.Bindings.GGUFLab.Services;
 namespace LlamaCpp.Bindings.GGUFLab.ViewModels;
 
 /// <summary>
-/// Drives the Profile Builder page: run the per-category PPL ablation
-/// campaign that produces a <see cref="LlamaSensitivityProfile"/>. This
-/// is hours of compute on a typical 1.7B-class model — the Adaptive
-/// Quantization page consumes the resulting profile.json.
+/// Drives the Profile Builder page: run a per-category or per-layer
+/// PPL ablation campaign that populates <see cref="LlamaInvestigationDb"/>
+/// with measurement rows. Long-running — minutes for per-category on a
+/// small model, days for per-layer on a 4B+ model.
 /// </summary>
 public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 {
     public override string Title => "Profile Builder";
     public override string Description =>
-        "Build a sensitivity profile for a model: ablate each tensor category at each candidate type, measure ΔPPL. Long-running.";
+        "Build a sensitivity profile: ablate each tensor (or category) at each candidate type, measure ΔPPL. Long-running — accumulates into the global investigation DB.";
+
+    public enum CampaignMode
+    {
+        /// <summary>Cheap. Whole-category ablations, ~22 PPL runs by default.</summary>
+        PerCategory,
+        /// <summary>Expensive. One PPL run per (tensor, type). 28 layers × 7 cats × 7 types ≈ 1372 runs.</summary>
+        PerLayer,
+    }
 
     private readonly NativeLogBus _logBus;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private string _sourceModelPath = string.Empty;
 
     [ObservableProperty]
@@ -39,19 +49,13 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     [ObservableProperty]
     private string _outputProfilePath = string.Empty;
 
-    /// <summary>
-    /// PPL context size — defaults to 512 to match published wiki.test
-    /// numbers (matches GGUFLab's standalone Perplexity tool).
-    /// </summary>
     [ObservableProperty]
     private int _contextSize = 512;
 
     [ObservableProperty]
     private double _kneeDeltaPplThreshold = 5.0;
 
-    /// <summary>
-    /// 0 → auto (size-aware via <see cref="LlamaPerplexity.RecommendConcurrency"/>).
-    /// </summary>
+    /// <summary>0 → auto.</summary>
     [ObservableProperty]
     private int _maxConcurrent;
 
@@ -61,24 +65,69 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     [ObservableProperty]
     private bool _cleanupWorkingDirectory = true;
 
-    /// <summary>Comma-separated list. Default = the seven canonical weight categories.</summary>
+    /// <summary>
+    /// Campaign mode. Per-category is the cheap default; per-layer
+    /// produces strictly more data (recipe builder demotes individual
+    /// tensors that are below the category average) at proportionally
+    /// higher compute cost.
+    /// </summary>
     [ObservableProperty]
-    private string _categoriesText = "attn_q.weight, attn_k.weight, attn_v.weight, attn_output.weight, ffn_up, ffn_gate, ffn_down";
+    [NotifyPropertyChangedFor(nameof(IsPerCategory))]
+    [NotifyPropertyChangedFor(nameof(IsPerLayer))]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private CampaignMode _mode = CampaignMode.PerCategory;
+
+    public bool IsPerCategory => Mode == CampaignMode.PerCategory;
+    public bool IsPerLayer    => Mode == CampaignMode.PerLayer;
+
+    /// <summary>
+    /// Categories with checkbox states. Auto-populated from
+    /// <see cref="LlamaArchitectureRegistry"/> when the user selects
+    /// a source model. Per-category mode only.
+    /// </summary>
+    public ObservableCollection<CategoryItem> Categories { get; } = new();
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private string _detectedArchitecture = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private int _detectedLayerCount;
+
+    /// <summary>Tensor count auto-derived for per-layer mode (read-only).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private int _perLayerTensorCount;
+
+    // Candidate-type checkboxes — full ladder including the IQ family.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private bool _useQ2K = true;
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private bool _useIQ2S;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private bool _useQ3K;
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private bool _useIQ3S;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private bool _useIQ4XS;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private bool _useQ4K = true;
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private bool _useQ5K;
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private bool _useQ6K = true;
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private bool _useQ8_0;
-    [ObservableProperty]
-    private bool _useIQ4XS;
 
     [ObservableProperty]
     private string _statusLine = "Idle. Pick a source model and corpus.";
@@ -100,12 +149,47 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 
     public string LogText => _logBuilder.ToString();
 
+    /// <summary>
+    /// One-line cost estimate: "N measurements × type-count × target-count
+    /// (≈ ~M cells)". Estimate refreshes on any input that affects N or
+    /// the type/target counts.
+    /// </summary>
+    public string CostEstimateText
+    {
+        get
+        {
+            var typeCount = ResolveCandidateTypes().Count;
+            if (typeCount == 0) return "No candidate types selected.";
+
+            int targetCount;
+            string targetLabel;
+            if (Mode == CampaignMode.PerCategory)
+            {
+                targetCount = Categories.Count(c => c.IsSelected);
+                targetLabel = "categories";
+                if (targetCount == 0)
+                    return "No categories selected.";
+            }
+            else
+            {
+                targetCount = PerLayerTensorCount;
+                targetLabel = "tensors";
+                if (targetCount == 0)
+                    return "Pick a source model to derive per-layer tensor count.";
+            }
+            int total = 1 + targetCount * typeCount;    // +1 for baseline
+            return $"≈ {total} PPL runs ({targetCount} {targetLabel} × {typeCount} types + 1 baseline). " +
+                   "Already-measured cells in the DB are skipped.";
+        }
+    }
+
     private readonly System.Text.StringBuilder _logBuilder = new();
     private CancellationTokenSource? _cts;
 
     public ProfileBuilderViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
+        Categories.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CostEstimateText));
     }
 
     [RelayCommand]
@@ -128,11 +212,16 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             StatusLine = "Pick at least one candidate type.";
             return;
         }
-        var categories = ResolveCategories();
-        if (categories.Count == 0)
+
+        IReadOnlyList<string> selectedCategories = Array.Empty<string>();
+        if (Mode == CampaignMode.PerCategory)
         {
-            StatusLine = "Pick at least one category.";
-            return;
+            selectedCategories = Categories.Where(c => c.IsSelected).Select(c => c.Name).ToList();
+            if (selectedCategories.Count == 0)
+            {
+                StatusLine = "Pick at least one category.";
+                return;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(OutputProfilePath))
@@ -158,7 +247,9 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         _cts = new CancellationTokenSource();
         IsRunning = true;
         var startedAt = DateTime.Now;
-        StatusLine = "Building profile…";
+        StatusLine = Mode == CampaignMode.PerCategory
+            ? "Building per-category profile…"
+            : "Building per-layer profile…";
 
         var unsubscribe = _logBus.Subscribe(line =>
         {
@@ -171,7 +262,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             var opts = new LlamaSensitivityProfileBuilder.Options
             {
                 CandidateTypes          = candidates,
-                Categories              = categories,
+                Categories              = selectedCategories.Count > 0 ? selectedCategories : new[] { "ffn_up" },
                 ImatrixPath             = string.IsNullOrWhiteSpace(ImatrixPath) ? null : ImatrixPath,
                 MaxConcurrent           = MaxConcurrent,
                 AvailableVramBytes      = AvailableVramGb > 0 ? (long)(AvailableVramGb * 1024 * 1024 * 1024) : null,
@@ -188,18 +279,31 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
                 ProgressLabel = $"{p.CompletedJobs}/{p.TotalJobs}" +
                     (string.IsNullOrEmpty(p.CurrentLabel) ? "" : $"  ·  {p.CurrentLabel}");
             });
-            var profile = await LlamaSensitivityProfileBuilder.BuildAsync(
-                SourceModelPath, CorpusPath, opts, progress, _cts.Token);
 
-            profile.SaveToJson(OutputProfilePath);
-            var elapsed = DateTime.Now - startedAt;
-            StatusLine =
-                $"Wrote {OutputProfilePath} in {elapsed.TotalMinutes:F1} min " +
-                $"(arch={profile.ArchitectureId}, layers={profile.LayerCount}, F16 PPL={profile.F16BaselinePerplexity:F3}).";
+            if (Mode == CampaignMode.PerCategory)
+            {
+                var profile = await LlamaSensitivityProfileBuilder.BuildAsync(
+                    SourceModelPath, CorpusPath, opts, progress, _cts.Token);
+
+                profile.SaveToJson(OutputProfilePath);
+                var elapsed = DateTime.Now - startedAt;
+                StatusLine =
+                    $"Wrote {OutputProfilePath} in {elapsed.TotalMinutes:F1} min " +
+                    $"(arch={profile.ArchitectureId}, layers={profile.LayerCount}, F16 PPL={profile.F16BaselinePerplexity:F3}).";
+            }
+            else
+            {
+                var newCount = await LlamaSensitivityProfileBuilder.BuildPerLayerAsync(
+                    SourceModelPath, CorpusPath, targetTensors: null, opts, progress, _cts.Token);
+                var elapsed = DateTime.Now - startedAt;
+                StatusLine =
+                    $"Recorded {newCount} new per-tensor measurements in {elapsed.TotalMinutes:F1} min " +
+                    "(data is in the investigation DB; the apply page reads it via DeriveFromDb).";
+            }
         }
         catch (OperationCanceledException)
         {
-            StatusLine = "Cancelled. (Checkpoint preserved — re-run to resume.)";
+            StatusLine = "Cancelled. Measurements taken so far are preserved in the DB — re-run to resume.";
         }
         catch (Exception ex)
         {
@@ -225,24 +329,91 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 
     private IReadOnlyList<LlamaTensorType> ResolveCandidateTypes()
     {
+        // Order: ascending bpw (matches the rest of the codebase's
+        // convention for ladder construction).
         var picks = new List<LlamaTensorType>();
+        if (UseIQ2S)   picks.Add(LlamaTensorType.IQ2_S);
         if (UseQ2K)    picks.Add(LlamaTensorType.Q2_K);
+        if (UseIQ3S)   picks.Add(LlamaTensorType.IQ3_S);
         if (UseQ3K)    picks.Add(LlamaTensorType.Q3_K);
-        if (UseQ4K)    picks.Add(LlamaTensorType.Q4_K);
         if (UseIQ4XS)  picks.Add(LlamaTensorType.IQ4_XS);
+        if (UseQ4K)    picks.Add(LlamaTensorType.Q4_K);
         if (UseQ5K)    picks.Add(LlamaTensorType.Q5_K);
         if (UseQ6K)    picks.Add(LlamaTensorType.Q6_K);
         if (UseQ8_0)   picks.Add(LlamaTensorType.Q8_0);
         return picks;
     }
 
-    private IReadOnlyList<string> ResolveCategories()
+    /// <summary>
+    /// Read the source GGUF, look up its architecture in the registry,
+    /// and populate <see cref="Categories"/> + per-layer tensor count.
+    /// Resilient to bad paths — silently no-ops if the model can't be
+    /// opened (the user gets feedback through the status line on
+    /// other paths).
+    /// </summary>
+    private void RefreshArchitectureFromSource()
     {
-        if (string.IsNullOrWhiteSpace(CategoriesText)) return Array.Empty<string>();
-        return CategoriesText
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToList();
+        Categories.Clear();
+        DetectedArchitecture = string.Empty;
+        DetectedLayerCount = 0;
+        PerLayerTensorCount = 0;
+
+        if (string.IsNullOrWhiteSpace(SourceModelPath) || !File.Exists(SourceModelPath)) return;
+
+        try
+        {
+            var gguf = LlamaGgufFile.Open(SourceModelPath);
+            var archEntry = gguf.Metadata.FirstOrDefault(m => m.Key == "general.architecture");
+            var archId = archEntry?.Value.AsString() ?? "unknown";
+            DetectedArchitecture = archId;
+
+            var layerEntry = gguf.Metadata.FirstOrDefault(m => m.Key == $"{archId}.block_count");
+            DetectedLayerCount = layerEntry?.Value.Type switch
+            {
+                LlamaGgufType.Uint32 => (int)layerEntry.Value.AsUInt32(),
+                LlamaGgufType.Int32  => layerEntry.Value.AsInt32(),
+                LlamaGgufType.Uint64 => (int)layerEntry.Value.AsUInt64(),
+                _                    => 0,
+            };
+
+            var spec = LlamaArchitectureRegistry.Lookup(archId)
+                    ?? LlamaArchitectureRegistry.StandardTransformer;
+
+            // Filter to categories that actually have at least one
+            // matching tensor in this specific model. Catches tied-
+            // embedding models (no output.weight) automatically.
+            var tensorNames = gguf.Tensors
+                .Where(t => t.Dimensions.Length > 1 && t.Name.EndsWith(".weight"))
+                .Select(t => t.Name)
+                .ToList();
+
+            foreach (var cat in spec.Categories)
+            {
+                if (!tensorNames.Any(n => CategoryMatch(n, cat))) continue;
+                Categories.Add(new CategoryItem(cat, isSelected: true) { Owner = this });
+            }
+
+            // Per-layer count: union of expanded per-layer + top-level,
+            // then filter to tensors actually present.
+            if (DetectedLayerCount > 0)
+            {
+                var present = new HashSet<string>(tensorNames, StringComparer.Ordinal);
+                var perLayer = spec.ExpandPerLayerTensors(DetectedLayerCount).Where(present.Contains);
+                var topLevel = spec.TopLevelTensors.Where(present.Contains);
+                PerLayerTensorCount = perLayer.Count() + topLevel.Count();
+            }
+        }
+        catch
+        {
+            // Best-effort — leave the form empty if we can't read the file.
+        }
     }
+
+    private static bool CategoryMatch(string tensorName, string category) =>
+        category.Contains('.')
+            ? tensorName == category ||
+              tensorName.EndsWith("." + category, StringComparison.Ordinal)
+            : tensorName.Contains(category, StringComparison.Ordinal);
 
     public override void ApplyActiveModel(string? path)
     {
@@ -260,6 +431,32 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     protected override string? CurrentSourceGguf =>
         string.IsNullOrEmpty(SourceModelPath) ? ResolveGgufFromActive(Active?.Path) : SourceModelPath;
 
-    partial void OnSourceModelPathChanged(string value) => NotifyRemediesChanged();
+    partial void OnSourceModelPathChanged(string value)
+    {
+        RefreshArchitectureFromSource();
+        NotifyRemediesChanged();
+    }
     partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
+
+    /// <summary>One row in the categories checkbox list.</summary>
+    public sealed partial class CategoryItem : ObservableObject
+    {
+        public string Name { get; }
+        [ObservableProperty]
+        private bool _isSelected;
+
+        // Set by the owning VM after construction so toggle events bubble
+        // back as cost-estimate refreshes. Leaving it nullable avoids a
+        // mandatory ctor parameter that'd complicate XAML usage.
+        internal ProfileBuilderViewModel? Owner { get; set; }
+
+        public CategoryItem(string name, bool isSelected)
+        {
+            Name = name;
+            _isSelected = isSelected;
+        }
+
+        partial void OnIsSelectedChanged(bool value) =>
+            Owner?.OnPropertyChanged(nameof(CostEstimateText));
+    }
 }

@@ -16,6 +16,18 @@ public partial class ProfileBuilderView : UserControl
         InitializeComponent();
     }
 
+    private void OnModePerCategory(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is ProfileBuilderViewModel vm)
+            vm.Mode = ProfileBuilderViewModel.CampaignMode.PerCategory;
+    }
+
+    private void OnModePerLayer(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is ProfileBuilderViewModel vm)
+            vm.Mode = ProfileBuilderViewModel.CampaignMode.PerLayer;
+    }
+
     private async void OnBrowseSource(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not ProfileBuilderViewModel vm) return;
