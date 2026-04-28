@@ -225,6 +225,131 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 18 — 2026-04-27 17:30  (MinPplGainPerBpw threshold: refusing wasteful trades)
+
+Run 17's same-model recipe (PPL 16.4570) was the best v2 result —
+beating stock Q4_K_M by 2.23 PPL — but a hand-pick audit revealed
+the optimizer was over-spending bpw chasing noise-level predicted
+gains. Specifically: <c>attn_v.weight</c> picked Q8_0 (8.5 bpw)
+over Q6_K (6.5625) because the profile predicted 0.001 lower ΔPPL
+at Q8_0. That's 0.056 bpw burned for 0.001 PPL — clearly bad in
+human judgment but consistent with strict
+<c>min(pplSum within budget)</c>.
+
+Run 17b tested five variants:
+
+| variant                            | actual bpw | PPL     | Δ vs A    |
+|------------------------------------|------------|---------|-----------|
+| A: algorithm baseline              | 5.0686     | 16.4570 | —         |
+| B: + attn_v Q6_K (was Q8_0)        | **5.0126** | **16.4253** | **−0.032** |
+| C: + token_embd Q5_K (was Q4_K)    | 5.1658     | 16.4031 | −0.054    |
+| D: + output.weight Q4_K (was Q6_K) | 4.8499     | 16.6375 | **+0.181** |
+| E: + ffn_down all Q6_K             | 5.0504     | 16.5359 | +0.079    |
+
+Two findings vindicated the design:
+
+1. **B's win confirms the algorithm was over-trading.** Switching
+   attn_v to Q6_K reclaimed 0.056 bpw AND slightly improved actual
+   PPL — the strict-min-pplSum was actively harmful.
+2. **D's loss vindicates stock baseline as a hard floor.** The
+   profile said <c>output.weight Q4_K</c> was free (single-tensor
+   ablation: Q4_K and Q6_K both at −0.014 ΔPPL). In compound
+   recipes, demoting it from Q6_K to Q4_K cost +0.18 PPL. Stock's
+   <c>use_more_bits</c> protection is covering for a profile blind
+   spot, not over-conservative. Don't let profile data override
+   baseline floors.
+
+### Implementation: composite scoring with `MinPplGainPerBpw`
+
+Replace the strict-min-pplSum optimization with composite scoring:
+
+```
+minimize  pplSum + λ × bpw    subject to    bpw ≤ budgetCap
+```
+
+Where λ (default 0.05 PPL/bpw) is the efficiency threshold. With
+this objective, the optimizer only takes a promotion when its
+predicted gain divided by added bpw exceeds 0.05. The attn_v
+Q8_0→Q6_K case: 0.001 / 0.056 = 0.018 PPL/bpw — below 0.05,
+rejected. Q6_K wins.
+
+Verified end-to-end on Qwen3-1.7B at 5.026 bpw target:
+
+| recipe                       | actual bpw | PPL     | Δ vs stock |
+|------------------------------|------------|---------|------------|
+| stock Q4_K_M                 | 5.026      | 18.6837 | —          |
+| Run 17 algorithm (λ=0)       | 5.069      | 16.4570 | −2.23      |
+| **Run 18 refined (λ=0.05)**  | **5.013**  | **16.4253** | **−2.26** |
+
+The refined recipe is **byte-identical to Run 17b's hand-pick variant B**
+— the threshold change naturally produced the same result the
+hand audit identified. v2 now ships at:
+
+- **−2.26 PPL** vs stock Q4_K_M (12% relative improvement)
+- **−0.013 bpw** vs stock (slightly *smaller* file)
+
+That's a Pareto improvement: smaller and better at the same time.
+
+### Variant C / D / E lessons
+
+- **C (+ token_embd Q5_K)** is a real but minor win (−0.054 PPL at
+  +0.097 bpw). The algorithm doesn't auto-promote because Q5_K
+  doesn't fit the 5.026 budget; if a user wants it, raising the
+  target by ~0.15 bpw lets the algorithm pick Q5_K naturally.
+  Not a code change — a budget-tuning choice.
+- **D (output Q4_K)** is the negative result we needed. Single-
+  tensor ablations don't capture compound effects when many other
+  tensors are also quantized. The stock baseline's protection of
+  <c>output.weight</c> is essential.
+- **E** is just D + an attempted reallocation of the freed budget;
+  inherits D's regression.
+
+### v2 ship summary
+
+The Adaptive Quantization v2 stack:
+
+1. **Per-architecture sensitivity profile** (declarative JSONC,
+   built via the ablation campaign).
+2. **`LlamaQuantRecipeFromProfile.Build`** with:
+   - bpw-budget-aware exhaustive enumeration
+   - composite scoring (`MinPplGainPerBpw`)
+   - per-tensor stock baseline floor (use_more_bits ports)
+   - per-category recommended floors from the profile
+   - pattern-based protection for uncategorized tensors
+   - linear size-scaling factor (within-family extrapolation)
+3. **`LlamaCustomQuantizer`** that realizes the recipe verbatim
+   (pinning per-tensor types past llama.cpp's heuristic).
+
+On Qwen3-1.7B at Q4_K_M-class budget: **−2.26 PPL at slightly
+smaller file size than stock**. Same result whether starting from
+the 1.7B same-size profile (validated above) or the 0.6B
+size-scaled profile (shown to converge on same recipe at this
+ladder; finer ladders may diverge per Run 17). The cross-size
+transfer story is honest: rankings transfer, magnitudes scale
+~linearly outside the catastrophic-cliff regime, and the recipe
+builder makes correct decisions when fed properly-floor-protected
+profile data.
+
+### What's deferred from this investigation
+
+- **Per-(arch, size) profile library expansion.** Run 17 showed
+  cross-size transfer breaks at finer candidate ladders. To ship
+  v2 for arbitrary Qwen3 sizes we want pre-built profiles at
+  more size points (4B, 8B). One profile build per size at ~30
+  min compute.
+- **Cross-architecture validation.** The recipe builder's
+  beats-stock claim has only been demonstrated on Qwen3-1.7B.
+  The same machinery on Llama-3.2 (no QK-norm) is untested.
+  Run 12 has Stage 1 ablation data; full profile + validation
+  matrix would close the cross-arch question.
+- **PPL throughput.** Investigated; bottleneck is real GPU
+  compute (57ms/chunk × 547 chunks = 31s of the 51s wall on
+  Qwen3-1.7B), not readback as initially hypothesized. At
+  parity with llama.cpp's own perplexity binary (44s).
+  ComputeBatchedAsync(n_seq=4) saves ~5%; explicit GPU+CPU
+  pipelining could give ~1.65× theoretical, deferred for
+  modest payoff.
+
 ## Run 17 — 2026-04-27 16:45  (Expanded profile: same-model wins big, cross-size breaks)
 
 Run 16 shipped a 0.45-PPL win at Q4_K_M-class budget using the
