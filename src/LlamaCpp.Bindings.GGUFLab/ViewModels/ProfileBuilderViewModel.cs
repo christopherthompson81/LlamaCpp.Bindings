@@ -196,7 +196,18 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 
     public bool IsIdle => !IsRunning;
 
-    public string LogText => _logBuilder.ToString();
+    /// <summary>
+    /// Throttled, deduped, bounded log surface — same pattern as the
+    /// Imatrix page. Native llama.cpp emits thousands of log lines per
+    /// quantize/PPL run; the naive <c>StringBuilder + OnPropertyChanged</c>
+    /// path forced a full TextBlock re-render per line and starved the
+    /// UI thread of input events. This batches changes onto a 150 ms
+    /// dispatcher tick, dedups consecutive identical lines, and caps
+    /// visible runs while mirroring the full tail to a temp file.
+    /// </summary>
+    private readonly ThrottledLogBuffer _log = new();
+
+    public string LogText => _log.Text;
 
     /// <summary>
     /// One-line cost estimate: "N measurements × type-count × target-count
@@ -303,13 +314,20 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         return spec.ResolveTensors(DetectedLayerCount, selectedCats, layerFilter).Count();
     }
 
-    private readonly System.Text.StringBuilder _logBuilder = new();
     private CancellationTokenSource? _cts;
 
     public ProfileBuilderViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
         Categories.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CostEstimateText));
+        // Bridge the throttled buffer's batched text-change notifications
+        // into the LogText binding so the view sees a single update
+        // every flush interval rather than per-line.
+        _log.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ThrottledLogBuffer.Text))
+                OnPropertyChanged(nameof(LogText));
+        };
     }
 
     /// <summary>
@@ -398,8 +416,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             }
         }
 
-        _logBuilder.Clear();
-        OnPropertyChanged(nameof(LogText));
+        _log.Clear();
         ProgressFraction = 0;
         ProgressLabel = string.Empty;
         StageText = "starting…";
@@ -410,11 +427,11 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             ? "Building per-category profile…"
             : "Building per-layer profile…";
 
-        var unsubscribe = _logBus.Subscribe(line =>
-        {
-            _logBuilder.AppendLine(line);
-            OnPropertyChanged(nameof(LogText));
-        });
+        // Subscribe through the throttled buffer instead of a raw
+        // StringBuilder + per-line PropertyChanged — native llama.cpp
+        // log volume during quantize/PPL is high enough to starve UI
+        // input handling otherwise (mouse hover, scroll wheel).
+        var unsubscribe = _logBus.Subscribe(line => _log.Append(line));
 
         try
         {
@@ -510,12 +527,12 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         catch (Exception ex)
         {
             StatusLine = $"Build failed: {ex.Message}";
-            _logBuilder.AppendLine($"[error] {ex}");
-            OnPropertyChanged(nameof(LogText));
+            _log.Append($"[error] {ex}");
         }
         finally
         {
             unsubscribe();
+            _log.Stop();    // flush any pending tick before idle
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;

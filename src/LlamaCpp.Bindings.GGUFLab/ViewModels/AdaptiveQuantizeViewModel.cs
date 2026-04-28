@@ -175,7 +175,15 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     [ObservableProperty]
     private string _statusLine = "Idle.";
 
-    public string LogText => _logBuilder.ToString();
+    /// <summary>
+    /// Throttled log surface — native llama.cpp emits hundreds of log
+    /// lines per quantize, and the naive StringBuilder + PropertyChanged
+    /// pattern starves the UI thread of input events. Same pattern as
+    /// ImatrixViewModel and ProfileBuilderViewModel.
+    /// </summary>
+    private readonly ThrottledLogBuffer _log = new();
+
+    public string LogText => _log.Text;
 
     [ObservableProperty]
     private double _quantizeProgressFraction;
@@ -183,12 +191,16 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     [ObservableProperty]
     private string _currentTensorLine = string.Empty;
 
-    private readonly System.Text.StringBuilder _logBuilder = new();
     private CancellationTokenSource? _cts;
 
     public AdaptiveQuantizeViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
+        _log.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ThrottledLogBuffer.Text))
+                OnPropertyChanged(nameof(LogText));
+        };
     }
 
     partial void OnInputPathChanged(string value)
@@ -408,8 +420,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
             }
         }
 
-        _logBuilder.Clear();
-        OnPropertyChanged(nameof(LogText));
+        _log.Clear();
         QuantizeProgressFraction = 0;
         CurrentTensorLine = string.Empty;
         _cts = new CancellationTokenSource();
@@ -417,11 +428,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         var startedAt = DateTime.Now;
         StatusLine = "Quantizing…";
 
-        var unsubscribe = _logBus.Subscribe(line =>
-        {
-            _logBuilder.AppendLine(line);
-            OnPropertyChanged(nameof(LogText));
-        });
+        var unsubscribe = _logBus.Subscribe(line => _log.Append(line));
 
         try
         {
@@ -461,12 +468,12 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         catch (Exception ex)
         {
             StatusLine = $"Quantize failed: {ex.Message}";
-            _logBuilder.AppendLine($"[error] {ex}");
-            OnPropertyChanged(nameof(LogText));
+            _log.Append($"[error] {ex}");
         }
         finally
         {
             unsubscribe();
+            _log.Stop();
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;
