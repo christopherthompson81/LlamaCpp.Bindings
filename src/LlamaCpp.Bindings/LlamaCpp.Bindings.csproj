@@ -15,6 +15,11 @@
          in LlamaPerplexity. Pure managed; the BCL falls back to scalar
          on hardware without AVX2. -->
     <PackageReference Include="System.Numerics.Tensors" Version="9.0.0" />
+    <!-- SQLite store backing LlamaInvestigationDb — the per-measurement
+         database that accumulates ablation results across runs and
+         models. Append-only on the hot path; indexed queries drive
+         recipe construction and progress UI. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
   </ItemGroup>
 
   <ItemGroup>
