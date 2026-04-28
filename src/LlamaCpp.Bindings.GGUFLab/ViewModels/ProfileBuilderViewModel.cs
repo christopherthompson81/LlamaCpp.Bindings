@@ -100,6 +100,21 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private int _perLayerTensorCount;
 
+    /// <summary>
+    /// Comma-separated layer indices (with range support: "0-3, 5, 8, 20-27"),
+    /// or empty = all layers. Per-layer mode only. Drives the targeted
+    /// drill: combine with the categories selection to ablate just the
+    /// (cat × layer) slice you care about — e.g. attn_v across all 36
+    /// layers without touching ffn_down at all.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EffectiveLayerCount))]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private string _layersText = string.Empty;
+
+    /// <summary>How many layers <see cref="LayersText"/> resolves to (0 means "all").</summary>
+    public int EffectiveLayerCount => ParseLayers().Count;
+
     // Candidate-type checkboxes — full ladder including the IQ family.
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CostEstimateText))]
@@ -188,15 +203,38 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             }
             else
             {
-                targetCount = PerLayerTensorCount;
+                // Per-layer with optional drill: the actual ablation
+                // count is (selected categories × selected layers) + any
+                // top-level entries the user kept ticked.
+                targetCount = ResolvePerLayerTargetTensorCount();
                 targetLabel = "tensors";
                 if (targetCount == 0)
-                    return "Pick a source model to derive per-layer tensor count.";
+                    return "Pick categories and (optionally) layers to drill into.";
             }
             int total = 1 + targetCount * typeCount;    // +1 for baseline
-            return $"≈ {total} PPL runs ({targetCount} {targetLabel} × {typeCount} types + 1 baseline). " +
+            var layerNote = Mode == CampaignMode.PerLayer && EffectiveLayerCount > 0
+                ? $", layers={EffectiveLayerCount}"
+                : "";
+            return $"≈ {total} PPL runs ({targetCount} {targetLabel} × {typeCount} types + 1 baseline{layerNote}). " +
                    "Already-measured cells in the DB are skipped.";
         }
+    }
+
+    /// <summary>
+    /// How many tensors a per-layer campaign would actually ablate
+    /// given the current category and layer selection.
+    /// </summary>
+    private int ResolvePerLayerTargetTensorCount()
+    {
+        if (string.IsNullOrEmpty(DetectedArchitecture)) return 0;
+        if (DetectedLayerCount <= 0) return 0;
+        var spec = LlamaArchitectureRegistry.Lookup(DetectedArchitecture)
+                ?? LlamaArchitectureRegistry.StandardTransformer;
+        var selectedCats = Categories.Where(c => c.IsSelected).Select(c => c.Name).ToList();
+        if (selectedCats.Count == 0) return 0;
+        var layers = ParseLayers();
+        var layerFilter = layers.Count == 0 ? null : layers;
+        return spec.ResolveTensors(DetectedLayerCount, selectedCats, layerFilter).Count();
     }
 
     private readonly System.Text.StringBuilder _logBuilder = new();
@@ -324,8 +362,18 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             }
             else
             {
+                // Targeted drill: caller-built tensor list filtered by
+                // the user's category and layer selections.
+                var spec = LlamaArchitectureRegistry.Lookup(DetectedArchitecture)
+                        ?? LlamaArchitectureRegistry.StandardTransformer;
+                var selectedCats = Categories.Where(c => c.IsSelected).Select(c => c.Name).ToList();
+                var layers = ParseLayers();
+                var layerFilter = layers.Count == 0 ? null : layers;
+                var targetTensors = spec.ResolveTensors(
+                    Math.Max(1, DetectedLayerCount), selectedCats, layerFilter).ToList();
+
                 var newCount = await LlamaSensitivityProfileBuilder.BuildPerLayerAsync(
-                    SourceModelPath, CorpusPath, targetTensors: null, opts, progress, _cts.Token);
+                    SourceModelPath, CorpusPath, targetTensors, opts, progress, _cts.Token);
                 var elapsed = DateTime.Now - startedAt;
                 StatusLine =
                     $"Recorded {newCount} new per-tensor measurements in {elapsed.TotalMinutes:F1} min " +
@@ -438,6 +486,83 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         {
             // Best-effort — leave the form empty if we can't read the file.
         }
+    }
+
+    /// <summary>
+    /// Parse <see cref="LayersText"/> into a sorted, deduplicated list
+    /// of layer indices. Accepts comma-separated indices and ranges
+    /// (<c>"0-3, 5, 8, 20-27"</c>). Empty input → empty list, which
+    /// the campaign treats as "all layers."
+    /// </summary>
+    public IReadOnlyList<int> ParseLayers()
+    {
+        if (string.IsNullOrWhiteSpace(LayersText)) return Array.Empty<int>();
+        var result = new HashSet<int>();
+        foreach (var raw in LayersText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var dash = raw.IndexOf('-');
+            if (dash > 0 && int.TryParse(raw[..dash].Trim(), out var lo)
+                         && int.TryParse(raw[(dash + 1)..].Trim(), out var hi))
+            {
+                if (lo > hi) (lo, hi) = (hi, lo);
+                for (int i = lo; i <= hi; i++) result.Add(i);
+            }
+            else if (int.TryParse(raw, out var n))
+            {
+                result.Add(n);
+            }
+        }
+        return result.OrderBy(i => i).ToList();
+    }
+
+    /// <summary>Preset: all layers (clears <see cref="LayersText"/>, which the campaign treats as "all").</summary>
+    [RelayCommand]
+    private void PresetLayersAll() => LayersText = string.Empty;
+
+    /// <summary>Preset: first 4 layers.</summary>
+    [RelayCommand]
+    private void PresetLayersFirst4()
+    {
+        var n = Math.Min(4, Math.Max(0, DetectedLayerCount));
+        LayersText = n > 0 ? string.Join(",", Enumerable.Range(0, n)) : string.Empty;
+    }
+
+    /// <summary>Preset: last 4 layers.</summary>
+    [RelayCommand]
+    private void PresetLayersLast4()
+    {
+        if (DetectedLayerCount <= 0) { LayersText = string.Empty; return; }
+        var start = Math.Max(0, DetectedLayerCount - 4);
+        LayersText = string.Join(",", Enumerable.Range(start, DetectedLayerCount - start));
+    }
+
+    /// <summary>
+    /// Preset: stock's <see cref="LlamaStockBaseline.UseMoreBits"/>
+    /// alternation set — the layers llama.cpp protects with extra bpw
+    /// in its hand-tuned heuristic. Drilling into this set vs the rest
+    /// is the empirical validation we want for "is the heuristic right?"
+    /// </summary>
+    [RelayCommand]
+    private void PresetLayersUseMoreBits()
+    {
+        if (DetectedLayerCount <= 0) { LayersText = string.Empty; return; }
+        var picks = Enumerable.Range(0, DetectedLayerCount)
+            .Where(i => LlamaStockBaseline.UseMoreBits(i, DetectedLayerCount))
+            .ToList();
+        LayersText = string.Join(",", picks);
+    }
+
+    /// <summary>Preset: stratified sample — first 1, last 1, plus ~3-5 evenly-spaced middle layers.</summary>
+    [RelayCommand]
+    private void PresetLayersStratified()
+    {
+        if (DetectedLayerCount <= 0) { LayersText = string.Empty; return; }
+        var n = DetectedLayerCount;
+        var picks = new SortedSet<int> { 0, n - 1 };
+        // 5-layer total target keeps cost tractable on big models.
+        for (int k = 1; k <= 3; k++)
+            picks.Add(k * n / 4);
+        LayersText = string.Join(",", picks);
     }
 
     private static bool CategoryMatch(string tensorName, string category) =>

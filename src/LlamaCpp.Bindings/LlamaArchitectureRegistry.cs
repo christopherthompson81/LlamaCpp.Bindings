@@ -214,4 +214,77 @@ public sealed record LlamaArchitectureSpec(
             foreach (var t in PerLayerTensorTemplates)
                 yield return t.Replace("{i}", i.ToString());
     }
+
+    /// <summary>
+    /// Targeted-drill helper: enumerate the concrete tensor names that
+    /// match a category filter and a layer filter. Drives the per-layer
+    /// builder mode when the user only wants to drill into specific
+    /// categories on specific layers (e.g. attn_v on all 36 layers of
+    /// Qwen3-4B without touching ffn_down at all). Returns top-level
+    /// tensors (no layer index) only when their full name appears in
+    /// <paramref name="categoryFilter"/>.
+    /// </summary>
+    /// <param name="totalLayerCount">
+    /// The model's actual block count (architecture metadata's
+    /// <c>{arch}.block_count</c>). Required because the spec doesn't
+    /// know the count.
+    /// </param>
+    /// <param name="categoryFilter">
+    /// Categories to include (matched against the same names that appear
+    /// in <see cref="Categories"/>). <c>null</c> = all categories.
+    /// </param>
+    /// <param name="layerFilter">
+    /// Layer indices to include for per-layer templates. <c>null</c> =
+    /// every layer in <c>0..totalLayerCount-1</c>. Out-of-range indices
+    /// are silently dropped (lets callers pass user input without
+    /// pre-validation).
+    /// </param>
+    public IEnumerable<string> ResolveTensors(
+        int totalLayerCount,
+        IReadOnlyList<string>? categoryFilter = null,
+        IReadOnlyList<int>? layerFilter = null)
+    {
+        bool catAllowed(string c) =>
+            categoryFilter is null || categoryFilter.Contains(c);
+
+        var effectiveLayers = (layerFilter ?? Enumerable.Range(0, Math.Max(0, totalLayerCount)).ToList())
+            .Where(i => i >= 0 && i < totalLayerCount)
+            .Distinct()
+            .OrderBy(i => i)
+            .ToList();
+
+        foreach (var template in PerLayerTensorTemplates)
+        {
+            var cat = StripAndNormalizeForCategory(template);
+            if (!catAllowed(cat)) continue;
+            foreach (var i in effectiveLayers)
+                yield return template.Replace("{i}", i.ToString());
+        }
+
+        foreach (var top in TopLevelTensors)
+        {
+            if (catAllowed(top))
+                yield return top;
+        }
+    }
+
+    /// <summary>
+    /// Inverse of the registry's category-naming convention: strip a
+    /// per-layer template's <c>blk.{i}.</c> prefix, then apply the same
+    /// FFN-bare normalization the registry uses when building
+    /// <see cref="Categories"/>. Public so the UI can predict what
+    /// category name a template will produce.
+    /// </summary>
+    public static string StripAndNormalizeForCategory(string template)
+    {
+        // Match either "blk.{i}." or a numeric "blk.13." (already-resolved).
+        var stripped = System.Text.RegularExpressions.Regex.Replace(
+            template, @"^blk\.(\{i\}|\d+)\.", "");
+        if (stripped.StartsWith("ffn_", StringComparison.Ordinal) &&
+            stripped.EndsWith(".weight", StringComparison.Ordinal))
+        {
+            return stripped[..^".weight".Length];
+        }
+        return stripped;
+    }
 }

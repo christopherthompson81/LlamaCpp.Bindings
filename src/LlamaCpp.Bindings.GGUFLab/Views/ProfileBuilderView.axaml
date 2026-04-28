@@ -151,12 +151,11 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Categories (per-category mode only) -->
+                <!-- Categories — same panel for both modes ("which categories to drill into"). -->
                 <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
                         BorderThickness="1"
                         CornerRadius="4"
-                        Padding="12"
-                        IsVisible="{Binding IsPerCategory}">
+                        Padding="12">
                     <StackPanel Spacing="6">
                         <TextBlock Text="Categories (auto-detected from architecture)"
                                    FontWeight="SemiBold" FontSize="11" Opacity="0.7" />
@@ -175,8 +174,39 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Text="Categories come from src/LlamaCpp.Bindings/HfConvert/architectures/. Tensors not present in this specific model are auto-filtered (e.g. tied-embedding models drop output.weight)."
+                        <TextBlock Text="Categories come from src/LlamaCpp.Bindings/HfConvert/architectures/. Tensors not present in this specific model are auto-filtered (e.g. tied-embedding models drop output.weight). In per-layer mode, only checked categories are drilled into."
                                    FontSize="11" Opacity="0.6" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Layer drill (per-layer mode only) -->
+                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12"
+                        IsVisible="{Binding IsPerLayer}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Layers (drill — empty = all layers)"
+                                   FontWeight="SemiBold" FontSize="11" Opacity="0.7" />
+                        <TextBox Text="{Binding LayersText}"
+                                 FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                 FontSize="12"
+                                 PlaceholderText="0,1,5,8,11,27   or  0-3, 24-27   (empty = all)" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="Presets:" Opacity="0.6" VerticalAlignment="Center" FontSize="11" />
+                            <Button Content="All"           Command="{Binding PresetLayersAllCommand}"          Padding="8,2" />
+                            <Button Content="First 4"       Command="{Binding PresetLayersFirst4Command}"        Padding="8,2" />
+                            <Button Content="Last 4"        Command="{Binding PresetLayersLast4Command}"         Padding="8,2" />
+                            <Button Content="use_more_bits" Command="{Binding PresetLayersUseMoreBitsCommand}"   Padding="8,2"
+                                    ToolTip.Tip="The set of layers llama.cpp's hand-tuned heuristic protects with extra bpw — first n/8, last n/8, every 3rd middle layer." />
+                            <Button Content="Stratified"    Command="{Binding PresetLayersStratifiedCommand}"    Padding="8,2"
+                                    ToolTip.Tip="First, last, and 3 evenly-spaced middle layers — quick architectural sample." />
+                        </StackPanel>
+                        <TextBlock FontSize="11" Opacity="0.6" TextWrapping="Wrap">
+                            Targeted drills are how you make per-layer tractable. Examples:
+                            <LineBreak />• "Just attn_v across all 36 layers of Qwen3-4B" — check attn_v only, leave layers blank.
+                            <LineBreak />• "Validate use_more_bits on Qwen3-1.7B ffn_down" — check ffn_down only, click use_more_bits preset.
+                        </TextBlock>
                     </StackPanel>
                 </Border>
 
