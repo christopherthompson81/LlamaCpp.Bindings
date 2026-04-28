@@ -30,6 +30,15 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
     [ObservableProperty]
     private string _outputPath = string.Empty;
 
+    /// <summary>
+    /// Optional importance matrix (.imatrix.gguf). When set, quantization
+    /// uses imatrix-aware scoring inside <c>ggml_quantize_chunk</c> —
+    /// matters most for K-quants and IQ-quants at low-bpw budgets where
+    /// per-column importance shifts which weights round which way.
+    /// </summary>
+    [ObservableProperty]
+    private string _imatrixPath = string.Empty;
+
     [ObservableProperty]
     private LlamaFileType _selectedFileType = LlamaFileType.Q4_K_M;
 
@@ -143,6 +152,7 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
                 Pure                 = Pure,
                 KeepSplit            = KeepSplit,
                 DryRun               = DryRun,
+                ImatrixPath          = string.IsNullOrWhiteSpace(ImatrixPath) ? null : ImatrixPath,
             };
 
             await LlamaQuantizer.QuantizeAsync(
@@ -189,9 +199,21 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
         if (string.IsNullOrEmpty(InputPath)
             && ResolveGgufFromActive(path) is { } resolved)
             InputPath = resolved;
+        // Auto-populate the imatrix slot from the canonical sidecar
+        // (<model>.imatrix.gguf next to the source). Mirrors the
+        // Adaptive Quantization page so the user can pick a model
+        // once and walk through Imatrix → Quantize without re-browsing.
+        if (string.IsNullOrEmpty(ImatrixPath)
+            && ResolveImatrixForGguf(InputPath) is { } imt)
+            ImatrixPath = imt;
     }
 
     protected override bool HasGgufInputValue => !string.IsNullOrEmpty(InputPath);
+    protected override bool HasImatrixSlot => true;
+    protected override bool HasImatrixInputValue => !string.IsNullOrEmpty(ImatrixPath);
+    protected override string? CurrentSourceGguf =>
+        string.IsNullOrEmpty(InputPath) ? ResolveGgufFromActive(Active?.Path) : InputPath;
 
     partial void OnInputPathChanged(string value) => NotifyRemediesChanged();
+    partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
 }

@@ -26,6 +26,16 @@ public partial class QuantizeView : UserControl
         }
     }
 
+    private async void OnBrowseImatrix(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not QuantizeViewModel vm) return;
+        var picked = await PickGgufAsync(open: true, suggestedName: null);
+        if (picked is not null)
+        {
+            vm.ImatrixPath = picked;
+        }
+    }
+
     private async void OnBrowseOutput(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not QuantizeViewModel vm) return;

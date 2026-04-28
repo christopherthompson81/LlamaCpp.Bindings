@@ -37,7 +37,7 @@
         <!-- Form -->
         <ScrollViewer>
             <StackPanel Spacing="14" MaxWidth="780" HorizontalAlignment="Stretch">
-                <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
+                <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Input GGUF" VerticalAlignment="Top" Margin="0,6,0,0" />
                     <StackPanel Grid.Row="0" Grid.Column="1" Spacing="0">
                         <TextBox Text="{Binding InputPath}"
@@ -48,14 +48,24 @@
                               VerticalAlignment="Top"
                               Click="OnBrowseInput" />
 
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Output GGUF" VerticalAlignment="Center" />
-                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding OutputPath}"
-                              PlaceholderText="Leave blank to derive from input + ftype" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Imatrix" VerticalAlignment="Top" Margin="0,6,0,0" />
+                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="0">
+                        <TextBox Text="{Binding ImatrixPath}"
+                                 PlaceholderText="(optional) imatrix .gguf — column-importance weighting for K/IQ-quants" />
+                        <v:BuildImatrixRemedyCard />
+                    </StackPanel>
                     <Button   Grid.Row="1" Grid.Column="2" Content="Browse…"
+                              VerticalAlignment="Top"
+                              Click="OnBrowseImatrix" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Output GGUF" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="2" Grid.Column="1" Text="{Binding OutputPath}"
+                              PlaceholderText="Leave blank to derive from input + ftype" />
+                    <Button   Grid.Row="2" Grid.Column="2" Content="Browse…"
                               Click="OnBrowseOutput" />
 
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Quant type" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="2" Grid.Column="1"
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Quant type" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="3" Grid.Column="1"
                               ItemsSource="{Binding AvailableFileTypes}"
                               SelectedItem="{Binding SelectedFileType, Mode=TwoWay}"
                               HorizontalAlignment="Stretch" />
