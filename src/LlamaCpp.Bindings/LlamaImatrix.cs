@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Numerics.Tensors;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -199,6 +201,10 @@ public static class LlamaImatrix
             {
                 NativeMethods.llama_batch_free(batch);
             }
+            // Producer is done. Drain the worker queue and join workers
+            // before serializing — this fences all in-flight math so
+            // Save sees the complete totals.
+            collector.WaitForDrain();
             sw.Stop();
 
             // Serialize. Naming keys mirror llama-imatrix's GGUF format
@@ -227,6 +233,7 @@ public static class LlamaImatrix
         finally
         {
             gch.Free();
+            collector.Dispose();
         }
     }
 
@@ -313,22 +320,49 @@ public static class LlamaImatrix
     /// so multiple matmul invocations on the same weight (across chunks
     /// and across positions within a chunk) sum into the same entry.
     /// </summary>
-    private sealed class ImatrixCollector
+    private sealed class ImatrixCollector : IDisposable
     {
         private readonly bool _processOutput;
-        private readonly object _gate = new();
-        private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
-        // Reused across callbacks: holds row*row in float, then folded
-        // into the entry's double accumulator. Single-buffer is OK since
-        // the eval callback fires sequentially per ggml node.
-        private float[] _sqBuffer = Array.Empty<float>();
+        // Eval callback is single-threaded (one ggml node at a time on
+        // the decode thread), so _entries inserts are serialized
+        // implicitly. Concurrent reads come from worker threads — they
+        // only access entries the eval thread already created. Use
+        // ConcurrentDictionary to make this safe without taking a global
+        // lock per callback.
+        private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+        // Producer/consumer pipeline: the eval callback rents a buffer,
+        // copies the activation bytes (this is ~12% of pre-Round-2 wall
+        // and unavoidable — d2h sync), and queues the work. Worker
+        // threads do the squaring + accumulate (~68% of pre-Round-2 wall)
+        // in parallel. The eval thread doesn't block on math.
+        private readonly BlockingCollection<WorkItem> _queue;
+        private readonly Thread[] _workers;
+        private Exception? _workerException;
 
-        public ImatrixCollector(bool processOutput) { _processOutput = processOutput; }
-
-        public int TensorCount
+        public ImatrixCollector(bool processOutput, int workerCount = 0)
         {
-            get { lock (_gate) return _entries.Count; }
+            _processOutput = processOutput;
+            int n = workerCount > 0
+                ? workerCount
+                : Math.Max(1, Math.Min(Environment.ProcessorCount - 2, 8));
+            // Bounded queue gives backpressure: if workers fall behind,
+            // the eval callback blocks until a slot frees. Capacity of
+            // 4 × workers is enough to hide steady-state variance
+            // without unbounded memory growth on slow consumers.
+            _queue = new BlockingCollection<WorkItem>(boundedCapacity: n * 4);
+            _workers = new Thread[n];
+            for (int i = 0; i < n; i++)
+            {
+                _workers[i] = new Thread(WorkerLoop)
+                {
+                    IsBackground = true,
+                    Name = $"imatrix-worker-{i}",
+                };
+                _workers[i].Start();
+            }
         }
+
+        public int TensorCount => _entries.Count;
 
         public unsafe bool OnTensor(ref ggml_tensor t, bool ask)
         {
@@ -384,70 +418,131 @@ public static class LlamaImatrix
             long bytes = nEmbd * nTokens * sizeof(float);
             if (bytes <= 0) return false;
 
-            // Copy out under a lock so concurrent callbacks (parallel
-            // sequences) don't trample the staging buffer. The hot path
-            // — squaring the row in float and accumulating into the
-            // entry's double[] — was a scalar inner loop pre-Round-1
-            // and dominated wall time at 80% of the imatrix run on
-            // Qwen3-1.7B. Vectorizing the squaring (TensorPrimitives)
-            // and the float→double accumulate (Vector256.WidenLower)
-            // halved the math phase and gave a 1.68× overall speedup.
-            lock (_gate)
+            // Round 2 producer/consumer: eval thread rents a buffer,
+            // copies activation bytes, queues for math. Workers do the
+            // squaring + accumulate in parallel. The eval callback
+            // returns as soon as the d2h is in our owned buffer — GPU
+            // doesn't wait on math.
+            if (_workerException is { } prior) throw prior;
+
+            var entry = _entries.GetOrAdd(filtered, name => new Entry { Values = new double[(int)nEmbd] });
+            if (entry.Values.Length != nEmbd) return false;
+
+            // Rent an owned buffer (guaranteed not shared with the next
+            // callback). Workers will return it after consuming.
+            int bytesI = (int)bytes;
+            byte[] owned = ArrayPool<byte>.Shared.Rent(bytesI);
+            fixed (byte* dst = owned)
             {
-                var entry = GetOrAddEntry(filtered, (int)nEmbd);
-                if (entry.Values.Length != nEmbd) return false;
-
-                fixed (byte* stage = entry.StagingBuffer((int)bytes))
+                if (isHost && src1.data != IntPtr.Zero)
                 {
-                    if (isHost && src1.data != IntPtr.Zero)
-                    {
-                        Buffer.MemoryCopy((void*)src1.data, stage, bytes, bytes);
-                    }
-                    else
-                    {
-                        NativeMethods.ggml_backend_tensor_get(src1Ptr, stage, 0, (nuint)bytes);
-                    }
-
-                    var act = (float*)stage;
-                    long rowStrideBytes = unchecked((long)src1.nb[1]);
-                    int n = (int)nEmbd;
-                    var sq = _sqBuffer.Length >= n ? _sqBuffer : (_sqBuffer = new float[n]);
-                    var values = entry.Values;
-                    for (long row = 0; row < nTokens; row++)
-                    {
-                        var rowPtr = (float*)((byte*)act + row * rowStrideBytes);
-                        // Vectorized square via TensorPrimitives (AVX2 on this CPU).
-                        var rowSpan = new ReadOnlySpan<float>(rowPtr, n);
-                        var sqSpan = sq.AsSpan(0, n);
-                        TensorPrimitives.Multiply(rowSpan, rowSpan, sqSpan);
-                        // Vectorized float→double accumulate (Vector256 of doubles).
-                        AccumulateFloatToDouble(sq, values, n);
-                    }
-                    entry.Count += (int)nTokens;
+                    Buffer.MemoryCopy((void*)src1.data, dst, bytesI, bytes);
+                }
+                else
+                {
+                    NativeMethods.ggml_backend_tensor_get(src1Ptr, dst, 0, (nuint)bytes);
                 }
             }
+            _queue.Add(new WorkItem
+            {
+                Entry          = entry,
+                Buffer         = owned,
+                BufferLen      = bytesI,
+                NEmbd          = (int)nEmbd,
+                NTokens        = (int)nTokens,
+                RowStrideBytes = unchecked((long)src1.nb[1]),
+            });
             return true;
+        }
+
+        public void WaitForDrain()
+        {
+            // Producer is done; signal consumers to exit when queue
+            // empties, then join. Re-throw any worker fault.
+            _queue.CompleteAdding();
+            foreach (var t in _workers) t.Join();
+            if (_workerException is { } ex) throw ex;
+        }
+
+        public void Dispose()
+        {
+            if (!_queue.IsAddingCompleted) _queue.CompleteAdding();
+            _queue.Dispose();
+        }
+
+        private void WorkerLoop()
+        {
+            // Each worker has its own scratch float[] for the squared row,
+            // grown to the largest nEmbd it sees. Avoids cross-thread
+            // contention on a shared scratch.
+            float[] sq = Array.Empty<float>();
+            try
+            {
+                foreach (var w in _queue.GetConsumingEnumerable())
+                {
+                    if (sq.Length < w.NEmbd) sq = new float[w.NEmbd];
+                    DoMath(w, sq);
+                    ArrayPool<byte>.Shared.Return(w.Buffer);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Surface to the eval thread on next OnTensor and to
+                // WaitForDrain. CompleteAdding so siblings drain.
+                Interlocked.CompareExchange(ref _workerException, ex, null);
+                if (!_queue.IsAddingCompleted) _queue.CompleteAdding();
+            }
+        }
+
+        private static unsafe void DoMath(WorkItem w, float[] sq)
+        {
+            var entry = w.Entry;
+            int n = w.NEmbd;
+            int nTokens = w.NTokens;
+            long rowStrideBytes = w.RowStrideBytes;
+            // Per-entry lock: different tensors process in parallel, but
+            // the same tensor's accumulator is touched by at most one
+            // worker at a time. Since each tensor is visited once per
+            // chunk and there are many tensors, contention is low.
+            lock (entry.Lock)
+            {
+                var values = entry.Values;
+                fixed (byte* basePtr = w.Buffer)
+                {
+                    var sqSpan = sq.AsSpan(0, n);
+                    for (int row = 0; row < nTokens; row++)
+                    {
+                        var rowPtr = (float*)(basePtr + row * rowStrideBytes);
+                        var rowSpan = new ReadOnlySpan<float>(rowPtr, n);
+                        TensorPrimitives.Multiply(rowSpan, rowSpan, sqSpan);
+                        AccumulateFloatToDouble(sq, values, n);
+                    }
+                }
+                entry.Count += nTokens;
+            }
+        }
+
+        private sealed class WorkItem
+        {
+            public Entry Entry = null!;
+            public byte[] Buffer = Array.Empty<byte>();
+            public int BufferLen;
+            public int NEmbd;
+            public int NTokens;
+            public long RowStrideBytes;
         }
 
         public void Save(LlamaGgufWriter writer)
         {
-            // Sort for deterministic on-disk order — readers iterate
-            // tensor info sequentially, so a stable order makes diffs
-            // between runs meaningful.
-            string[] names;
-            lock (_gate)
-            {
-                names = _entries.Keys.ToArray();
-            }
+            // Caller must have invoked WaitForDrain(); after that, no
+            // more writes to entries are possible and ConcurrentDictionary
+            // reads are stable.
+            var names = _entries.Keys.ToArray();
             Array.Sort(names, StringComparer.Ordinal);
 
             foreach (var name in names)
             {
-                Entry e;
-                lock (_gate)
-                {
-                    if (!_entries.TryGetValue(name, out e!)) continue;
-                }
+                if (!_entries.TryGetValue(name, out var e)) continue;
                 int n = e.Values.Length;
                 var sums = new float[n];
                 for (int i = 0; i < n; i++) sums[i] = (float)e.Values[i];
@@ -486,13 +581,6 @@ public static class LlamaImatrix
             for (; j < n; j++) dst[j] += src[j];
         }
 
-        private Entry GetOrAddEntry(string name, int nEmbd)
-        {
-            if (_entries.TryGetValue(name, out var e)) return e;
-            e = new Entry { Values = new double[nEmbd], Count = 0 };
-            _entries[name] = e;
-            return e;
-        }
 
         private static unsafe IntPtr ReadSrcPointer(ref ggml_tensor t, int index)
         {
@@ -535,12 +623,9 @@ public static class LlamaImatrix
         {
             public double[] Values = Array.Empty<double>();
             public int Count;
-            private byte[] _staging = Array.Empty<byte>();
-            public byte[] StagingBuffer(int minBytes)
-            {
-                if (_staging.Length < minBytes) _staging = new byte[minBytes];
-                return _staging;
-            }
+            // Per-Entry lock so different tensors process concurrently
+            // across worker threads. Guards Values and Count.
+            public readonly object Lock = new();
         }
     }
 }
