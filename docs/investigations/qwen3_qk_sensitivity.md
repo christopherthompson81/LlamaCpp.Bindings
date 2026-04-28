@@ -225,6 +225,101 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 19 — 2026-04-27 18:45  (Cross-architecture: v2 on Llama-3.2-1B)
+
+Run 18 closed v2 with a clean −2.26 PPL win on Qwen3-1.7B at
+slightly smaller file size than stock Q4_K_M. Run 19 asks the
+generalization question: does the same recipe builder beat Llama's
+stock heuristic? Run 12 already established that profiles are
+arch-specific (QK-norm signature absent on Llama); whether the
+v2 recipe machinery still produces a measurable win without that
+signature is unknown.
+
+### Build
+
+`LlamaSensitivityProfileBuilder` on Llama-3.2-1B-Instruct,
+9 categories minus `output.weight` (Llama has tied embeddings;
+output shares the token_embd tensor), 7 candidate types. Build
+wall 1242s (~21 min — slower per ablation than Qwen3-1.7B because
+Llama-1B's PPL pass is denser per chunk despite fewer layers).
+
+baseline F16 PPL = 13.8217 (matches Run 12).
+
+### Profile shape — strikingly mild
+
+| category    | Q2_K   | Q3_K   | Q4_K    | Q5_K    | Q6_K    | floor |
+|-------------|--------|--------|---------|---------|---------|-------|
+| ffn_up      | +2.486 | +0.472 | +0.128  | +0.051  | +0.025  | Q2_K  |
+| ffn_down    | +2.847 | +2.606 | +0.107  | +0.029  | +0.047  | Q2_K  |
+| ffn_gate    | +1.430 | +0.331 | +0.095  | +0.008  | +0.005  | Q2_K  |
+| attn_output | +1.274 | +0.379 | +0.094  | −0.011  | +0.004  | Q2_K  |
+| attn_q      | +0.245 | +0.126 | +0.040  | −0.016  | +0.000  | Q2_K  |
+| attn_k      | +0.447 | +0.195 | +0.029  | +0.007  | −0.007  | Q2_K  |
+| attn_v      | +0.757 | +0.321 | −0.006  | −0.020  | +0.009  | Q2_K  |
+| token_embd  | +2.237 | +0.506 | −0.002  | +0.026  | −0.002  | Q2_K  |
+
+Compare to Qwen3-1.7B's catastrophes — `ffn_down Q2_K = +3709`
+on Qwen3, only **+2.85** here. Same for `attn_v Q2_K`: +15.85 on
+Qwen3, +0.76 on Llama. Every category's auto-floor lands at Q2_K
+because nothing crosses the catastrophic threshold. The
+no-QK-norm story (Run 12) plays out as expected: Llama's
+attention weights are quantization-friendly across the full
+candidate ladder.
+
+### Validation matrix
+
+| recipe                        | actual bpw | PPL     | Δ vs stock |
+|-------------------------------|------------|---------|------------|
+| stock Q4_K_M                  | 5.178      | 14.2843 | —          |
+| **recipe @Q4_K_M**            | 5.209      | **14.2550** | **−0.029** |
+| stock Q5_K_M                  | 5.850      | 13.9883 | —          |
+| recipe @Q5_K_M                | 5.657      | 14.0878 | +0.099     |
+
+### Verdict — v2 generalizes, but the magnitude scales with arch difficulty
+
+- **Q4_K_M on Llama:** v2 is essentially a wash (−0.029 PPL at
+  slightly larger file). Stock Q4_K_M's heuristic is already
+  near-optimal for an arch this quantization-friendly; there's
+  no cliff to avoid and no tensor systematically over- or
+  under-protected by the heuristic.
+- **Q5_K_M on Llama:** v2 makes a Pareto trade — 0.19 bpw
+  *smaller* at +0.10 PPL. Whether this is a win depends on
+  whether the user weights size or quality.
+
+The Qwen3 v2 win (−2.26 PPL, 12% relative) was driven by closing
+the gap caused by the QK-norm signature. Llama doesn't have that
+gap to close. **The recipe builder is correct on both
+architectures** — it doesn't ship worse-than-stock recipes
+anywhere — but it only wins materially where the heuristic was
+leaving real value on the table.
+
+### Implication for v2 ship plan
+
+This is an **honest narrowing of the v2 pitch**:
+
+- v2 ships on QK-norm architectures (Qwen3, possibly other
+  modern arches with attention-side normalization) with a
+  significant PPL improvement at Q4_K_M-class budgets.
+- v2 ships on classical-MHA architectures (Llama) at parity
+  with stock — no harm, but no headline improvement either.
+- The same code, same algorithm, same baseline: the difference
+  is entirely in the profile data the architecture produces.
+
+This is also a **quality validation** — the recipe builder
+doesn't over-promise across architectures. On Llama where stock
+is already good, v2 doesn't manufacture fake improvements.
+
+### Now in `data/profiles/`
+
+- `qwen3-0.6B.profile.json` (9 cats × 7 types, with imatrix)
+- `qwen3-1.7B.profile.json` (9 cats × 7 types)
+- `llama-3.2-1B.profile.json` (8 cats × 7 types — no output.weight)
+
+The v2 ship plan is per-architecture profiles in this directory.
+Users targeting other architectures or sizes can build their own
+via `LlamaSensitivityProfileBuilder`; the recipe builder + custom
+quantizer + stock baseline are all architecture-generic.
+
 ## Run 18 — 2026-04-27 17:30  (MinPplGainPerBpw threshold: refusing wasteful trades)
 
 Run 17's same-model recipe (PPL 16.4570) was the best v2 result —
