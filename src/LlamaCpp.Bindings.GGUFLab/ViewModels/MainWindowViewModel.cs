@@ -34,7 +34,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var localModels = new LocalModelsViewModel(Settings, ActiveModel);
         var quantize = new QuantizeViewModel(LogBus);
         var adaptiveQuantize = new AdaptiveQuantizeViewModel(LogBus);
-        var profileBuilder = new ProfileBuilderViewModel(LogBus);
+        var profileBuilder = new ProfileBuilderViewModel(LogBus, Settings);
         var perplexity = new PerplexityViewModel(LogBus);
         var klDivergence = new KlDivergenceViewModel(LogBus);
         var hellaswag = new HellaswagViewModel(LogBus);

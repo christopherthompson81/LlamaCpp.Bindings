@@ -32,9 +32,11 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     }
 
     private readonly NativeLogBus _logBus;
+    private readonly WorkspaceSettings _settings;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    [NotifyPropertyChangedFor(nameof(DiskEstimateText))]
     private string _sourceModelPath = string.Empty;
 
     [ObservableProperty]
@@ -53,6 +55,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     private string _imatrixPath = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DiskEstimateText))]
     private string _workingDirectory = string.Empty;
 
     [ObservableProperty]
@@ -67,6 +70,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 
     /// <summary>0 → auto.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DiskEstimateText))]
     private int _maxConcurrent;
 
     [ObservableProperty]
@@ -174,6 +178,19 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     [ObservableProperty]
     private string _progressLabel = string.Empty;
 
+    /// <summary>"03:42 elapsed" — refreshed by the dispatcher tick during a run.</summary>
+    [ObservableProperty]
+    private string _elapsedText = string.Empty;
+
+    /// <summary>
+    /// "ETA 12 min" — derived from <see cref="ProgressFraction"/> and
+    /// elapsed once the campaign has visible progress. Empty until
+    /// fraction crosses ~1% so the early estimate doesn't read as
+    /// nonsense (e.g. "ETA 5 days" because we just started).
+    /// </summary>
+    [ObservableProperty]
+    private string _etaText = string.Empty;
+
     /// <summary>
     /// Column headers for the progress grid (candidate-type names in
     /// ladder order). Populated from the campaign's Plan event so the
@@ -277,6 +294,116 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         return FormatDuration(totalSeconds);
     }
 
+    /// <summary>
+    /// Estimated peak disk usage during a run plus available free
+    /// space on the working directory's partition. Drives both the
+    /// pre-build display and the pre-flight check that refuses Build
+    /// when the estimate exceeds available.
+    /// </summary>
+    /// <remarks>
+    /// Estimate model: each in-flight quantize file is roughly the size
+    /// of the F16 source (per-tensor / per-category ablations leave
+    /// ~all weights at F16, so output ≈ source size). Peak in flight =
+    /// 1 (baseline) + batchSize (concurrent ablation cells), where
+    /// batchSize follows the builder's heuristic: max(1, min(MaxConcurrent
+    /// or ProcessorCount, 8)).
+    /// </remarks>
+    public string DiskEstimateText
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(SourceModelPath) || !File.Exists(SourceModelPath)) return string.Empty;
+
+            long sourceSize;
+            try { sourceSize = new FileInfo(SourceModelPath).Length; }
+            catch { return string.Empty; }
+
+            int batch = MaxConcurrent > 0
+                ? MaxConcurrent
+                : Math.Min(Environment.ProcessorCount, 8);
+            long peak = (long)(1 + batch) * sourceSize;
+
+            var workDir = string.IsNullOrEmpty(WorkingDirectory) ? Path.GetTempPath() : WorkingDirectory;
+            var free = GetFreeBytes(workDir);
+
+            string peakText = FormatBytes(peak);
+            string freeText = free is long f ? FormatBytes(f) : "unknown";
+            string warn = free is long f2 && peak > f2
+                ? "  ·  ⚠ insufficient — Build will refuse"
+                : "";
+            return $"peak disk in flight: ~{peakText}  ·  free at {Path.GetFileName(workDir.TrimEnd(Path.DirectorySeparatorChar))}: {freeText}{warn}";
+        }
+    }
+
+    /// <summary>True when the working-directory partition has enough headroom for the estimated peak.</summary>
+    public bool DiskEstimateIsSufficient
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(SourceModelPath) || !File.Exists(SourceModelPath)) return true;
+            long sourceSize;
+            try { sourceSize = new FileInfo(SourceModelPath).Length; }
+            catch { return true; }
+            int batch = MaxConcurrent > 0 ? MaxConcurrent : Math.Min(Environment.ProcessorCount, 8);
+            long peak = (long)(1 + batch) * sourceSize;
+            var workDir = string.IsNullOrEmpty(WorkingDirectory) ? Path.GetTempPath() : WorkingDirectory;
+            var free = GetFreeBytes(workDir);
+            return free is null || free.Value >= peak;
+        }
+    }
+
+    /// <summary>
+    /// Free bytes on the partition containing <paramref name="path"/>.
+    /// Walks <see cref="DriveInfo.GetDrives"/> finding the longest mount
+    /// point that prefixes the absolute path, so it works on Linux
+    /// where /tmp may be a separate mount or part of /. Returns null
+    /// when the lookup fails.
+    /// </summary>
+    private static long? GetFreeBytes(string path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            // Resolve to an absolute path; create the directory if needed
+            // to make DriveInfo work for paths that don't exist yet.
+            var full = Path.GetFullPath(path);
+            if (!Directory.Exists(full))
+            {
+                // Probe the closest existing ancestor — don't create the
+                // directory just to ask about disk space.
+                var probe = full;
+                while (!string.IsNullOrEmpty(probe) && !Directory.Exists(probe))
+                    probe = Path.GetDirectoryName(probe);
+                if (string.IsNullOrEmpty(probe)) return null;
+                full = probe;
+            }
+
+            DriveInfo? best = null;
+            foreach (var d in DriveInfo.GetDrives())
+            {
+                if (!d.IsReady) continue;
+                if (full.StartsWith(d.RootDirectory.FullName, StringComparison.Ordinal))
+                {
+                    if (best is null || d.RootDirectory.FullName.Length > best.RootDirectory.FullName.Length)
+                        best = d;
+                }
+            }
+            return best?.AvailableFreeSpace;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Format a byte count compactly: 512 B / 13.4 KB / 2.31 GB.</summary>
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        double v = bytes;
+        string[] units = { "KB", "MB", "GB", "TB" };
+        int i = -1;
+        while (v >= 1024 && i < units.Length - 1) { v /= 1024; i++; }
+        return $"{v:F2} {units[i]}";
+    }
+
     /// <summary>Compact human duration: 45s / 12m / 2h 15m / 3d 4h.</summary>
     private static string FormatDuration(double seconds)
     {
@@ -339,13 +466,17 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     [ObservableProperty]
     private string _dbStatusLine = "Click 'Refresh DB counts' to see what's already measured.";
 
-    public ProfileBuilderViewModel(NativeLogBus logBus)
+    public ProfileBuilderViewModel(NativeLogBus logBus, WorkspaceSettings settings)
     {
         _logBus = logBus;
+        _settings = settings;
+
+        // Hydrate from settings so the working directory persists across
+        // app restarts. Empty string = fall back to system temp inside
+        // the builder (matches the field's pre-settings semantics).
+        WorkingDirectory = settings.ProfileBuilderScratchDirectory ?? string.Empty;
+
         Categories.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CostEstimateText));
-        // Bridge the throttled buffer's batched text-change notifications
-        // into the LogText binding so the view sees a single update
-        // every flush interval rather than per-line.
         _log.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ThrottledLogBuffer.Text))
@@ -439,13 +570,27 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             }
         }
 
+        // Pre-flight disk check. The campaign holds up to (1 + batchSize)
+        // ~F16-sized files in flight; if the working directory's
+        // partition can't fit that, fail before quantizing the first
+        // ablation rather than mid-campaign with a half-full /tmp.
+        if (!DiskEstimateIsSufficient)
+        {
+            StatusLine = $"Insufficient disk for working directory. {DiskEstimateText}. " +
+                         "Set 'Working dir' to a partition with enough headroom.";
+            return;
+        }
+
         _log.Clear();
         ProgressFraction = 0;
         ProgressLabel = string.Empty;
         StageText = "starting…";
+        ElapsedText = string.Empty;
+        EtaText = string.Empty;
         _cts = new CancellationTokenSource();
         IsRunning = true;
         var startedAt = DateTime.Now;
+        StartElapsedTimer(startedAt);
         StatusLine = Mode == CampaignMode.PerCategory
             ? "Building per-category profile…"
             : "Building per-layer profile…";
@@ -559,11 +704,49 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         {
             unsubscribe();
             _log.Stop();    // flush any pending tick before idle
+            StopElapsedTimer();
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;
         }
     }
+
+    /// <summary>
+    /// Spin up a 1 Hz dispatcher tick that refreshes <see cref="ElapsedText"/>
+    /// and (when there's enough progress) <see cref="EtaText"/>. Cheap —
+    /// we just format two strings per second; the underlying counters
+    /// already update from the campaign's progress events.
+    /// </summary>
+    private void StartElapsedTimer(DateTime startedAt)
+    {
+        StopElapsedTimer();
+        _elapsedTimer = new Avalonia.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _elapsedTimer.Tick += (_, _) =>
+        {
+            var elapsed = (DateTime.Now - startedAt).TotalSeconds;
+            ElapsedText = FormatDuration(elapsed);
+            // Wait until ~1% progress before showing an ETA — earlier
+            // estimates from a tiny fraction blow up to "ETA 5 days"
+            // and just confuse the user.
+            if (ProgressFraction > 0.01)
+            {
+                var remaining = elapsed * (1.0 / ProgressFraction - 1.0);
+                EtaText = $"ETA {FormatDuration(remaining)} remaining";
+            }
+        };
+        _elapsedTimer.Start();
+    }
+
+    private void StopElapsedTimer()
+    {
+        _elapsedTimer?.Stop();
+        _elapsedTimer = null;
+    }
+
+    private Avalonia.Threading.DispatcherTimer? _elapsedTimer;
 
     [RelayCommand]
     private void Cancel()
@@ -1029,6 +1212,19 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         NotifyRemediesChanged();
     }
     partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
+
+    partial void OnWorkingDirectoryChanged(string value)
+    {
+        // Persist the user's choice so the scratch dir survives app restarts.
+        // Treat empty as "use default" (null in settings); avoids storing a
+        // tombstone entry for the in-memory empty default.
+        var newSetting = string.IsNullOrWhiteSpace(value) ? null : value;
+        if (_settings.ProfileBuilderScratchDirectory != newSetting)
+        {
+            _settings.ProfileBuilderScratchDirectory = newSetting;
+            try { _settings.Save(); } catch { /* best-effort persistence */ }
+        }
+    }
 
     /// <summary>
     /// One row in the progress grid — covers a single ablation target

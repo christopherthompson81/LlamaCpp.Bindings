@@ -19,6 +19,16 @@ public sealed class WorkspaceSettings
     /// <summary>HuggingFace API token for gated repos. Optional.</summary>
     public string? HuggingFaceToken { get; set; }
 
+    /// <summary>
+    /// Working directory the Profile Builder uses for temporary
+    /// quantized files during ablation campaigns. Null = system tempdir
+    /// (<see cref="Path.GetTempPath"/>). A campaign can produce
+    /// <c>1 + batchSize</c> ~F16-sized files in flight, so /tmp is
+    /// frequently too small for multi-GB sources — point this at a
+    /// fast disk with headroom (NVMe scratch volume etc).
+    /// </summary>
+    public string? ProfileBuilderScratchDirectory { get; set; }
+
     public static string DefaultWorkspaceRoot =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
