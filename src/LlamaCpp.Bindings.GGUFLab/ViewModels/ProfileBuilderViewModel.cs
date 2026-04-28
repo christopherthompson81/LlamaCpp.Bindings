@@ -301,12 +301,16 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     /// when the estimate exceeds available.
     /// </summary>
     /// <remarks>
-    /// Estimate model: each in-flight quantize file is roughly the size
-    /// of the F16 source (per-tensor / per-category ablations leave
-    /// ~all weights at F16, so output ≈ source size). Peak in flight =
-    /// 1 (baseline) + batchSize (concurrent ablation cells), where
-    /// batchSize follows the builder's heuristic: max(1, min(MaxConcurrent
-    /// or ProcessorCount, 8)).
+    /// Each in-flight quantize file is roughly the size of the F16
+    /// source (ablations leave ~all weights at F16, so output ≈
+    /// source size). The builder's continuous-flow pipeline keeps at
+    /// most <c>1 (producer mid-write) + 1 (channel) + pplConcurrency
+    /// (consumers actively scoring)</c> files on disk simultaneously,
+    /// so peak = <c>(2 + pplConcurrency) × sourceSize</c>.
+    /// pplConcurrency mirrors the builder's resolution: explicit
+    /// <see cref="MaxConcurrent"/> if set, otherwise <c>min(ProcessorCount, 8)</c>
+    /// as an upper-bound estimate (the runtime VRAM-aware heuristic
+    /// may pick lower, which only reduces peak).
     /// </remarks>
     public string DiskEstimateText
     {
@@ -318,10 +322,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             try { sourceSize = new FileInfo(SourceModelPath).Length; }
             catch { return string.Empty; }
 
-            int batch = MaxConcurrent > 0
-                ? MaxConcurrent
-                : Math.Min(Environment.ProcessorCount, 8);
-            long peak = (long)(1 + batch) * sourceSize;
+            long peak = (long)(2 + EstimatedPplConcurrency()) * sourceSize;
 
             var workDir = string.IsNullOrEmpty(WorkingDirectory) ? Path.GetTempPath() : WorkingDirectory;
             var free = GetFreeBytes(workDir);
@@ -344,13 +345,16 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             long sourceSize;
             try { sourceSize = new FileInfo(SourceModelPath).Length; }
             catch { return true; }
-            int batch = MaxConcurrent > 0 ? MaxConcurrent : Math.Min(Environment.ProcessorCount, 8);
-            long peak = (long)(1 + batch) * sourceSize;
+            long peak = (long)(2 + EstimatedPplConcurrency()) * sourceSize;
             var workDir = string.IsNullOrEmpty(WorkingDirectory) ? Path.GetTempPath() : WorkingDirectory;
             var free = GetFreeBytes(workDir);
             return free is null || free.Value >= peak;
         }
     }
+
+    private int EstimatedPplConcurrency() => MaxConcurrent > 0
+        ? MaxConcurrent
+        : Math.Min(Environment.ProcessorCount, 8);
 
     /// <summary>
     /// Free bytes on the partition containing <paramref name="path"/>.
@@ -570,10 +574,11 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             }
         }
 
-        // Pre-flight disk check. The campaign holds up to (1 + batchSize)
-        // ~F16-sized files in flight; if the working directory's
-        // partition can't fit that, fail before quantizing the first
-        // ablation rather than mid-campaign with a half-full /tmp.
+        // Pre-flight disk check. The campaign's continuous-flow pipeline
+        // holds up to (2 + pplConcurrency) ~F16-sized files in flight
+        // (1 producer mid-write + 1 channel + N consumers scoring); if
+        // the working directory's partition can't fit that, fail before
+        // quantizing rather than mid-campaign with a half-full /tmp.
         if (!DiskEstimateIsSufficient)
         {
             StatusLine = $"Insufficient disk for working directory. {DiskEstimateText}. " +

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 
 namespace LlamaCpp.Bindings;
 
@@ -394,9 +395,15 @@ public static class LlamaSensitivityProfileBuilder
             var corpusName = Path.GetFileName(corpusPath);
             var pplOpts = opts.PerplexityOptions ?? new LlamaPerplexityOptions { ContextSize = 512 };
 
-            int batchSize = opts.MaxConcurrent > 0
+            // PPL-side concurrency. In the old batch design this was also
+            // the quantize batch size; in the continuous-flow design
+            // quantize is always serial (CPU-saturating internally) and
+            // this is just the consumer-pool size.
+            int pplConcurrency = opts.MaxConcurrent > 0
                 ? opts.MaxConcurrent
-                : Math.Min(Environment.ProcessorCount, 8);
+                : LlamaPerplexity.RecommendConcurrency(
+                    new[] { sourceModelPath },
+                    availableVramBytes: opts.AvailableVramBytes);
 
             int totalJobs = 1 + specs.Count;
             int completed = 0;
@@ -490,7 +497,7 @@ public static class LlamaSensitivityProfileBuilder
                 completed++;
 
                 progress?.Report(new Progress(Stage.Scoring, 0, totalJobs,
-                    CurrentLabel: $"baseline (batch={batchSize}, ppl-concurrency=auto)",
+                    CurrentLabel: $"baseline (ppl-concurrency={pplConcurrency})",
                     Fraction: Fraction()));
                 var baselineJob = new LlamaPerplexity.PerplexityJob(
                     ModelPath: baselinePath, Corpus: corpusText, Options: pplOpts, Tag: "BASELINE");
@@ -544,68 +551,141 @@ public static class LlamaSensitivityProfileBuilder
                 .Where(s => !ablationPpl.ContainsKey((s.Target, s.Type)))
                 .ToList();
 
-            for (int batchStart = 0; batchStart < pendingSpecs.Count; batchStart += batchSize)
+            // Continuous-flow pipeline. Quantize is serial (one writer
+            // saturating CPU); PPL runs at pplConcurrency in parallel.
+            // A bounded channel hands quantized files off to consumers
+            // and back-pressures the producer when all consumers are
+            // busy, so peak files-on-disk stays bounded.
+            //
+            // Peak in flight = 1 (producer mid-write)
+            //                + channelCapacity (queued, ready for PPL)
+            //                + pplConcurrency  (consumers actively scoring).
+            // We size channelCapacity so the total = pplConcurrency + 1,
+            // matching the old design's "1 baseline + batchSize" peak.
+            int channelCapacity = 1;
+            var channel = Channel.CreateBounded<(AblationSpec Spec, string Path)>(
+                new BoundedChannelOptions(channelCapacity)
+                {
+                    FullMode = BoundedChannelFullMode.Wait,
+                    SingleReader = false,
+                    SingleWriter = true,
+                });
+
+            // Each consumer task uses pplOpts directly. The thread budget
+            // matches what RunParallelAsync would have computed:
+            // ProcessorCount / pplConcurrency. We snapshot it here once
+            // so all consumers share the same setting.
+            int autoThreadsPerJob = Math.Max(1, Environment.ProcessorCount / Math.Max(1, pplConcurrency));
+            var consumerPplOpts = pplOpts.ThreadCount > 0
+                ? pplOpts
+                : new LlamaPerplexityOptions
+                {
+                    ContextSize            = pplOpts.ContextSize,
+                    ScoreSecondHalfOnly    = pplOpts.ScoreSecondHalfOnly,
+                    AddBeginningOfSequence = pplOpts.AddBeginningOfSequence,
+                    ThreadCount            = autoThreadsPerJob,
+                };
+
+            // All shared-state mutations (counter increments, dict +
+            // DB writes, progress reports) go through this lock. The
+            // Report callback may post to a SynchronizationContext but
+            // is itself fast, so holding the lock briefly is fine.
+            var sharedLock = new object();
+
+            var producerTask = Task.Run(async () =>
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var batch = pendingSpecs.Skip(batchStart).Take(batchSize).ToList();
-                var batchPaths = new List<(AblationSpec Spec, string Path)>();
-
-                foreach (var s in batch)
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var slug = $"{Slugify(s.Target)}_{s.Type}";
-                    var outPath = Path.Combine(workDir, $"{slug}.gguf");
-                    ReportCell(s, CellState.Quantizing);
-                    var recipe = BuildAblationRecipe(weightTensors, s);
-                    await QuantizeAsync(sourceModelPath, outPath,
-                        ftype: LlamaFileType.Q4_K_M,
-                        imatrixPath: opts.ImatrixPath,
-                        recipe: recipe,
-                        cancellationToken).ConfigureAwait(false);
-                    batchPaths.Add((s, outPath));
-                    ReportCell(s, CellState.Scoring);
-                    completed++;
-                }
-
-                var batchJobs = batchPaths.Select((bp, idx) =>
-                    new LlamaPerplexity.PerplexityJob(
-                        ModelPath: bp.Path, Corpus: corpusText, Options: pplOpts,
-                        // Tag carries the batch index — splitting on '|'
-                        // breaks for tensor:blk.0.attn_q.weight (target
-                        // contains dots), so we look up by index instead.
-                        Tag: idx.ToString())).ToList();
-
-                await foreach (var jr in LlamaPerplexity.RunParallelAsync(
-                    batchJobs, maxConcurrent: 0, cancellationToken: cancellationToken))
-                {
-                    scored++;
-                    if (jr.Tag is string tag && int.TryParse(tag, out var idx))
+                    foreach (var s in pendingSpecs)
                     {
-                        var (spec, path) = batchPaths[idx];
-                        var ablation = jr.Result.Perplexity;
-                        ablationPpl[(spec.Target, spec.Type)] = ablation;
-                        db.RecordMeasurement(BuildMeasurementRecord(
-                            modelSha, architectureId, paramCount, corpusSha, corpusName,
-                            imatrixSha, pplOpts.ContextSize,
-                            target:        spec.Target,
-                            ablationType:  spec.Type,
-                            baselineType:  LlamaTensorType.F16,
-                            baselinePpl:   baseline,
-                            ablationPpl:   ablation,
-                            deltaPpl:      ablation - baseline,
-                            gpuModel:      opts.GpuModel));
-                        progress?.Report(new Progress(
-                            Stage.Scoring, scored, totalJobs,
-                            CurrentLabel: $"{spec.Target} @ {spec.Type} = {ablation:F4}",
-                            CellTarget:   spec.Target,
-                            CellType:     spec.Type,
-                            CellState:    CellState.Done,
-                            CellDelta:    ablation - baseline,
-                            Fraction:     Fraction()));
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var slug = $"{Slugify(s.Target)}_{s.Type}";
+                        var outPath = Path.Combine(workDir, $"{slug}.gguf");
+                        ReportCell(s, CellState.Quantizing);
+                        var recipe = BuildAblationRecipe(weightTensors, s);
+                        await QuantizeAsync(sourceModelPath, outPath,
+                            ftype: LlamaFileType.Q4_K_M,
+                            imatrixPath: opts.ImatrixPath,
+                            recipe: recipe,
+                            cancellationToken).ConfigureAwait(false);
+                        lock (sharedLock) { completed++; }
+                        ReportCell(s, CellState.Scoring);
+                        await channel.Writer.WriteAsync((s, outPath), cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    channel.Writer.TryComplete();
+                }
+            }, cancellationToken);
+
+            async Task ConsumerLoopAsync()
+            {
+                await foreach (var (spec, path) in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    try
+                    {
+                        var modelOpts = new LlamaModelParameters { UseMmap = true, GpuLayerCount = -1 };
+                        using var model = new LlamaModel(path, modelOpts);
+                        var result = await LlamaPerplexity.ComputeAsync(
+                            model, corpusText, consumerPplOpts,
+                            progress: null, cancellationToken).ConfigureAwait(false);
+                        var ablation = result.Perplexity;
+
+                        lock (sharedLock)
+                        {
+                            ablationPpl[(spec.Target, spec.Type)] = ablation;
+                            db.RecordMeasurement(BuildMeasurementRecord(
+                                modelSha, architectureId, paramCount, corpusSha, corpusName,
+                                imatrixSha, pplOpts.ContextSize,
+                                target:        spec.Target,
+                                ablationType:  spec.Type,
+                                baselineType:  LlamaTensorType.F16,
+                                baselinePpl:   baseline,
+                                ablationPpl:   ablation,
+                                deltaPpl:      ablation - baseline,
+                                gpuModel:      opts.GpuModel));
+                            scored++;
+                            progress?.Report(new Progress(
+                                Stage.Scoring, scored, totalJobs,
+                                CurrentLabel: $"{spec.Target} @ {spec.Type} = {ablation:F4}",
+                                CellTarget:   spec.Target,
+                                CellType:     spec.Type,
+                                CellState:    CellState.Done,
+                                CellDelta:    ablation - baseline,
+                                Fraction:     Fraction()));
+                        }
+                    }
+                    finally
+                    {
                         try { File.Delete(path); } catch { /* best-effort */ }
                     }
                 }
             }
+
+            var consumerTasks = Enumerable.Range(0, pplConcurrency)
+                .Select(_ => Task.Run(ConsumerLoopAsync, cancellationToken))
+                .ToArray();
+
+            // Await producer first so any quantize/cancellation exception
+            // surfaces here; consumers will then drain whatever's already
+            // in the channel before exiting via the completion signal.
+            try
+            {
+                await producerTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // Producer faulted (cancellation, quantize error, …).
+                // Complete the channel so consumers wake up, then await
+                // them swallowing any secondary failures — the producer
+                // exception is the root cause we want to surface.
+                channel.Writer.TryComplete();
+                try { await Task.WhenAll(consumerTasks).ConfigureAwait(false); }
+                catch { /* consumer faults are downstream of the producer fault */ }
+                throw;
+            }
+            await Task.WhenAll(consumerTasks).ConfigureAwait(false);
 
             progress?.Report(new Progress(Stage.Done, scored, totalJobs, Fraction: 1.0));
             return new CampaignResults(baseline, ablationPpl);
