@@ -42,6 +42,24 @@ public sealed record LlamaSensitivityCategoryCoefficient(
     string? Notes = null);
 
 /// <summary>
+/// Per-tensor quantization sensitivity coefficient — same shape as
+/// <see cref="LlamaSensitivityCategoryCoefficient"/> but keyed on a
+/// specific tensor name (e.g. <c>blk.13.attn_v.weight</c>) rather than
+/// a category pattern. Populated by per-layer ablation campaigns.
+/// </summary>
+/// <remarks>
+/// Per-tensor data is strictly more informative than per-category data
+/// for the named tensor: it captures layer-specific sensitivity that
+/// the category average smooths over. The recipe builder consumes
+/// per-tensor coefficients (when present) to choose different types
+/// for different tensors within the same category — opt-in via
+/// <see cref="LlamaQuantRecipeFromProfileOptions.UsePerTensorData"/>.
+/// </remarks>
+public sealed record LlamaSensitivityTensorCoefficient(
+    Dictionary<LlamaTensorType, double> DeltaPplByType,
+    string? Notes = null);
+
+/// <summary>
 /// Per-architecture quantization sensitivity profile. Captures how each
 /// tensor category responds to being quantized at various bit-widths,
 /// measured against an F16 baseline on a calibration corpus.
@@ -60,6 +78,14 @@ public sealed record LlamaSensitivityCategoryCoefficient(
 /// <see cref="LlamaSensitivityProvenance.Method"/> to <c>"hand-authored"</c>
 /// and filling in coefficients without running the ablation campaign.
 /// </para>
+/// <para>
+/// <see cref="PerTensor"/> is an optional extension carrying per-layer
+/// ablation data when available (built via
+/// <see cref="LlamaSensitivityProfileBuilder.BuildPerLayerAsync"/>).
+/// Adding it doesn't change the schema version — older readers just
+/// ignore the extra field; the recipe builder gates per-tensor refinement
+/// on opt-in.
+/// </para>
 /// </remarks>
 public sealed record LlamaSensitivityProfile(
     int SchemaVersion,
@@ -69,7 +95,8 @@ public sealed record LlamaSensitivityProfile(
     LlamaSensitivityProvenance Provenance,
     double F16BaselinePerplexity,
     int BaselineContextSize,
-    Dictionary<string, LlamaSensitivityCategoryCoefficient> Categories)
+    Dictionary<string, LlamaSensitivityCategoryCoefficient> Categories,
+    Dictionary<string, LlamaSensitivityTensorCoefficient>? PerTensor = null)
 {
     /// <summary>Current schema version. Bump on incompatible changes.</summary>
     public const int CurrentSchemaVersion = 1;
@@ -117,4 +144,227 @@ public sealed record LlamaSensitivityProfile(
         Categories
             .OrderByDescending(kv => kv.Value.DeltaPplByType.GetValueOrDefault(LlamaTensorType.Q4_K, 0.0))
             .Select(kv => kv.Key);
+
+    // ---------------------------------------------------------------- //
+    // DB derivation                                                    //
+    // ---------------------------------------------------------------- //
+
+    /// <summary>
+    /// Assemble a profile snapshot from <see cref="LlamaInvestigationDb"/>
+    /// rows matching the given identity. Returns null when the DB has
+    /// no baseline measurement for this signature — without a baseline
+    /// the deltas can't be anchored.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Resolution rules:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>Latest baseline (by <c>measured_at_utc</c>) wins — handles
+    ///     the case where the user re-measures after a llama.cpp update.</item>
+    ///   <item>For each (target, type) cell with multiple samples, the
+    ///     latest is used. To estimate variance across repeats, query the
+    ///     DB directly via <see cref="LlamaInvestigationDb.Query"/>.</item>
+    ///   <item><c>category:</c> rows populate <see cref="Categories"/>;
+    ///     <c>tensor:</c> rows populate <see cref="PerTensor"/> when
+    ///     <paramref name="includePerTensor"/> is true.</item>
+    ///   <item>Computed knees: each category's <see cref="LlamaSensitivityCategoryCoefficient.RecommendedFloor"/>
+    ///     is set the same way the live builder sets it
+    ///     (<paramref name="kneeDeltaPplThreshold"/>).</item>
+    /// </list>
+    /// </remarks>
+    public static LlamaSensitivityProfile? DeriveFromDb(
+        LlamaInvestigationDb db,
+        string modelSha,
+        string corpusSha,
+        string imatrixSha,
+        int contextSize,
+        string archId,
+        long paramCount,
+        int layerCount,
+        bool includePerTensor = true,
+        double kneeDeltaPplThreshold = 5.0,
+        string? sourceModelDisplayName = null,
+        string? corpusDisplayName = null)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+
+        var rows = db.Query(new LlamaMeasurementFilter
+        {
+            ModelSha    = modelSha,
+            CorpusSha   = corpusSha,
+            ImatrixSha  = imatrixSha,
+            ContextSize = contextSize,
+        }).ToList();
+
+        // Latest baseline wins. Query() returns DESC by date, so the
+        // first match is the freshest.
+        double? baseline = null;
+        DateTime? baselineAt = null;
+        foreach (var r in rows)
+        {
+            if (r.AblationTarget != LlamaSensitivityProfileBuilder.BaselineTarget) continue;
+            baseline = r.AblationPpl;
+            baselineAt = r.MeasuredAtUtc;
+            break;
+        }
+        if (baseline is not double baselinePpl) return null;
+
+        // Per-category: keep the freshest sample per (cat, type).
+        var perCategoryDeltas = new Dictionary<string, Dictionary<LlamaTensorType, double>>(StringComparer.Ordinal);
+        // Per-tensor: same, keyed by full tensor name.
+        var perTensorDeltas = new Dictionary<string, Dictionary<LlamaTensorType, double>>(StringComparer.Ordinal);
+        var seenCategoryCells = new HashSet<(string Cat, LlamaTensorType T)>();
+        var seenTensorCells = new HashSet<(string Tensor, LlamaTensorType T)>();
+
+        foreach (var r in rows)
+        {
+            if (r.AblationTarget == LlamaSensitivityProfileBuilder.BaselineTarget) continue;
+            if (r.AblationTarget.StartsWith("category:", StringComparison.Ordinal))
+            {
+                var cat = r.AblationTarget["category:".Length..];
+                if (!seenCategoryCells.Add((cat, r.AblationType))) continue;    // already kept fresher
+                if (!perCategoryDeltas.TryGetValue(cat, out var dict))
+                    perCategoryDeltas[cat] = dict = new Dictionary<LlamaTensorType, double>();
+                dict[r.AblationType] = r.AblationPpl - baselinePpl;
+            }
+            else if (includePerTensor && r.AblationTarget.StartsWith("tensor:", StringComparison.Ordinal))
+            {
+                var tensorName = r.AblationTarget["tensor:".Length..];
+                if (!seenTensorCells.Add((tensorName, r.AblationType))) continue;
+                if (!perTensorDeltas.TryGetValue(tensorName, out var dict))
+                    perTensorDeltas[tensorName] = dict = new Dictionary<LlamaTensorType, double>();
+                dict[r.AblationType] = r.AblationPpl - baselinePpl;
+            }
+        }
+
+        if (perCategoryDeltas.Count == 0)
+        {
+            // Baseline only, no ablations — meaningless profile. Caller
+            // should check for null and prompt the user to run a campaign.
+            return null;
+        }
+
+        var categories = new Dictionary<string, LlamaSensitivityCategoryCoefficient>(StringComparer.Ordinal);
+        foreach (var (cat, deltas) in perCategoryDeltas)
+        {
+            // Floor: smallest type in measured set whose delta ≤ threshold.
+            LlamaTensorType? floor = null;
+            foreach (var kv in deltas.OrderBy(kv => GetBitsPerElement(kv.Key)))
+            {
+                if (kv.Value <= kneeDeltaPplThreshold)
+                {
+                    floor = kv.Key;
+                    break;
+                }
+            }
+            categories[cat] = new LlamaSensitivityCategoryCoefficient(deltas, floor);
+        }
+
+        Dictionary<string, LlamaSensitivityTensorCoefficient>? perTensor = null;
+        if (includePerTensor && perTensorDeltas.Count > 0)
+        {
+            perTensor = new Dictionary<string, LlamaSensitivityTensorCoefficient>(StringComparer.Ordinal);
+            foreach (var (tensor, deltas) in perTensorDeltas)
+                perTensor[tensor] = new LlamaSensitivityTensorCoefficient(deltas);
+        }
+
+        var provenance = new LlamaSensitivityProvenance(
+            Method:               "ablation",
+            SourceModel:          sourceModelDisplayName,
+            SourceParameterCount: paramCount,
+            Corpus:               corpusDisplayName,
+            BuiltAtUtc:           baselineAt,
+            BuilderVersion:       "DeriveFromDb");
+
+        return new LlamaSensitivityProfile(
+            SchemaVersion:         CurrentSchemaVersion,
+            ArchitectureId:        archId,
+            LayerCount:            layerCount,
+            FamilyNotes:           null,
+            Provenance:            provenance,
+            F16BaselinePerplexity: baselinePpl,
+            BaselineContextSize:   contextSize,
+            Categories:            categories,
+            PerTensor:             perTensor);
+    }
+
+    /// <summary>
+    /// Report which (category, type) cells the profile actually covers
+    /// vs which are missing. Drives the "incomplete profile" warning in
+    /// the apply UI and the "what's left to measure" calculation in
+    /// the builder UI.
+    /// </summary>
+    /// <param name="expectedCategories">Categories the caller expected to find.</param>
+    /// <param name="expectedTypes">Candidate types the caller expected to find.</param>
+    public LlamaSensitivityProfileCompleteness ComputeCompleteness(
+        IReadOnlyList<string> expectedCategories,
+        IReadOnlyList<LlamaTensorType> expectedTypes)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCategories);
+        ArgumentNullException.ThrowIfNull(expectedTypes);
+
+        var missingCells = new List<(string Category, LlamaTensorType Type)>();
+        int totalCells = expectedCategories.Count * expectedTypes.Count;
+        int measuredCells = 0;
+        foreach (var cat in expectedCategories)
+        {
+            Categories.TryGetValue(cat, out var coef);
+            foreach (var type in expectedTypes)
+            {
+                if (coef is not null && coef.DeltaPplByType.ContainsKey(type)) measuredCells++;
+                else missingCells.Add((cat, type));
+            }
+        }
+
+        int? totalTensorCells = null;
+        int? measuredTensorCells = null;
+        if (PerTensor is not null)
+        {
+            totalTensorCells = PerTensor.Count * expectedTypes.Count;
+            measuredTensorCells = PerTensor.Sum(kv =>
+                expectedTypes.Count(t => kv.Value.DeltaPplByType.ContainsKey(t)));
+        }
+
+        return new LlamaSensitivityProfileCompleteness(
+            TotalCategoryCells:    totalCells,
+            MeasuredCategoryCells: measuredCells,
+            MissingCategoryCells:  missingCells,
+            TotalTensorCells:      totalTensorCells,
+            MeasuredTensorCells:   measuredTensorCells);
+    }
+
+    private static double GetBitsPerElement(LlamaTensorType t) => t switch
+    {
+        LlamaTensorType.F32     => 32.0,
+        LlamaTensorType.F16     => 16.0,
+        LlamaTensorType.BF16    => 16.0,
+        LlamaTensorType.Q8_0    => 8.5,
+        LlamaTensorType.Q6_K    => 6.5625,
+        LlamaTensorType.Q5_K    => 5.5,
+        LlamaTensorType.Q4_K    => 4.5,
+        LlamaTensorType.IQ4_XS  => 4.25,
+        LlamaTensorType.Q3_K    => 3.4375,
+        LlamaTensorType.IQ3_S   => 3.4375,
+        LlamaTensorType.Q2_K    => 2.625,
+        LlamaTensorType.IQ2_S   => 2.5,
+        _                       => 8.0,
+    };
+}
+
+/// <summary>
+/// "How many of the expected (category × type) and (tensor × type)
+/// cells are measured?" Counts drive the apply-time rail that warns
+/// when a profile is partial.
+/// </summary>
+public sealed record LlamaSensitivityProfileCompleteness(
+    int TotalCategoryCells,
+    int MeasuredCategoryCells,
+    IReadOnlyList<(string Category, LlamaTensorType Type)> MissingCategoryCells,
+    int? TotalTensorCells,
+    int? MeasuredTensorCells)
+{
+    public bool IsComplete => MeasuredCategoryCells == TotalCategoryCells;
+    public double FractionMeasured =>
+        TotalCategoryCells == 0 ? 1.0 : (double)MeasuredCategoryCells / TotalCategoryCells;
 }
