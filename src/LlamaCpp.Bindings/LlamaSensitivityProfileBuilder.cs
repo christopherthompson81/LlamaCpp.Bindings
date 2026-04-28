@@ -90,19 +90,64 @@ public static class LlamaSensitivityProfileBuilder
         public string? GpuModel { get; set; }
     }
 
-    /// <summary>Progress event raised as the campaign advances.</summary>
+    /// <summary>
+    /// Progress event raised as the campaign advances. Carries both
+    /// global-counter info (for an overall progress bar) and optional
+    /// cell-level info (for the per-cell progress grid in the UI).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Cell-level fields are populated whenever an individual ablation
+    /// cell transitions state (Quantizing → Scoring → Done). Listeners
+    /// that don't care about per-cell granularity can ignore them and
+    /// just track <see cref="CompletedJobs"/> / <see cref="TotalJobs"/>.
+    /// </para>
+    /// <para>
+    /// The "Plan" event is fired exactly once at the start of each
+    /// campaign carrying the full target list — UIs use it to allocate
+    /// the progress grid rows once and avoid reshapes thereafter.
+    /// </para>
+    /// </remarks>
     public sealed record Progress(
         Stage Stage,
         int CompletedJobs,
         int TotalJobs,
-        string? CurrentLabel = null);
+        string? CurrentLabel = null,
+        /// <summary>Ablation target (e.g. "category:ffn_up", "tensor:blk.13.attn_v.weight"). Null for non-cell events.</summary>
+        string? CellTarget = null,
+        /// <summary>Candidate type for the cell. Null for non-cell events.</summary>
+        LlamaTensorType? CellType = null,
+        /// <summary>Per-cell state transition. Null for non-cell events.</summary>
+        CellState? CellState = null,
+        /// <summary>Measured ΔPPL when <see cref="CellState"/> is Done.</summary>
+        double? CellDelta = null,
+        /// <summary>For <see cref="Stage.Plan"/>: the complete list of (target, type) cells the campaign will run, in deterministic order.</summary>
+        IReadOnlyList<(string Target, LlamaTensorType Type)>? Plan = null);
 
     /// <summary>Coarse phases of the campaign for progress reporting.</summary>
     public enum Stage
     {
+        /// <summary>Initial event listing every cell the campaign will run. Fired once.</summary>
+        Plan,
         Quantizing,
         Scoring,
         Done,
+    }
+
+    /// <summary>
+    /// Per-cell lifecycle state. Drives the progress-grid cell glyphs in
+    /// the UI: <c>Pending</c> → <c>Quantizing</c> → <c>Scoring</c> →
+    /// <c>Done</c> (with delta), or <c>Resumed</c> when a cell was
+    /// already in the DB at campaign start.
+    /// </summary>
+    public enum CellState
+    {
+        Pending,
+        Resumed,
+        Quantizing,
+        Scoring,
+        Done,
+        Errored,
     }
 
     /// <summary>Sentinel <see cref="LlamaMeasurementRecord.AblationTarget"/> for the F16 baseline measurement.</summary>
@@ -346,8 +391,28 @@ public static class LlamaSensitivityProfileBuilder
             int totalJobs = 1 + specs.Count;
             int completed = 0;
 
+            // Plan event: tells the UI exactly which (target, type)
+            // cells to allocate in the progress grid. Fired once,
+            // before any work — UI uses this to pre-build the grid
+            // shape so cell updates don't reshape the layout.
+            var planCells = specs.Select(s => (s.Target, s.Type)).ToList();
+            progress?.Report(new Progress(
+                Stage.Plan, 0, totalJobs,
+                CurrentLabel: $"{planCells.Count} ablation cells planned",
+                Plan: planCells));
+
             void ReportQuant(string label) =>
                 progress?.Report(new Progress(Stage.Quantizing, completed, totalJobs, label));
+
+            void ReportCell(AblationSpec spec, CellState state, double? delta = null) =>
+                progress?.Report(new Progress(
+                    state == CellState.Quantizing ? Stage.Quantizing : Stage.Scoring,
+                    completed, totalJobs,
+                    CurrentLabel: $"{spec.Target} @ {spec.Type}",
+                    CellTarget: spec.Target,
+                    CellType:   spec.Type,
+                    CellState:  state,
+                    CellDelta:  delta));
 
             // ---- Resume from DB ----
             // Pull every existing measurement that matches this campaign
@@ -424,6 +489,20 @@ public static class LlamaSensitivityProfileBuilder
             }
 
             // ---- Ablation specs, batched ----
+            // Emit Resumed events for cells that came from the DB so the
+            // grid UI shows them as already-done at startup.
+            foreach (var s in specs)
+            {
+                if (ablationPpl.TryGetValue((s.Target, s.Type), out var ppl))
+                    progress?.Report(new Progress(
+                        Stage.Scoring, completed, totalJobs,
+                        CurrentLabel: $"{s.Target} @ {s.Type} (resumed)",
+                        CellTarget:   s.Target,
+                        CellType:     s.Type,
+                        CellState:    CellState.Resumed,
+                        CellDelta:    ppl - baseline));
+            }
+
             var pendingSpecs = specs
                 .Where(s => !ablationPpl.ContainsKey((s.Target, s.Type)))
                 .ToList();
@@ -440,7 +519,7 @@ public static class LlamaSensitivityProfileBuilder
                     cancellationToken.ThrowIfCancellationRequested();
                     var slug = $"{Slugify(s.Target)}_{s.Type}";
                     var outPath = Path.Combine(workDir, $"{slug}.gguf");
-                    ReportQuant($"{s.Target} @ {s.Type}");
+                    ReportCell(s, CellState.Quantizing);
                     var recipe = BuildAblationRecipe(weightTensors, s);
                     await QuantizeAsync(sourceModelPath, outPath,
                         ftype: LlamaFileType.Q4_K_M,
@@ -448,6 +527,7 @@ public static class LlamaSensitivityProfileBuilder
                         recipe: recipe,
                         cancellationToken).ConfigureAwait(false);
                     batchPaths.Add((s, outPath));
+                    ReportCell(s, CellState.Scoring);
                     completed++;
                 }
 
@@ -478,8 +558,13 @@ public static class LlamaSensitivityProfileBuilder
                             ablationPpl:   ablation,
                             deltaPpl:      ablation - baseline,
                             gpuModel:      opts.GpuModel));
-                        progress?.Report(new Progress(Stage.Scoring, scored, totalJobs,
-                            CurrentLabel: $"{spec.Target} @ {spec.Type} = {ablation:F4}"));
+                        progress?.Report(new Progress(
+                            Stage.Scoring, scored, totalJobs,
+                            CurrentLabel: $"{spec.Target} @ {spec.Type} = {ablation:F4}",
+                            CellTarget:   spec.Target,
+                            CellType:     spec.Type,
+                            CellState:    CellState.Done,
+                            CellDelta:    ablation - baseline));
                         try { File.Delete(path); } catch { /* best-effort */ }
                     }
                 }

@@ -262,6 +262,94 @@
                             Command="{Binding CancelCommand}"
                             IsEnabled="{Binding IsRunning}" />
                 </StackPanel>
+
+                <!-- Progress grid: rows = ablation targets, cols = candidate types.
+                     Shape is allocated once per campaign (Plan event); per-cell
+                     state updates flow through observable cell properties so the
+                     layout doesn't reshape on each tick. Each cell is fixed-width
+                     (60 px) so resize is window-driven, not data-driven. -->
+                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="10"
+                        IsVisible="{Binding ProgressRows.Count}">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Top"
+                                   Text="Progress grid"
+                                   FontWeight="SemiBold" FontSize="11" Opacity="0.7"
+                                   Margin="0,0,0,6" />
+                        <!-- Column header row -->
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="" Width="240" />
+                            <ItemsControl ItemsSource="{Binding ProgressColumnHeaders}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="x:String">
+                                        <TextBlock Text="{Binding}"
+                                                   Width="60"
+                                                   TextAlignment="Center"
+                                                   FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                   FontSize="10"
+                                                   FontWeight="SemiBold"
+                                                   Opacity="0.7" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                        <!-- Body: scrollable rows -->
+                        <ScrollViewer MaxHeight="320" HorizontalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding ProgressRows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="vm:ProfileBuilderViewModel+ProgressRow">
+                                        <StackPanel Orientation="Horizontal" Margin="0,1">
+                                            <TextBlock Text="{Binding Label}"
+                                                       Width="240"
+                                                       FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                       FontSize="11"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <ItemsControl ItemsSource="{Binding Cells}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Horizontal" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate DataType="vm:ProfileBuilderViewModel+ProgressCell">
+                                                        <Border Width="58" Height="22" Margin="1,0"
+                                                                BorderThickness="1"
+                                                                BorderBrush="{DynamicResource SystemBaseLowColor}"
+                                                                CornerRadius="2"
+                                                                Background="{DynamicResource SystemAltLowColor}">
+                                                            <StackPanel Orientation="Horizontal" Spacing="3"
+                                                                        HorizontalAlignment="Center"
+                                                                        VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Glyph}"
+                                                                           FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                                           FontSize="11"
+                                                                           VerticalAlignment="Center" />
+                                                                <TextBlock Text="{Binding DeltaText}"
+                                                                           FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                                                           FontSize="10"
+                                                                           Opacity="0.7"
+                                                                           VerticalAlignment="Center"
+                                                                           IsVisible="{Binding IsDone}" />
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

@@ -141,6 +141,22 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     [ObservableProperty]
     private string _progressLabel = string.Empty;
 
+    /// <summary>
+    /// Column headers for the progress grid (candidate-type names in
+    /// ladder order). Populated from the campaign's Plan event so the
+    /// grid shape stays stable across cell updates.
+    /// </summary>
+    public ObservableCollection<string> ProgressColumnHeaders { get; } = new();
+
+    /// <summary>
+    /// Rows of the progress grid. Each row covers one ablation target
+    /// (a category or a tensor); cells are indexed by candidate type
+    /// in <see cref="ProgressColumnHeaders"/> order. Allocated once
+    /// from the Plan event; cell state updates flow through the row's
+    /// observable cells without reshaping the grid.
+    /// </summary>
+    public ObservableCollection<ProgressRow> ProgressRows { get; } = new();
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle))]
     private bool _isRunning;
@@ -278,6 +294,21 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
                     ProgressFraction = (double)p.CompletedJobs / p.TotalJobs;
                 ProgressLabel = $"{p.CompletedJobs}/{p.TotalJobs}" +
                     (string.IsNullOrEmpty(p.CurrentLabel) ? "" : $"  ·  {p.CurrentLabel}");
+
+                // Plan event: build the grid shape once, before any cell updates.
+                if (p.Stage == LlamaSensitivityProfileBuilder.Stage.Plan && p.Plan is { } plan)
+                {
+                    AllocateProgressGrid(plan);
+                    return;
+                }
+
+                // Per-cell update: locate the cell in the existing grid
+                // and update only its state/delta. The grid shape is
+                // unchanged.
+                if (p.CellTarget is { } target && p.CellType is { } type && p.CellState is { } state)
+                {
+                    UpdateProgressCell(target, type, state, p.CellDelta);
+                }
             });
 
             if (Mode == CampaignMode.PerCategory)
@@ -415,6 +446,83 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
               tensorName.EndsWith("." + category, StringComparison.Ordinal)
             : tensorName.Contains(category, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Build the progress grid shape from the campaign's Plan event:
+    /// one row per distinct target, one column per distinct candidate
+    /// type. Allocated once; subsequent cell updates only touch
+    /// observable cell properties so the layout never reshapes.
+    /// </summary>
+    private void AllocateProgressGrid(IReadOnlyList<(string Target, LlamaTensorType Type)> plan)
+    {
+        ProgressColumnHeaders.Clear();
+        ProgressRows.Clear();
+
+        var distinctTypes = plan.Select(p => p.Type).Distinct().OrderBy(t => t).ToList();
+        foreach (var t in distinctTypes)
+            ProgressColumnHeaders.Add(t.ToString());
+
+        var rowsByTarget = new Dictionary<string, ProgressRow>(StringComparer.Ordinal);
+        var typeIndex = distinctTypes
+            .Select((t, i) => (t, i))
+            .ToDictionary(x => x.t, x => x.i);
+
+        foreach (var (target, _) in plan)
+        {
+            if (!rowsByTarget.TryGetValue(target, out var row))
+            {
+                row = new ProgressRow(DisplayLabel(target), distinctTypes.Count);
+                rowsByTarget[target] = row;
+                ProgressRows.Add(row);
+            }
+        }
+
+        // Pre-fill cells with their type so the row's cell index lines
+        // up with ProgressColumnHeaders. Each cell starts Pending; the
+        // builder's Resumed events bring already-measured cells up to
+        // their state immediately.
+        foreach (var (target, type) in plan)
+        {
+            var row = rowsByTarget[target];
+            var idx = typeIndex[type];
+            if (row.Cells[idx] is null)
+                row.Cells[idx] = new ProgressCell(type) { Owner = this };
+        }
+    }
+
+    /// <summary>
+    /// Find the named cell in the grid and update its state + delta.
+    /// No-op if the cell isn't in the grid (e.g. an update arrives
+    /// before the Plan event, which shouldn't happen but is harmless).
+    /// </summary>
+    private void UpdateProgressCell(string target, LlamaTensorType type, LlamaSensitivityProfileBuilder.CellState state, double? delta)
+    {
+        var label = DisplayLabel(target);
+        var row = ProgressRows.FirstOrDefault(r => r.Label == label);
+        if (row is null) return;
+        var cell = row.Cells.FirstOrDefault(c => c is not null && c.Type == type);
+        if (cell is null) return;
+        cell.State = state;
+        if (delta is double d) cell.Delta = d;
+    }
+
+    /// <summary>
+    /// Compact display label for an ablation target. "category:ffn_up" → "ffn_up";
+    /// "tensor:blk.13.attn_v.weight" → "blk.13.attn_v" (trailing .weight is implied).
+    /// </summary>
+    private static string DisplayLabel(string target)
+    {
+        if (target.StartsWith("category:", StringComparison.Ordinal))
+            return target["category:".Length..];
+        if (target.StartsWith("tensor:", StringComparison.Ordinal))
+        {
+            var name = target["tensor:".Length..];
+            if (name.EndsWith(".weight", StringComparison.Ordinal))
+                name = name[..^".weight".Length];
+            return name;
+        }
+        return target;
+    }
+
     public override void ApplyActiveModel(string? path)
     {
         if (string.IsNullOrEmpty(SourceModelPath)
@@ -437,6 +545,66 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         NotifyRemediesChanged();
     }
     partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
+
+    /// <summary>
+    /// One row in the progress grid — covers a single ablation target
+    /// (a category or a tensor) across all candidate types. Cells are
+    /// indexed positionally to match <see cref="ProgressColumnHeaders"/>.
+    /// </summary>
+    public sealed class ProgressRow
+    {
+        public string Label { get; }
+        public ObservableCollection<ProgressCell?> Cells { get; }
+
+        public ProgressRow(string label, int cellCount)
+        {
+            Label = label;
+            Cells = new ObservableCollection<ProgressCell?>(new ProgressCell?[cellCount]);
+        }
+    }
+
+    /// <summary>
+    /// One cell in the progress grid. State + delta are observable so
+    /// per-cell updates flow through the existing layout — the grid
+    /// shape itself is fixed by <see cref="ProgressRow.Cells"/>'s
+    /// allocated capacity.
+    /// </summary>
+    public sealed partial class ProgressCell : ObservableObject
+    {
+        public LlamaTensorType Type { get; }
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(Glyph))]
+        [NotifyPropertyChangedFor(nameof(IsActive))]
+        [NotifyPropertyChangedFor(nameof(IsDone))]
+        private LlamaSensitivityProfileBuilder.CellState _state = LlamaSensitivityProfileBuilder.CellState.Pending;
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(DeltaText))]
+        private double? _delta;
+
+        internal ProfileBuilderViewModel? Owner { get; set; }
+
+        public ProgressCell(LlamaTensorType type) { Type = type; }
+
+        public string Glyph => State switch
+        {
+            LlamaSensitivityProfileBuilder.CellState.Pending     => "·",
+            LlamaSensitivityProfileBuilder.CellState.Resumed     => "✓",
+            LlamaSensitivityProfileBuilder.CellState.Quantizing  => "Q",
+            LlamaSensitivityProfileBuilder.CellState.Scoring     => "S",
+            LlamaSensitivityProfileBuilder.CellState.Done        => "✓",
+            LlamaSensitivityProfileBuilder.CellState.Errored     => "✗",
+            _                                                    => " ",
+        };
+
+        public bool IsActive => State is LlamaSensitivityProfileBuilder.CellState.Quantizing
+                                        or LlamaSensitivityProfileBuilder.CellState.Scoring;
+        public bool IsDone => State is LlamaSensitivityProfileBuilder.CellState.Done
+                                     or LlamaSensitivityProfileBuilder.CellState.Resumed;
+
+        public string DeltaText => Delta is double d ? d.ToString("F2") : "";
+    }
 
     /// <summary>One row in the categories checkbox list.</summary>
     public sealed partial class CategoryItem : ObservableObject
