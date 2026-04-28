@@ -751,6 +751,35 @@ public static class LlamaSensitivityProfileBuilder
     private static readonly string BuilderVersionString =
         $"LlamaSensitivityProfileBuilder/{typeof(LlamaSensitivityProfileBuilder).Assembly.GetName().Version}";
 
+    /// <summary>
+    /// Quantize <paramref name="source"/> to <paramref name="output"/> for
+    /// either the F16 baseline (no recipe) or an ablation cell (recipe
+    /// pinning one or more tensors to a candidate type, all others to F16).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why two paths.</b> The baseline (recipe == null) is a straight
+    /// ftype=MostlyF16 quantize — every tensor lands at F16, the top of
+    /// the ladder. <c>LlamaQuantizer</c>'s legacy override-only-elevates
+    /// rule is vacuous here (no demotions to drop), so we use the
+    /// straightforward path.
+    /// </para>
+    /// <para>
+    /// The ablation path (recipe != null) <em>must</em> use
+    /// <see cref="LlamaCustomQuantizer"/>. Run 14 documented that
+    /// <see cref="LlamaQuantizer.QuantizeAsync"/> with
+    /// <c>TensorTypeOverrides</c> silently drops a per-tensor override
+    /// that would demote a tensor below the ftype heuristic's pick. The
+    /// concrete consequence for ablation campaigns: stock Q4_K_M's
+    /// <c>use_more_bits</c> heuristic puts <c>ffn_down</c> on certain
+    /// layers at Q6_K. An ablation requesting Q4_K for one of those
+    /// tensors would be silently kept at Q6_K — and the resulting GGUF
+    /// would be bit-identical to the Q6_K ablation, producing identical
+    /// PPL and bogus per-tensor data. The custom quantizer applies the
+    /// recipe verbatim, so demotions are honored and per-tensor cells
+    /// produce distinct files at distinct types.
+    /// </para>
+    /// </remarks>
     private static Task QuantizeAsync(
         string source, string output,
         LlamaFileType ftype,
@@ -758,17 +787,28 @@ public static class LlamaSensitivityProfileBuilder
         LlamaQuantRecipe? recipe,
         CancellationToken ct)
     {
+        if (recipe is not null)
+        {
+            var customOpts = new LlamaCustomQuantizerOptions
+            {
+                ImatrixPath = imatrixPath,
+                // Heuristic skip list on: norms, expert-gate inputs, and
+                // positional embeddings pass through at source type
+                // unconditionally — same behavior as the legacy path's
+                // tensor_allows_quantization filter, just on the custom
+                // realizer.
+                ApplyHeuristicSkipList = true,
+            };
+            return LlamaCustomQuantizer.QuantizeWithRecipeAsync(
+                source, output, recipe, customOpts, progress: null, ct);
+        }
+
         var p = new LlamaQuantizationParameters
         {
             FileType        = ftype,
             ImatrixPath     = imatrixPath,
             AllowRequantize = true,
         };
-        if (recipe is not null)
-        {
-            p.Pure = false;
-            p.TensorTypeOverrides = recipe.ToTtOverrides();
-        }
         return LlamaQuantizer.QuantizeAsync(source, output, p, ct);
     }
 }
