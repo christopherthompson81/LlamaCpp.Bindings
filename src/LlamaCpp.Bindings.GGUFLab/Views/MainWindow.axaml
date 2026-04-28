@@ -22,6 +22,9 @@
         <DataTemplate x:Key="AdaptiveQuantizeTemplate" DataType="vm:AdaptiveQuantizeViewModel">
             <v:AdaptiveQuantizeView />
         </DataTemplate>
+        <DataTemplate x:Key="ProfileBuilderTemplate" DataType="vm:ProfileBuilderViewModel">
+            <v:ProfileBuilderView />
+        </DataTemplate>
         <DataTemplate x:Key="PerplexityTemplate" DataType="vm:PerplexityViewModel">
             <v:PerplexityView />
         </DataTemplate>

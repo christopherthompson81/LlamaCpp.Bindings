@@ -1,0 +1,193 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:LlamaCpp.Bindings.GGUFLab.ViewModels"
+             xmlns:v="using:LlamaCpp.Bindings.GGUFLab.Views"
+             x:Class="LlamaCpp.Bindings.GGUFLab.Views.ProfileBuilderView"
+             x:DataType="vm:ProfileBuilderViewModel">
+
+    <DockPanel Margin="24,18">
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,18">
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Description}" Opacity="0.65" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Footer: progress + status + log -->
+        <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto,Auto,Auto,160" Margin="0,12,0,0">
+            <Grid Grid.Row="0" ColumnDefinitions="120,*" ColumnSpacing="10" Margin="0,0,0,4"
+                  IsVisible="{Binding IsRunning}">
+                <TextBlock Grid.Column="0" Text="Stage" Opacity="0.6" FontSize="11" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding StageText}"
+                           FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                           FontSize="11" />
+            </Grid>
+            <ProgressBar Grid.Row="1"
+                         Minimum="0" Maximum="1"
+                         Value="{Binding ProgressFraction}"
+                         IsVisible="{Binding IsRunning}"
+                         Height="4"
+                         Margin="0,0,0,6" />
+            <TextBlock Grid.Row="2"
+                       Text="{Binding ProgressLabel}"
+                       FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                       FontSize="11"
+                       Opacity="0.65"
+                       Margin="0,0,0,4"
+                       TextTrimming="CharacterEllipsis"
+                       IsVisible="{Binding IsRunning}" />
+            <TextBlock Grid.Row="3"
+                       Text="{Binding StatusLine}"
+                       Margin="0,0,0,6"
+                       Opacity="0.85"
+                       TextWrapping="Wrap" />
+            <Border Grid.Row="4"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Background="{DynamicResource SystemAltLowColor}">
+                <ScrollViewer>
+                    <SelectableTextBlock Text="{Binding LogText}"
+                                         FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                         FontSize="12"
+                                         Padding="10,8"
+                                         TextWrapping="NoWrap" />
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- Form -->
+        <ScrollViewer>
+            <StackPanel Spacing="14" MaxWidth="900" HorizontalAlignment="Stretch">
+
+                <!-- File pickers -->
+                <Grid ColumnDefinitions="140,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="10">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Source GGUF" VerticalAlignment="Top" Margin="0,6,0,0" />
+                    <StackPanel Grid.Row="0" Grid.Column="1" Spacing="0">
+                        <TextBox Text="{Binding SourceModelPath}"
+                                 PlaceholderText="F16 .gguf — the campaign quantizes to it as the baseline" />
+                        <v:RemedyCard />
+                    </StackPanel>
+                    <Button   Grid.Row="0" Grid.Column="2" Content="Browse…"
+                              VerticalAlignment="Top"
+                              Click="OnBrowseSource" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Corpus" VerticalAlignment="Top" Margin="0,6,0,0" />
+                    <TextBox  Grid.Row="1" Grid.Column="1" Text="{Binding CorpusPath}"
+                              PlaceholderText="Calibration text (e.g. wiki.test.raw)" />
+                    <Button   Grid.Row="1" Grid.Column="2" Content="Browse…"
+                              VerticalAlignment="Top"
+                              Click="OnBrowseCorpus" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Imatrix" VerticalAlignment="Top" Margin="0,6,0,0" />
+                    <StackPanel Grid.Row="2" Grid.Column="1" Spacing="0">
+                        <TextBox Text="{Binding ImatrixPath}"
+                                 PlaceholderText="(optional) imatrix .gguf — recommended for production-realistic profiles" />
+                        <v:BuildImatrixRemedyCard />
+                    </StackPanel>
+                    <Button   Grid.Row="2" Grid.Column="2" Content="Browse…"
+                              VerticalAlignment="Top"
+                              Click="OnBrowseImatrix" />
+
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Working dir" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="3" Grid.Column="1" Text="{Binding WorkingDirectory}"
+                              PlaceholderText="(optional) fast disk for temp quants — defaults to a fresh tempdir" />
+                    <Button   Grid.Row="3" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseWorkingDir" />
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Output profile" VerticalAlignment="Center" />
+                    <TextBox  Grid.Row="4" Grid.Column="1" Text="{Binding OutputProfilePath}"
+                              PlaceholderText="Leave blank to derive from source — &lt;name&gt;.profile.json" />
+                    <Button   Grid.Row="4" Grid.Column="2" Content="Browse…"
+                              Click="OnBrowseOutput" />
+                </Grid>
+
+                <!-- Categories -->
+                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Categories (comma-separated tensor-name patterns)"
+                                   FontWeight="SemiBold" FontSize="11" Opacity="0.7" />
+                        <TextBox Text="{Binding CategoriesText}"
+                                 FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
+                                 FontSize="12" />
+                        <TextBlock Text="Defaults cover the seven canonical weight categories. Add output.weight when the model has a separate lm_head; remove ones the model doesn't have (tied embeddings, etc.)."
+                                   FontSize="11" Opacity="0.6" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Candidate types -->
+                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Candidate types (one PPL run per (category × type))"
+                                   FontWeight="SemiBold" FontSize="11" Opacity="0.7" />
+                        <WrapPanel Orientation="Horizontal" ItemWidth="120">
+                            <CheckBox Content="Q2_K"   IsChecked="{Binding UseQ2K, Mode=TwoWay}" />
+                            <CheckBox Content="Q3_K"   IsChecked="{Binding UseQ3K, Mode=TwoWay}" />
+                            <CheckBox Content="Q4_K"   IsChecked="{Binding UseQ4K, Mode=TwoWay}" />
+                            <CheckBox Content="IQ4_XS" IsChecked="{Binding UseIQ4XS, Mode=TwoWay}" />
+                            <CheckBox Content="Q5_K"   IsChecked="{Binding UseQ5K, Mode=TwoWay}" />
+                            <CheckBox Content="Q6_K"   IsChecked="{Binding UseQ6K, Mode=TwoWay}" />
+                            <CheckBox Content="Q8_0"   IsChecked="{Binding UseQ8_0, Mode=TwoWay}" />
+                        </WrapPanel>
+                        <TextBlock Text="Default {Q2_K, Q4_K, Q6_K} gives knee detection in ~22 PPL runs for a 7-category model. Adding Q5_K / IQ4_XS doubles cost but tightens the recipe builder's choices."
+                                   FontSize="11" Opacity="0.6" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Tuning -->
+                <Expander Header="Tuning" IsExpanded="False">
+                    <StackPanel Spacing="10" Margin="0,8,0,0">
+                        <Grid ColumnDefinitions="200,*,90" ColumnSpacing="10">
+                            <TextBlock Grid.Column="0" Text="PPL context size" VerticalAlignment="Center"
+                                       ToolTip.Tip="Token window per PPL chunk. 512 matches published wiki.test numbers; longer ctx tightens variance at proportional compute cost." />
+                            <Slider Grid.Column="1" Minimum="128" Maximum="2048" SmallChange="64" LargeChange="256"
+                                    Value="{Binding ContextSize, Mode=TwoWay}" />
+                            <TextBox Grid.Column="2" Text="{Binding ContextSize, Mode=TwoWay}" VerticalAlignment="Center" />
+                        </Grid>
+                        <Grid ColumnDefinitions="200,*,90" ColumnSpacing="10">
+                            <TextBlock Grid.Column="0" Text="Knee ΔPPL threshold" VerticalAlignment="Center"
+                                       ToolTip.Tip="A category's recommendedFloor is the smallest type whose ΔPPL stays below this threshold. 5.0 = generous (catches genuine knees, ignores mild degradation)." />
+                            <Slider Grid.Column="1" Minimum="0.5" Maximum="20.0" SmallChange="0.5" LargeChange="2.0"
+                                    Value="{Binding KneeDeltaPplThreshold, Mode=TwoWay}" />
+                            <TextBox Grid.Column="2" Text="{Binding KneeDeltaPplThreshold, Mode=TwoWay, StringFormat=F1}"
+                                     VerticalAlignment="Center" />
+                        </Grid>
+                        <Grid ColumnDefinitions="200,*,90" ColumnSpacing="10">
+                            <TextBlock Grid.Column="0" Text="Max concurrent (0=auto)" VerticalAlignment="Center"
+                                       ToolTip.Tip="Concurrency cap for the inner PPL runner. 0 = auto-detect from per-batch file sizes vs available VRAM." />
+                            <Slider Grid.Column="1" Minimum="0" Maximum="16" SmallChange="1" LargeChange="2"
+                                    Value="{Binding MaxConcurrent, Mode=TwoWay}" />
+                            <TextBox Grid.Column="2" Text="{Binding MaxConcurrent, Mode=TwoWay}" VerticalAlignment="Center" />
+                        </Grid>
+                        <Grid ColumnDefinitions="200,*,90" ColumnSpacing="10">
+                            <TextBlock Grid.Column="0" Text="Available VRAM (GB)" VerticalAlignment="Center"
+                                       ToolTip.Tip="Used by the auto-concurrency heuristic. Default 24 = RTX 3090 class. Drop lower for tighter hardware." />
+                            <Slider Grid.Column="1" Minimum="4" Maximum="80" SmallChange="1" LargeChange="4"
+                                    Value="{Binding AvailableVramGb, Mode=TwoWay}" />
+                            <TextBox Grid.Column="2" Text="{Binding AvailableVramGb, Mode=TwoWay, StringFormat=F0}"
+                                     VerticalAlignment="Center" />
+                        </Grid>
+                        <CheckBox Content="Cleanup working directory when finished"
+                                  IsChecked="{Binding CleanupWorkingDirectory, Mode=TwoWay}" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- Action buttons -->
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button Content="Build profile"
+                            Command="{Binding BuildCommand}"
+                            IsEnabled="{Binding IsIdle}"
+                            Classes="accent" />
+                    <Button Content="Cancel"
+                            Command="{Binding CancelCommand}"
+                            IsEnabled="{Binding IsRunning}" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

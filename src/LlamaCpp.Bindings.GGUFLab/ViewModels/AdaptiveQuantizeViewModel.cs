@@ -12,103 +12,127 @@ using LlamaCpp.Bindings.GGUFLab.Services;
 namespace LlamaCpp.Bindings.GGUFLab.ViewModels;
 
 /// <summary>
-/// Drives the Adaptive Quantization page: per-tensor sensitivity sweep →
-/// threshold-driven recipe → apply via <c>tt_overrides</c>. The sweep is
-/// the expensive step (one quantize+dequantize per (tensor, candidate));
-/// the recipe is rebuilt for free as the user moves the threshold slider.
+/// Drives the Adaptive Quantization page (v2 profile-based pipeline):
+/// pick a target GGUF, resolve a sensitivity profile (auto-match by
+/// arch+size, or browse), set a target bpw, preview the recipe with
+/// noise-clamp + snap-to-stock guards applied, then quantize via
+/// <see cref="LlamaCustomQuantizer"/> so per-tensor types are honored
+/// verbatim (the legacy <c>tt_overrides</c> path silently dropped
+/// demotions — Run 14).
 /// </summary>
 public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
 {
     public override string Title => "Adaptive Quantization";
     public override string Description =>
-        "Score each tensor's quantization sensitivity, then pin the smallest type that meets a quality threshold.";
+        "Apply a per-architecture sensitivity profile to a target model: pick a profile, set target bpw, ship a custom-quantized GGUF.";
 
     private readonly NativeLogBus _logBus;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ProfileResolutionLine))]
     private string _inputPath = string.Empty;
-
-    [ObservableProperty]
-    private string _outputPath = string.Empty;
 
     [ObservableProperty]
     private string _imatrixPath = string.Empty;
 
-    /// <summary>Fallback ftype the production quantizer uses for tensors the recipe doesn't cover.</summary>
     [ObservableProperty]
-    private LlamaFileType _baseFileType = LlamaFileType.Q4_K_M;
-
-    public IReadOnlyList<LlamaFileType> AvailableFileTypes { get; } =
-        Enum.GetValues<LlamaFileType>()
-            .Where(f => f != LlamaFileType.Guessed)
-            .OrderBy(f => f.ToString(), StringComparer.Ordinal)
-            .ToArray();
+    private string _outputPath = string.Empty;
 
     /// <summary>
-    /// Relative-MSE threshold τ. Smaller = stricter quality, larger
-    /// recipes; bigger = more aggressive compression. Slider range
-    /// covers the most useful band; users can type values outside it.
+    /// Explicit profile path. When empty, auto-match against the
+    /// shipped reference profiles in <c>data/profiles/</c> by
+    /// architecture + closest parameter count.
     /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(AverageBitsPerElementText))]
-    [NotifyPropertyChangedFor(nameof(ExceededCount))]
-    private double _threshold = 0.05;
+    [NotifyPropertyChangedFor(nameof(ProfileResolutionLine))]
+    private string _profilePath = string.Empty;
+
+    /// <summary>Target bpw — drives the recipe builder's budget cap.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TargetBpwText))]
+    private double _targetBitsPerElement = 4.95;
+
+    public string TargetBpwText => $"{TargetBitsPerElement:F3} bpw";
+
+    /// <summary>
+    /// Snap-to-stock threshold (0 disables). Below this predicted PPL
+    /// gain over stock-equivalent the recipe collapses to stock — see
+    /// <see cref="LlamaQuantRecipeFromProfileOptions.MinPredictedGainPpl"/>.
+    /// </summary>
+    [ObservableProperty]
+    private double _minPredictedGainPpl = 0.25;
 
     [ObservableProperty]
-    private int _sweepProgressCurrent;
+    private double _minPplGainPerBpw = 0.05;
 
     [ObservableProperty]
-    private int _sweepProgressTotal;
+    private bool _applyStockBaseline = true;
 
     [ObservableProperty]
-    private string _statusLine = "Idle. Pick an input GGUF and run the sensitivity sweep.";
+    private double _sizeScalingExponent = 1.0;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle))]
-    [NotifyPropertyChangedFor(nameof(HasScores))]
     private bool _isRunning;
 
     public bool IsIdle => !IsRunning;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasScores))]
-    [NotifyPropertyChangedFor(nameof(AverageBitsPerElementText))]
-    [NotifyPropertyChangedFor(nameof(ExceededCount))]
-    private LlamaQuantSensitivityResult? _scores;
+    [NotifyPropertyChangedFor(nameof(HasProfile))]
+    [NotifyPropertyChangedFor(nameof(ProfileSummaryLine))]
+    private LlamaSensitivityProfile? _loadedProfile;
 
-    public bool HasScores => Scores is not null && Scores.Scores.Count > 0;
+    public bool HasProfile => LoadedProfile is not null;
 
-    /// <summary>Recipe rebuilt every time threshold or scores change. Drives the preview grid.</summary>
-    public ObservableCollection<RecipeRow> RecipeRows { get; } = new();
-
-    public string AverageBitsPerElementText
+    /// <summary>
+    /// One-line summary of the loaded profile shown in the form
+    /// (architecture, source params, F16 PPL baseline). Updates whenever
+    /// <see cref="LoadedProfile"/> changes.
+    /// </summary>
+    public string ProfileSummaryLine
     {
         get
         {
-            if (Scores is null) return "";
-            var recipe = BuildRecipeOrNull();
-            if (recipe is null || double.IsNaN(recipe.AverageBitsPerElement)) return "";
-            return $"avg {recipe.AverageBitsPerElement:F2} bpw";
+            if (LoadedProfile is not { } p) return string.Empty;
+            var src = p.Provenance.SourceModel ?? "?";
+            var sourceParams = p.Provenance.SourceParameterCount ?? 0;
+            var sizeText = sourceParams > 0
+                ? $" ({sourceParams / 1_000_000.0:F0}M params)"
+                : "";
+            return $"arch={p.ArchitectureId}  layers={p.LayerCount}  source={src}{sizeText}  F16 PPL={p.F16BaselinePerplexity:F3}";
         }
     }
 
-    public int ExceededCount => RecipeRows.Count(r => r.ExceededThreshold);
+    /// <summary>
+    /// Status line for "where is the profile coming from" — shows the
+    /// auto-resolved match (or a hint when no profile fits) so the user
+    /// always knows what's about to drive the recipe.
+    /// </summary>
+    [ObservableProperty]
+    private string _profileResolutionLine = "Pick an input GGUF to auto-match a profile.";
+
+    /// <summary>Recipe rebuilt whenever any input affecting the recipe changes.</summary>
+    public ObservableCollection<RecipeRow> RecipeRows { get; } = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasRecipe))]
+    private LlamaQuantRecipe? _builtRecipe;
+
+    public bool HasRecipe => BuiltRecipe is not null && BuiltRecipe.Entries.Count > 0;
+
+    [ObservableProperty]
+    private string _recipeSummaryLine = string.Empty;
+
+    [ObservableProperty]
+    private string _statusLine = "Idle.";
 
     public string LogText => _logBuilder.ToString();
 
-    /// <summary>
-    /// One chip per candidate type for the tensor currently being scored.
-    /// Drives the lightboard so the user always sees what's in flight,
-    /// what's done with its score, and what's pending — even when a
-    /// single tensor takes minutes (token_embd in IQ-quants etc.).
-    /// </summary>
-    public ObservableCollection<CandidateChip> CandidateChips { get; } = new();
+    [ObservableProperty]
+    private double _quantizeProgressFraction;
 
     [ObservableProperty]
-    private string _currentTensorName = string.Empty;
-
-    [ObservableProperty]
-    private string _currentSubStatus = string.Empty;
+    private string _currentTensorLine = string.Empty;
 
     private readonly System.Text.StringBuilder _logBuilder = new();
     private CancellationTokenSource? _cts;
@@ -118,32 +142,228 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         _logBus = logBus;
     }
 
-    partial void OnThresholdChanged(double value) => RebuildRecipe();
-    partial void OnScoresChanged(LlamaQuantSensitivityResult? value) => RebuildRecipe();
-
-    [RelayCommand]
-    private async Task MeasureAsync()
+    partial void OnInputPathChanged(string value)
     {
-        if (IsRunning) return;
-        if (string.IsNullOrWhiteSpace(InputPath))
+        ResolveProfileFromInputs();
+        RebuildRecipe();
+        NotifyRemediesChanged();
+    }
+
+    partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
+
+    partial void OnProfilePathChanged(string value)
+    {
+        ResolveProfileFromInputs();
+        RebuildRecipe();
+    }
+
+    partial void OnTargetBitsPerElementChanged(double value) => RebuildRecipe();
+    partial void OnMinPredictedGainPplChanged(double value)  => RebuildRecipe();
+    partial void OnMinPplGainPerBpwChanged(double value)     => RebuildRecipe();
+    partial void OnApplyStockBaselineChanged(bool value)     => RebuildRecipe();
+    partial void OnSizeScalingExponentChanged(double value)  => RebuildRecipe();
+
+    /// <summary>
+    /// Resolve the active profile: explicit path wins; otherwise scan
+    /// <c>data/profiles/</c> beside the repo root and pick the best
+    /// arch+size match for the input GGUF.
+    /// </summary>
+    private void ResolveProfileFromInputs()
+    {
+        // Explicit profile path takes priority.
+        if (!string.IsNullOrWhiteSpace(ProfilePath) && File.Exists(ProfilePath))
         {
-            StatusLine = "Pick an input GGUF first.";
+            try
+            {
+                LoadedProfile = LlamaSensitivityProfile.LoadFromJson(ProfilePath);
+                ProfileResolutionLine = $"Using explicit profile: {Path.GetFileName(ProfilePath)}";
+                return;
+            }
+            catch (Exception ex)
+            {
+                LoadedProfile = null;
+                ProfileResolutionLine = $"Failed to load {ProfilePath}: {ex.Message}";
+                return;
+            }
+        }
+
+        // Auto-match by reading the input GGUF's architecture + parameter count.
+        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath))
+        {
+            LoadedProfile = null;
+            ProfileResolutionLine = "Pick an input GGUF to auto-match a profile.";
             return;
         }
-        if (!File.Exists(InputPath))
+
+        try
         {
-            StatusLine = $"Input file not found: {InputPath}";
+            // LlamaBackend is initialized once by MainWindowViewModel; no
+            // need to re-init here.
+            var gguf = LlamaGgufFile.Open(InputPath);
+            var arch = gguf.Metadata.FirstOrDefault(m => m.Key == "general.architecture")?.Value.AsString();
+            if (string.IsNullOrEmpty(arch))
+            {
+                LoadedProfile = null;
+                ProfileResolutionLine = "Couldn't read general.architecture from the GGUF.";
+                return;
+            }
+
+            long targetParams = gguf.Tensors.Sum(t => t.Dimensions.Aggregate(1L, (a, b) => a * (long)b));
+
+            var profilesDir = ResolveProfilesDirectory();
+            if (profilesDir is null || !Directory.Exists(profilesDir))
+            {
+                LoadedProfile = null;
+                ProfileResolutionLine = "No data/profiles/ directory found — pick a profile manually.";
+                return;
+            }
+
+            (string Path, LlamaSensitivityProfile Profile, double SizeRatio)? best = null;
+            foreach (var jsonPath in Directory.EnumerateFiles(profilesDir, "*.profile.json"))
+            {
+                try
+                {
+                    var p = LlamaSensitivityProfile.LoadFromJson(jsonPath);
+                    if (!string.Equals(p.ArchitectureId, arch, StringComparison.Ordinal)) continue;
+                    var src = p.Provenance.SourceParameterCount ?? 0;
+                    if (src <= 0 || targetParams <= 0) continue;
+                    var ratio = Math.Abs(Math.Log((double)targetParams / src));
+                    if (best is null || ratio < best.Value.SizeRatio)
+                        best = (jsonPath, p, ratio);
+                }
+                catch { /* skip unparseable */ }
+            }
+
+            if (best is null)
+            {
+                LoadedProfile = null;
+                ProfileResolutionLine = $"No profile matches arch={arch}. Build one (Profile Builder) or pick manually.";
+                return;
+            }
+
+            LoadedProfile = best.Value.Profile;
+            var srcParams = best.Value.Profile.Provenance.SourceParameterCount ?? 0;
+            var sizeRatio = srcParams > 0 ? (double)targetParams / srcParams : 1.0;
+            ProfileResolutionLine =
+                $"Auto-matched: {Path.GetFileName(best.Value.Path)} (target/source size ratio = {sizeRatio:F2}×)";
+        }
+        catch (Exception ex)
+        {
+            LoadedProfile = null;
+            ProfileResolutionLine = $"Profile resolution failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Walk up from the running binary to find the repo's
+    /// <c>data/profiles/</c> directory. Returns null if not found —
+    /// matches the dev-mode layout; an installed app would override
+    /// this with a known data path.
+    /// </summary>
+    private static string? ResolveProfilesDirectory()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(dir))
+        {
+            var candidate = Path.Combine(dir, "data", "profiles");
+            if (Directory.Exists(candidate)) return candidate;
+            var slnx = Path.Combine(dir, "LlamaCpp.Bindings.slnx");
+            if (File.Exists(slnx))
+            {
+                // Found repo root but no data/profiles — return null so caller can warn.
+                return null;
+            }
+            dir = Path.GetDirectoryName(dir);
+        }
+        return null;
+    }
+
+    private void RebuildRecipe()
+    {
+        RecipeRows.Clear();
+        BuiltRecipe = null;
+        RecipeSummaryLine = string.Empty;
+
+        if (LoadedProfile is null) return;
+        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath)) return;
+        if (!(TargetBitsPerElement > 0)) return;
+
+        try
+        {
+            var opts = new LlamaQuantRecipeFromProfileOptions
+            {
+                MinPredictedGainPpl  = MinPredictedGainPpl,
+                MinPplGainPerBpw     = MinPplGainPerBpw,
+                ApplyStockBaseline   = ApplyStockBaseline,
+                SizeScalingExponent  = SizeScalingExponent,
+            };
+            var recipe = LlamaQuantRecipeFromProfile.Build(
+                LoadedProfile, InputPath, TargetBitsPerElement, opts);
+            BuiltRecipe = recipe;
+
+            foreach (var e in recipe.Entries)
+            {
+                RecipeRows.Add(new RecipeRow(
+                    e.TensorName,
+                    e.ChosenType.ToString(),
+                    e.BitsPerElement,
+                    e.RelativeMse));
+            }
+
+            // Snap detection: if every category lands on the same type
+            // (the largest ladder type with bpw ≤ target) modulo
+            // baseline-protected upgrades, the snap fired.
+            var distinct = recipe.Entries.Select(e => e.ChosenType).Distinct().Count();
+            var totalGain = recipe.Entries.Sum(e => e.RelativeMse);
+            var snapFired = distinct <= 2;    // recipe-pick + Q6_K-baseline override = 2 types
+            RecipeSummaryLine =
+                $"avg {recipe.AverageBitsPerElement:F3} bpw  ·  {recipe.Entries.Count} tensors  ·  " +
+                $"{distinct} distinct types  ·  predicted ΔPPL sum = {totalGain:F2}" +
+                (snapFired ? "  ·  snap-to-stock fired" : "");
+        }
+        catch (Exception ex)
+        {
+            RecipeSummaryLine = $"Recipe build failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task QuantizeAsync()
+    {
+        if (IsRunning) return;
+        if (BuiltRecipe is null || BuiltRecipe.Entries.Count == 0)
+        {
+            StatusLine = "No recipe — load a profile and pick an input GGUF first.";
             return;
+        }
+        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath))
+        {
+            StatusLine = "Pick a valid input GGUF.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(OutputPath))
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(InputPath) ?? string.Empty;
+                var stem = Path.GetFileNameWithoutExtension(InputPath);
+                OutputPath = Path.Combine(dir, $"{stem}.profile-{TargetBitsPerElement:F2}.gguf");
+            }
+            catch
+            {
+                StatusLine = "Pick an output path.";
+                return;
+            }
         }
 
         _logBuilder.Clear();
         OnPropertyChanged(nameof(LogText));
-        SweepProgressCurrent = 0;
-        SweepProgressTotal = 0;
+        QuantizeProgressFraction = 0;
+        CurrentTensorLine = string.Empty;
         _cts = new CancellationTokenSource();
         IsRunning = true;
         var startedAt = DateTime.Now;
-        StatusLine = "Running sensitivity sweep…";
+        StatusLine = "Quantizing…";
 
         var unsubscribe = _logBus.Subscribe(line =>
         {
@@ -153,28 +373,23 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
 
         try
         {
-            var options = new LlamaQuantSensitivityOptions
+            var opts = new LlamaCustomQuantizerOptions
             {
                 ImatrixPath = string.IsNullOrWhiteSpace(ImatrixPath) ? null : ImatrixPath,
             };
-            var candidateList = options.CandidateTypes ?? LlamaQuantSensitivity.DefaultCandidateTypes;
-            CandidateChips.Clear();
-            CurrentTensorName = string.Empty;
-            CurrentSubStatus = string.Empty;
-            var progress = new Progress<LlamaQuantSensitivityProgress>(p =>
+            var progress = new Progress<LlamaCustomQuantizerProgress>(p =>
             {
-                SweepProgressCurrent = p.TensorIndex;
-                SweepProgressTotal = p.TensorCount;
-                StatusLine = $"Sweep {p.TensorIndex}/{p.TensorCount} — {p.CurrentTensorName}";
-                ApplyProgressToLightboard(p, candidateList);
+                if (p.TotalTensors > 0)
+                    QuantizeProgressFraction = (double)p.CompletedTensors / p.TotalTensors;
+                CurrentTensorLine = p.CurrentTensor is null
+                    ? $"{p.CompletedTensors}/{p.TotalTensors}"
+                    : $"{p.CompletedTensors}/{p.TotalTensors} — {p.CurrentTensor} → {p.AppliedType}";
             });
-            var result = await LlamaQuantSensitivity.MeasureAsync(
-                InputPath, options, progress, _cts.Token);
+            await LlamaCustomQuantizer.QuantizeWithRecipeAsync(
+                InputPath, OutputPath, BuiltRecipe, opts, progress, _cts.Token);
 
-            Scores = result;
             var elapsed = DateTime.Now - startedAt;
-            StatusLine = $"Swept {result.Scores.Select(s => s.TensorName).Distinct().Count()} tensors " +
-                         $"× {result.CandidateTypes.Count} candidates in {elapsed.TotalSeconds:F1}s.";
+            StatusLine = $"Wrote {OutputPath} in {elapsed.TotalSeconds:F1}s ({BuiltRecipe.Entries.Count} tensors).";
         }
         catch (OperationCanceledException)
         {
@@ -182,7 +397,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         }
         catch (Exception ex)
         {
-            StatusLine = $"Sweep failed: {ex.Message}";
+            StatusLine = $"Quantize failed: {ex.Message}";
             _logBuilder.AppendLine($"[error] {ex}");
             OnPropertyChanged(nameof(LogText));
         }
@@ -202,126 +417,16 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         StatusLine = IsRunning ? "Cancellation requested…" : StatusLine;
     }
 
-    [RelayCommand]
-    private async Task ApplyAsync()
-    {
-        if (IsRunning) return;
-        var recipe = BuildRecipeOrNull();
-        if (recipe is null || recipe.Entries.Count == 0)
-        {
-            StatusLine = "No recipe to apply — run the sweep first.";
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath))
-        {
-            StatusLine = "Pick a valid input GGUF.";
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(OutputPath))
-        {
-            try
-            {
-                var dir = Path.GetDirectoryName(InputPath) ?? string.Empty;
-                var stem = Path.GetFileNameWithoutExtension(InputPath);
-                OutputPath = Path.Combine(dir, $"{stem}.adaptive-{Threshold:F3}.gguf");
-            }
-            catch
-            {
-                StatusLine = "Pick an output path.";
-                return;
-            }
-        }
-
-        _logBuilder.Clear();
-        OnPropertyChanged(nameof(LogText));
-        _cts = new CancellationTokenSource();
-        IsRunning = true;
-        var startedAt = DateTime.Now;
-        StatusLine = "Applying recipe…";
-
-        var unsubscribe = _logBus.Subscribe(line =>
-        {
-            _logBuilder.AppendLine(line);
-            OnPropertyChanged(nameof(LogText));
-        });
-
-        try
-        {
-            var parameters = new LlamaQuantizationParameters
-            {
-                FileType            = BaseFileType,
-                AllowRequantize     = true,    // sources are often already quantized
-                Pure                = false,   // tt_overrides are gated behind !Pure
-                TensorTypeOverrides = recipe.ToTtOverrides(),
-            };
-            await LlamaQuantizer.QuantizeAsync(InputPath, OutputPath, parameters, _cts.Token);
-
-            var elapsed = DateTime.Now - startedAt;
-            StatusLine = $"Wrote {OutputPath} in {elapsed.TotalSeconds:F1}s " +
-                         $"({recipe.Entries.Count} pinned tensors).";
-        }
-        catch (OperationCanceledException)
-        {
-            StatusLine = "Cancelled.";
-        }
-        catch (Exception ex)
-        {
-            StatusLine = $"Apply failed: {ex.Message}";
-            _logBuilder.AppendLine($"[error] {ex}");
-            OnPropertyChanged(nameof(LogText));
-        }
-        finally
-        {
-            unsubscribe();
-            IsRunning = false;
-            _cts?.Dispose();
-            _cts = null;
-        }
-    }
-
-    /// <summary>Save the raw sensitivity table to JSON. Reusable across threshold sweeps.</summary>
-    public void SaveScoresJson(string path)
-    {
-        if (Scores is null)
-        {
-            StatusLine = "No scores to save.";
-            return;
-        }
-        try
-        {
-            LlamaQuantSensitivity.SaveToJson(Scores, path);
-            StatusLine = $"Saved score table to {path}.";
-        }
-        catch (Exception ex)
-        {
-            StatusLine = $"Save failed: {ex.Message}";
-        }
-    }
-
-    public void LoadScoresJson(string path)
-    {
-        try
-        {
-            Scores = LlamaQuantSensitivity.LoadFromJson(path);
-            StatusLine = $"Loaded {Scores.Scores.Count} score rows from {Path.GetFileName(path)}.";
-        }
-        catch (Exception ex)
-        {
-            StatusLine = $"Load failed: {ex.Message}";
-        }
-    }
-
     public void SaveRecipeJson(string path)
     {
-        var recipe = BuildRecipeOrNull();
-        if (recipe is null)
+        if (BuiltRecipe is null)
         {
             StatusLine = "No recipe to save.";
             return;
         }
         try
         {
-            LlamaQuantRecipe.SaveToJson(recipe, path);
+            LlamaQuantRecipe.SaveToJson(BuiltRecipe, path);
             StatusLine = $"Saved recipe to {path}.";
         }
         catch (Exception ex)
@@ -330,102 +435,11 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         }
     }
 
-    private LlamaQuantRecipe? BuildRecipeOrNull()
-    {
-        if (Scores is null || Scores.Scores.Count == 0) return null;
-        if (!(Threshold > 0)) return null;
-        try
-        {
-            return LlamaQuantRecipe.Build(Scores, Threshold, sourceScoreTablePath: null);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private void RebuildRecipe()
-    {
-        RecipeRows.Clear();
-        var recipe = BuildRecipeOrNull();
-        if (recipe is null)
-        {
-            OnPropertyChanged(nameof(AverageBitsPerElementText));
-            OnPropertyChanged(nameof(ExceededCount));
-            return;
-        }
-        foreach (var e in recipe.Entries)
-        {
-            RecipeRows.Add(new RecipeRow(
-                e.TensorName,
-                e.ChosenType.ToString(),
-                e.BitsPerElement,
-                e.RelativeMse,
-                e.ExceededThreshold));
-        }
-        OnPropertyChanged(nameof(AverageBitsPerElementText));
-        OnPropertyChanged(nameof(ExceededCount));
-    }
-
-    private void ApplyProgressToLightboard(
-        LlamaQuantSensitivityProgress p,
-        IReadOnlyList<LlamaTensorType> candidates)
-    {
-        // New tensor → reset the chip strip so the user sees fresh
-        // pending entries instead of the previous tensor's results.
-        if (p.Phase == LlamaQuantSensitivityPhase.Tensor)
-        {
-            CurrentTensorName = p.CurrentTensorName;
-            CurrentSubStatus  = "starting…";
-            CandidateChips.Clear();
-            for (int i = 0; i < candidates.Count; i++)
-                CandidateChips.Add(new CandidateChip(i, candidates[i].ToString(), CandidateChipState.Pending, null));
-            return;
-        }
-
-        if (p.Phase == LlamaQuantSensitivityPhase.SourceDequantize)
-        {
-            CurrentSubStatus = "reading + dequantizing source to F32…";
-            return;
-        }
-
-        // Per-candidate phases. CandidateIndex maps directly to the chip
-        // we initialized above.
-        if (p.CandidateIndex < 0 || p.CandidateIndex >= CandidateChips.Count) return;
-
-        var existing = CandidateChips[p.CandidateIndex];
-        switch (p.Phase)
-        {
-            case LlamaQuantSensitivityPhase.Quantize:
-                CandidateChips[p.CandidateIndex] = existing with { State = CandidateChipState.Quantizing };
-                CurrentSubStatus = $"{existing.Type}: quantize";
-                break;
-            case LlamaQuantSensitivityPhase.Dequantize:
-                CandidateChips[p.CandidateIndex] = existing with { State = CandidateChipState.Dequantizing };
-                CurrentSubStatus = $"{existing.Type}: dequantize";
-                break;
-            case LlamaQuantSensitivityPhase.Score:
-                CandidateChips[p.CandidateIndex] = existing with { State = CandidateChipState.Scoring };
-                CurrentSubStatus = $"{existing.Type}: score";
-                break;
-            case LlamaQuantSensitivityPhase.CandidateDone:
-                CandidateChips[p.CandidateIndex] = existing with
-                {
-                    State = CandidateChipState.Done,
-                    RelativeMse = p.CandidateRelativeMse,
-                };
-                break;
-        }
-    }
-
     public override void ApplyActiveModel(string? path)
     {
         if (string.IsNullOrEmpty(InputPath)
             && ResolveGgufFromActive(path) is { } resolved)
             InputPath = resolved;
-        // Back-fill the imatrix slot from the sidecar Imatrix produces
-        // next to the source model. This is what makes "go build the
-        // imatrix, then come back" work without a re-Browse.
         if (string.IsNullOrEmpty(ImatrixPath)
             && ResolveImatrixForGguf(InputPath) is { } imt)
             ImatrixPath = imt;
@@ -437,47 +451,15 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
     protected override string? CurrentSourceGguf =>
         string.IsNullOrEmpty(InputPath) ? ResolveGgufFromActive(Active?.Path) : InputPath;
 
-    partial void OnInputPathChanged(string value) => NotifyRemediesChanged();
-    partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
-
     public sealed record RecipeRow(
         string TensorName,
         string ChosenType,
         double BitsPerElement,
-        double RelativeMse,
-        bool ExceededThreshold)
+        double PredictedDeltaPpl)
     {
         public string BitsPerElementText => double.IsNaN(BitsPerElement) ? "—" : $"{BitsPerElement:F2}";
-        public string RelativeMseText => double.IsNaN(RelativeMse) ? "—" : RelativeMse.ToString("E2");
-        public string FlagText => ExceededThreshold ? "⚠ over τ" : "";
-    }
-
-    public enum CandidateChipState { Pending, Quantizing, Dequantizing, Scoring, Done }
-
-    /// <summary>
-    /// One chip on the lightboard. The view styles itself off
-    /// <see cref="State"/> so the user reads "what's running" at a
-    /// glance without parsing the status line.
-    /// </summary>
-    public sealed record CandidateChip(
-        int Index,
-        string Type,
-        CandidateChipState State,
-        double? RelativeMse)
-    {
-        public string StateGlyph => State switch
-        {
-            CandidateChipState.Pending      => "·",
-            CandidateChipState.Quantizing   => "Q…",
-            CandidateChipState.Dequantizing => "D…",
-            CandidateChipState.Scoring      => "S…",
-            CandidateChipState.Done         => "✓",
-            _ => "",
-        };
-        public string MseText => RelativeMse is double m ? m.ToString("E2") : "";
-        public bool IsActive => State is CandidateChipState.Quantizing
-                                      or CandidateChipState.Dequantizing
-                                      or CandidateChipState.Scoring;
-        public bool IsDone => State == CandidateChipState.Done;
+        public string PredictedDeltaPplText => double.IsNaN(PredictedDeltaPpl)
+            ? "—"
+            : (Math.Abs(PredictedDeltaPpl) < 1e-3 ? "0" : $"{PredictedDeltaPpl:F3}");
     }
 }
