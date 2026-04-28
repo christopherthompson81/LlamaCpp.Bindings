@@ -236,6 +236,54 @@ public sealed record LlamaQuantRecipe(
         return ((double)traits.type_size * 8) / blockSize;
     }
 
+    /// <summary>
+    /// Quantization algorithm family for a candidate type. Used by the
+    /// recipe builder's monotone clamp: monotone-from-above-bpw is a
+    /// noise-suppression rule that holds <em>within</em> a single
+    /// family (a higher-bpw type within the same algorithm should be
+    /// at least as good as a lower-bpw one), but does not hold
+    /// <em>across</em> families. IQ-quants in particular use codebook
+    /// + importance-aware machinery that genuinely outperforms higher-
+    /// bpw K-quants on certain tensor distributions; cross-family
+    /// monotone clamping would suppress that legitimate signal.
+    /// </summary>
+    public static LlamaQuantFamily GetFamily(LlamaTensorType type) => type switch
+    {
+        LlamaTensorType.F32     => LlamaQuantFamily.Float,
+        LlamaTensorType.F16     => LlamaQuantFamily.Float,
+        LlamaTensorType.BF16    => LlamaQuantFamily.Float,
+
+        LlamaTensorType.Q4_0    => LlamaQuantFamily.Legacy,
+        LlamaTensorType.Q4_1    => LlamaQuantFamily.Legacy,
+        LlamaTensorType.Q5_0    => LlamaQuantFamily.Legacy,
+        LlamaTensorType.Q5_1    => LlamaQuantFamily.Legacy,
+        LlamaTensorType.Q8_0    => LlamaQuantFamily.Legacy,
+
+        LlamaTensorType.Q2_K    => LlamaQuantFamily.K,
+        LlamaTensorType.Q3_K    => LlamaQuantFamily.K,
+        LlamaTensorType.Q4_K    => LlamaQuantFamily.K,
+        LlamaTensorType.Q5_K    => LlamaQuantFamily.K,
+        LlamaTensorType.Q6_K    => LlamaQuantFamily.K,
+
+        LlamaTensorType.IQ1_S   => LlamaQuantFamily.I,
+        LlamaTensorType.IQ1_M   => LlamaQuantFamily.I,
+        LlamaTensorType.IQ2_XXS => LlamaQuantFamily.I,
+        LlamaTensorType.IQ2_XS  => LlamaQuantFamily.I,
+        LlamaTensorType.IQ2_S   => LlamaQuantFamily.I,
+        LlamaTensorType.IQ3_XXS => LlamaQuantFamily.I,
+        LlamaTensorType.IQ3_S   => LlamaQuantFamily.I,
+        LlamaTensorType.IQ4_NL  => LlamaQuantFamily.I,
+        LlamaTensorType.IQ4_XS  => LlamaQuantFamily.I,
+
+        LlamaTensorType.TQ1_0   => LlamaQuantFamily.Ternary,
+        LlamaTensorType.TQ2_0   => LlamaQuantFamily.Ternary,
+
+        LlamaTensorType.Mxfp4   => LlamaQuantFamily.Fp4,
+        LlamaTensorType.Nvfp4   => LlamaQuantFamily.Fp4,
+
+        _                       => LlamaQuantFamily.Other,
+    };
+
     // ----- JSON save/load -----
 
     private static readonly JsonSerializerOptions JsonOpts = new()

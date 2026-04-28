@@ -61,6 +61,33 @@ public enum LlamaFileType
 /// <c>llama_model_quantize</c>. Integer values match the underlying
 /// <c>ggml_type</c> constants for direct casts.
 /// </summary>
+/// <summary>
+/// Quantization algorithm family. Recipe-building heuristics that
+/// reason about "lower bpw must be at least as bad as higher bpw"
+/// (monotonicity in bit budget) only hold within a single family —
+/// IQ-quants use codebook + importance-aware machinery that can beat
+/// higher-bpw K-quants on specific tensor distributions, so the
+/// monotone rule must be applied per-family rather than across the
+/// whole ladder.
+/// </summary>
+public enum LlamaQuantFamily
+{
+    /// <summary>F32 / F16 / BF16 — uncompressed reference baselines.</summary>
+    Float,
+    /// <summary>Q4_0 / Q4_1 / Q5_0 / Q5_1 / Q8_0 — older block quants, no super-block scaling.</summary>
+    Legacy,
+    /// <summary>Q2_K / Q3_K / Q4_K / Q5_K / Q6_K — block-256 super-block scaling.</summary>
+    K,
+    /// <summary>IQ1_* / IQ2_* / IQ3_* / IQ4_* — codebook + importance-aware non-linear quantization.</summary>
+    I,
+    /// <summary>TQ1_0 / TQ2_0 — ternary quantization.</summary>
+    Ternary,
+    /// <summary>Mxfp4 / Nvfp4 — block-FP4 mixes.</summary>
+    Fp4,
+    /// <summary>Anything not classified above.</summary>
+    Other,
+}
+
 public enum LlamaTensorType
 {
     F32     = 0,

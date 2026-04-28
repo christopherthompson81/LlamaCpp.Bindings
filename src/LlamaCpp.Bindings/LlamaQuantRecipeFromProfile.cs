@@ -769,13 +769,18 @@ public static class LlamaQuantRecipeFromProfile
         {
             if (!perTensor.TryGetValue(name, out var coef)) continue;
             var clamped = new Dictionary<LlamaTensorType, double>();
-            double runningMax = 0.0;
+            // Per-family running max — see BuildClampedScaledDeltas for
+            // the full rationale. Cross-family monotone would suppress
+            // genuine IQ-vs-K-quant signal.
+            var runningMaxByFamily = new Dictionary<LlamaQuantFamily, double>();
             foreach (var T in ladder.OrderByDescending(LlamaQuantRecipe.GetBitsPerElement))
             {
+                var family = LlamaQuantRecipe.GetFamily(T);
+                var familyMax = runningMaxByFamily.GetValueOrDefault(family, 0.0);
                 var raw = coef.DeltaPplByType.GetValueOrDefault(T, 0.0) * sizeScale;
-                var c = Math.Max(raw, runningMax);
+                var c = Math.Max(raw, familyMax);
                 clamped[T] = c;
-                runningMax = c;
+                runningMaxByFamily[family] = c;
             }
             clampedByTensor[name] = clamped;
             measuredByTensor[name] = new HashSet<LlamaTensorType>(coef.DeltaPplByType.Keys);
@@ -893,8 +898,8 @@ public static class LlamaQuantRecipeFromProfile
 
     /// <summary>
     /// Build a per-(category, ladder type) table of size-scaled
-    /// per-category ΔPPL coefficients with zero-floor + monotone-from-
-    /// above-bpw clamping applied.
+    /// per-category ΔPPL coefficients with zero-floor + per-family
+    /// monotone-from-above-bpw clamping applied.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -905,18 +910,28 @@ public static class LlamaQuantRecipeFromProfile
     ///     PPL difference is below the corpus's PPL measurement
     ///     variance — noise, not signal. Floor at 0 to refuse phantom
     ///     "free wins" (Run 20 case: 4B attn_v Q2_K = −0.45).</item>
-    ///   <item><b>Monotone-from-above-bpw.</b> A lower-bpw type can't
-    ///     strictly cause less PPL impact than a higher-bpw type from
-    ///     the same category. Non-monotonicity (4B attn_v: Q2=−0.45,
-    ///     Q3=+0.93, Q4=−0.06) signals ablation noise dominating real
-    ///     effect; pin each type's δ at ≥ its higher-bpw neighbor's δ.</item>
+    ///   <item><b>Per-family monotone-from-above-bpw.</b> A lower-bpw
+    ///     type from the <em>same algorithm family</em> (K, I, Legacy,
+    ///     Float, …) can't strictly cause less PPL impact than a
+    ///     higher-bpw type from that family — within a family,
+    ///     non-monotonicity signals ablation noise. <b>Across families</b>
+    ///     monotone does NOT hold: IQ-quants use codebook + importance-
+    ///     aware machinery that genuinely outperforms higher-bpw K-quants
+    ///     on certain tensor distributions, and treating that as noise
+    ///     would suppress real signal. Run 21's ffn_down case exposed
+    ///     this — IQ4_XS @ 4.25 bpw measured Δ = +0.007, K-family
+    ///     Q5_K @ 5.5 bpw measured Δ = +0.296 (noisy), and the old
+    ///     cross-family monotone clamp pulled IQ4_XS up to Q5_K's
+    ///     value, causing the optimizer to pick Q6_K (cheap-by-clamp
+    ///     in the global running max) instead of the genuinely better
+    ///     IQ4_XS. Per-family clamping preserves the IQ signal.</item>
     /// </list>
     /// </para>
     /// <para>
     /// Implementation: walk the ladder in <em>descending</em> bpw order,
-    /// tracking a running max that doubles as the zero-floor (initialized
-    /// to 0). Each lower type's clamped δ = max(raw_scaled_δ, running_max).
-    /// One pass; both clamps fall out simultaneously.
+    /// tracking a per-family running max (each family's max initialized
+    /// to 0 — the zero-floor). Each type's clamped δ = max(raw, family's
+    /// running_max). One pass; both clamps fall out simultaneously.
     /// </para>
     /// </remarks>
     private static Dictionary<(string Cat, LlamaTensorType T), double>
@@ -926,20 +941,24 @@ public static class LlamaQuantRecipeFromProfile
             double sizeScale)
     {
         var result = new Dictionary<(string, LlamaTensorType), double>();
-        // Walk highest-bpw → lowest-bpw so each lower type can clamp
-        // against the (already-finalized) higher-bpw types' running max.
         var byBpwDescending = ladder
             .OrderByDescending(LlamaQuantRecipe.GetBitsPerElement)
             .ToList();
         foreach (var (cat, coef) in profile.Categories)
         {
-            double runningMax = 0.0;    // zero-floor
+            // Track running max per family. Missing entries default to
+            // 0 (the zero-floor), so a family seen for the first time
+            // gets clamped against zero rather than a foreign family's
+            // accumulated max.
+            var runningMaxByFamily = new Dictionary<LlamaQuantFamily, double>();
             foreach (var T in byBpwDescending)
             {
+                var family = LlamaQuantRecipe.GetFamily(T);
+                var familyMax = runningMaxByFamily.GetValueOrDefault(family, 0.0);
                 var raw = coef.DeltaPplByType.GetValueOrDefault(T, 0.0) * sizeScale;
-                var clamped = Math.Max(raw, runningMax);
+                var clamped = Math.Max(raw, familyMax);
                 result[(cat, T)] = clamped;
-                runningMax = clamped;
+                runningMaxByFamily[family] = clamped;
             }
         }
         return result;
