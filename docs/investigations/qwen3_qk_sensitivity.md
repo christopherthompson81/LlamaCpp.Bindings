@@ -10,6 +10,20 @@ the heuristic allocate bits to the right tensors?*
 The expectation going in was that for Qwen3-0.6B — small, dense, well-
 studied — the heuristic should be approximately right.
 
+**v3 ship status (after Run 21)**: GGUFLab's per-category profile-driven
+recipe builder now produces recipes that **strictly Pareto-dominate
+stock Q4_K_M** on Qwen3-1.7B — smaller file (1,232 MB vs 1,282 MB) AND
+better PPL (16.934 vs 17.408 — F16 is 16.887, so the v3 gap closes 91%
+of stock's quality loss). The win comes from the per-category
+optimizer reallocating budget across categories (uniform Q6_K on
+attention K/V and ffn_down, uniform Q3_K on ffn_gate and token_embd)
+rather than stock's per-layer alternation pattern, *given freedom to
+disable* the `use_more_bits` baseline floor. The per-layer ffn_down
+drill that motivated this recipe served as the empirical evidence
+that justified disabling the floor — protected layers' mean Q4_K Δ
+was 9× lower than the unprotected set's, confirming the heuristic was
+wrong about which layers needed protection on this model.
+
 **Final status (after Run 9)**:
 - *Architectural signature*: QK-norm causes a real, isolated, ~100×
   amplification of imatrix-weighted MSE on K/Q tensors (Run 5).
@@ -224,6 +238,164 @@ empirically the loudest), can't see this — it's hard-coded to the
    bpw. If the recipe wins on PPL the finding is operational, not
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
+
+## Run 21 — 2026-04-28 19:49  (First Pareto win over stock Q4_K_M — Qwen3-1.7B)
+
+Run 17 ended with the recipe builder shipping at parity to stock on
+Qwen3-1.7B; the v3 work since then layered measurement clamps,
+snap-to-stock, per-layer ablations, and a custom quantizer that
+honors demotions (Run 14 fix). Run 21 is the first end-to-end
+quality test of the full v3 pipeline against stock on a real model.
+
+### Setup
+
+Profile: hand-authored
+[`data/profiles/qwen3-1.7B-per-layer.profile.json`](../../data/profiles/qwen3-1.7B-per-layer.profile.json)
+combining the existing Qwen3-1.7B reference profile's per-category
+coefficients with 28 ffn_down × {Q2_K, Q4_K, IQ4_XS, Q6_K} per-tensor
+measurements collected on 2026-04-28.
+
+Apply: GGUFLab Adaptive Quantization page, target 4.95 bpw
+(Q4_K_M-class), `ApplyStockBaseline=off`,
+`UsePerTensorData=on`, `AllowPerTensorPromotion=on`.
+
+Both quants imatrix-aware (`Qwen3-1.7B.F16.imatrix.gguf`),
+PPL on wikitext-2 raw, ctx 512, second-half scoring.
+
+### Result — strict Pareto improvement
+
+|                   | PPL        | Δ from F16 | File size       | Δ from stock      |
+|-------------------|-----------:|-----------:|----------------:|------------------:|
+| F16 baseline      | 16.887     | (anchor)   | 4,069 MB        | —                 |
+| Stock Q4_K_M      | 17.408     | +0.521     | 1,282 MB        | (baseline)        |
+| **v3 recipe**     | **16.934** | **+0.047** | **1,232 MB**    | **−51 MB / −0.474 PPL** |
+
+The recipe is **smaller AND better** than stock by every measure.
+PPL gap to F16 collapsed by 91% (0.521 → 0.047). File size dropped
+by 51 MB (3.95%). Average bpw 4.919 vs stock's ~4.95.
+
+### What the recipe actually picked
+
+Per-category type distribution (all 28 layers per category):
+
+| category    | recipe pick | stock Q4_K_M's pattern              |
+|-------------|-------------|-------------------------------------|
+| `attn_q`    | Q5_K        | Q4_K                                |
+| `attn_k`    | Q6_K        | Q4_K                                |
+| `attn_v`    | Q6_K        | Q6_K (use_more_bits) / Q4_K (rest)  |
+| `attn_output` | Q5_K      | Q4_K                                |
+| `ffn_up`    | Q5_K        | Q4_K                                |
+| `ffn_gate`  | **Q3_K**    | Q4_K                                |
+| `ffn_down`  | Q6_K        | Q6_K (use_more_bits) / Q4_K (rest)  |
+| `output`    | Q4_K        | Q6_K                                |
+| `token_embd`| **Q3_K**    | Q4_K                                |
+
+Stock's hand-tuned heuristic alternates per-layer protection within a
+mostly-Q4_K backbone. The optimizer's choice is structurally
+different: **uniform high-bpw on attention K/V and ffn_down, uniform
+mid-bpw on Q/O/up, uniform low-bpw on gate and embedding**. Same
+total budget, very different distribution.
+
+### Why it works
+
+The win is *not* per-tensor refinement. Looking at the recipe's
+ffn_down picks: **all 28 layers landed at Q6_K** — uniform. So the
+per-tensor data didn't drive within-category variation here; the
+optimizer simply picked Q6_K as the category type and the demote-
+only refinement had nothing to do with no measured type below the
+budget tolerance lower-bpw than Q6_K being safe.
+
+The win came from the **per-category optimizer** + clamps + the
+freedom to ignore stock's `use_more_bits` floors. Specifically:
+
+1. **Clamps work.** ffn_down's category-level Q6_K Δ measured
+   negative; the zero-floor clamp normalizes that to 0 (matching
+   F16). Q4_K's Δ is +0.112, Q5_K's +0.296 (non-monotone — likely
+   noise). The clamped curve makes Q6_K look like a free win.
+
+2. **The optimizer enumerates exhaustively.** With the floor
+   removed (`ApplyStockBaseline=off`), the optimizer is free to
+   put *all* ffn_down at Q6_K and pay for it by demoting ffn_gate
+   to Q3_K and token_embd to Q3_K. Stock's heuristic locks in a
+   per-layer alternation pattern that can't make that trade.
+
+3. **The trade is correct.** ffn_gate at Q3_K costs +0.108 PPL
+   per the category data, but with `ffn_gate × Q3_K = 0.108`
+   compared against the savings from `ffn_down at Q6_K everywhere`
+   (large), the net is positive.
+
+### What the per-layer ffn_down drill *did* contribute
+
+The per-layer measurements were the **evidence that justified
+turning off `ApplyStockBaseline`**. Without that data, we wouldn't
+know stock's `use_more_bits` set was empirically miscalibrated on
+this model (Mean Q4_K Δ: protected 0.001 vs unprotected 0.012).
+Knowing it lets us legitimately disable the stock-baseline floor
+and trust the optimizer to find a better distribution.
+
+The per-tensor data also told us *where the per-layer story was
+real and where it was noise*. Q2_K's catastrophic +3709 PPL at the
+category level vs ~+1.18 PPL summed across per-layer ablations
+revealed multi-layer compounding non-linearity at extreme bpw —
+the v3 noise clamp + snap-to-stock guards correctly prevent the
+optimizer from chasing those phantom wins.
+
+### Verdict
+
+**v3 ships.** This is the first GGUFLab recipe to strictly
+Pareto-dominate stock Q4_K_M on a real model: smaller file, lower
+PPL, same imatrix-aware quantization path. The win is structural
+(the optimizer reallocates budget across categories) rather than
+per-layer surgical, but it's only available because the per-layer
+drill provided the evidence that justified disabling
+`ApplyStockBaseline`.
+
+### Implications and ship plan
+
+1. **Generalization test.** Run the same end-to-end on Qwen3-0.6B
+   and Qwen3-4B with the existing reference profiles +
+   `ApplyStockBaseline=off`. If both also Pareto-beat stock, the
+   v3 default recommendation should be:
+   _Stock Q4_K_M is suboptimal on Qwen3-class models; use
+   GGUFLab's per-category profile-driven recipe._
+2. **Cross-architecture test.** Run on Llama-3.2-1B. Run 19 saw v2
+   ship at parity on Llama; v3 with the new clamps + custom
+   quantizer might find a similar reallocation win or might not
+   (Llama's heuristic may already be approximately optimal).
+3. **Per-tensor finder.** With promotion now wired, future runs
+   should drill categories besides ffn_down (attn_v showed the
+   most measurement noise; per-layer attn_v on 4B was the
+   originally-motivating drill). With promotion enabled, individual
+   high-sensitivity layers can be lifted to Q6_K paid for by
+   demote-safe siblings. ffn_down didn't trigger that path because
+   the optimizer chose Q6_K for the whole category.
+
+### Reproduction
+
+```
+src=$HOME/.cache/llama-models/Qwen/Qwen3-1.7B/Qwen3-1.7B.F16.gguf
+imt=$HOME/.cache/llama-models/Qwen/Qwen3-1.7B/Qwen3-1.7B.F16.imatrix.gguf
+cp data/profiles/qwen3-1.7B-per-layer.profile.json $HOME/.cache/llama-models/Qwen/Qwen3-1.7B/
+
+# In GGUFLab Adaptive Quantization:
+#   - Input GGUF: $src
+#   - Imatrix:    $imt
+#   - Profile:    Browse to qwen3-1.7B-per-layer.profile.json
+#   - Target:     4.95 bpw
+#   - Advanced:   ApplyStockBaseline=off, UsePerTensorData=on, AllowPerTensorPromotion=on
+#   - Quantize → Qwen3-1.7B.F16.profile-4.95.gguf
+
+# Stock baseline:
+# In GGUFLab Quantize:
+#   - Input:   $src, Imatrix: $imt, Quant type: Q4_K_M
+#   - Output:  Qwen3-1.7B.F16.Q4_K_M.gguf
+
+# PPL on both via Perplexity page (wiki.test, ctx=512, score-second-half-only).
+```
+
+Recipe artifact saved at
+`$HOME/.cache/llama-models/Qwen/Qwen3-1.7B/Qwen3-1.7B.F16.recipe-4.95.json`
+for inspection and reproduction.
 
 ## Run 20 — 2026-04-27 21:50  (Cross-size at scale: Qwen3-4B with imatrix)
 
