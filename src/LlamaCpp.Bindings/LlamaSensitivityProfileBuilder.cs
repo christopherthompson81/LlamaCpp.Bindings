@@ -1,6 +1,3 @@
-using System.Runtime.CompilerServices;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace LlamaCpp.Bindings;
@@ -16,15 +13,22 @@ namespace LlamaCpp.Bindings;
 ///   <item>Run all (1 + N×M) PPL passes through
 ///         <see cref="LlamaPerplexity.RunParallelAsync"/> at the
 ///         configured concurrency — this is the parallel unlock that
-///         makes profile-building tractable (<c>~6 min</c> for
-///         Qwen3-0.6B on a 3090 + i7-10700K vs <c>~88 min</c> serial).</item>
+///         makes profile-building tractable.</item>
 ///   <item>Compute ΔPPL = ablation_ppl − baseline_ppl per cell.</item>
 ///   <item>Detect each category's "knee" — the smallest type before
-///         ΔPPL crosses a catastrophic threshold (default 5.0 PPL).
-///         Recipes built from this profile won't drop a category below
-///         its knee.</item>
+///         ΔPPL crosses a catastrophic threshold (default 5.0 PPL).</item>
 /// </list>
 /// </summary>
+/// <remarks>
+/// <para>
+/// Persistence: every PPL measurement (baseline + per-category) is
+/// written to <see cref="LlamaInvestigationDb"/> as it lands. Resume
+/// across crashes or cancellations is automatic — re-running the same
+/// campaign skips cells that already have a sample in the DB. The DB
+/// is the source of truth; the profile JSON returned from
+/// <see cref="BuildAsync"/> is a derived snapshot.
+/// </para>
+/// </remarks>
 public static class LlamaSensitivityProfileBuilder
 {
     /// <summary>Tunable knobs for <see cref="BuildAsync"/>.</summary>
@@ -57,10 +61,7 @@ public static class LlamaSensitivityProfileBuilder
         /// Concurrency cap for the inner PPL runner. <c>0</c> (default)
         /// means "auto" — <see cref="LlamaPerplexity.RecommendConcurrency"/>
         /// looks at the actual ablation file sizes and the configured VRAM
-        /// budget to pick a value that scales with model size. The bench-
-        /// derived ceiling on 16-logical-core CPUs is 8 (softmax wants
-        /// 2+ threads/job); on ~24 GB VRAM the per-instance budget caps
-        /// it at 8 / 5 / 2 for 0.6B / 1.7B / 4B-class F16 sources.
+        /// budget to pick a value that scales with model size.
         /// </summary>
         public int MaxConcurrent { get; set; } = 0;
 
@@ -89,20 +90,6 @@ public static class LlamaSensitivityProfileBuilder
         public LlamaPerplexityOptions? PerplexityOptions { get; set; }
 
         /// <summary>
-        /// Path to a JSON checkpoint that survives builder crashes. After
-        /// each PPL completes its result is appended and the file is
-        /// atomically rewritten; on a subsequent run the builder loads
-        /// it, validates it matches this campaign's source/corpus/specs,
-        /// and skips any (category, type) already scored. Default
-        /// (null) places <c>checkpoint.json</c> inside the working
-        /// directory so resumability is on by default — the cost is one
-        /// small file write per completed PPL. Set to a path outside
-        /// <see cref="WorkingDirectory"/> if you want the checkpoint to
-        /// outlive <see cref="CleanupWorkingDirectory"/>.
-        /// </summary>
-        public string? CheckpointPath { get; set; }
-
-        /// <summary>
         /// Per-category catastrophic threshold used to compute
         /// <see cref="LlamaSensitivityCategoryCoefficient.RecommendedFloor"/>.
         /// A type is below the floor if its ΔPPL exceeds this value;
@@ -112,6 +99,24 @@ public static class LlamaSensitivityProfileBuilder
         /// knee.
         /// </summary>
         public double KneeDeltaPplThreshold { get; set; } = 5.0;
+
+        /// <summary>
+        /// Measurement database. Every PPL result lands here as one row;
+        /// resume across crashes/cancellations skips cells that already
+        /// have a sample. <c>null</c> (default) opens
+        /// <see cref="LlamaInvestigationDb.DefaultPath"/> internally and
+        /// disposes it when the campaign finishes. Pass an explicit
+        /// instance to share a DB across multiple builder calls (e.g.
+        /// per-category followed by per-layer mode).
+        /// </summary>
+        public LlamaInvestigationDb? MeasurementDb { get; set; }
+
+        /// <summary>
+        /// Optional GPU model string recorded in each measurement row
+        /// (e.g. "RTX 3090"). Helps disambiguate cross-environment
+        /// comparisons over time. <c>null</c> leaves the field unset.
+        /// </summary>
+        public string? GpuModel { get; set; }
     }
 
     /// <summary>Progress event raised as the campaign advances.</summary>
@@ -128,6 +133,9 @@ public static class LlamaSensitivityProfileBuilder
         Scoring,
         Done,
     }
+
+    /// <summary>Sentinel <see cref="LlamaMeasurementRecord.AblationTarget"/> for the F16 baseline measurement.</summary>
+    public const string BaselineTarget = "baseline";
 
     /// <summary>Build a sensitivity profile for <paramref name="sourceModelPath"/>.</summary>
     public static async Task<LlamaSensitivityProfile> BuildAsync(
@@ -152,13 +160,30 @@ public static class LlamaSensitivityProfileBuilder
             "llama-sensitivity-profile-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);
 
+        // Open or borrow the measurement DB. If we open it ourselves we
+        // own its lifetime; if the caller passed one we leave them to
+        // dispose it.
+        var ownsDb = opts.MeasurementDb is null;
+        var db = opts.MeasurementDb ?? LlamaInvestigationDb.Open();
+
         try
         {
-            // --- 1. Enumerate the source's 2-D weight tensors and group
+            // --- 1. Compute content-stable identity for this campaign.
+            //     These hashes key every row; renaming/relocating the
+            //     model file later still matches its measurements.
+            var modelSha   = LlamaInvestigationDb.ComputeContentSha(sourceModelPath);
+            var corpusSha  = LlamaInvestigationDb.ComputeTextSha(corpusText);
+            var imatrixSha = string.IsNullOrEmpty(opts.ImatrixPath)
+                ? LlamaInvestigationDb.NoImatrixSha
+                : LlamaInvestigationDb.ComputeContentSha(opts.ImatrixPath);
+            var corpusName = Path.GetFileName(corpusPath);
+
+            // --- 2. Enumerate the source's 2-D weight tensors and group
             //        them by category so we can build per-category recipes.
             var ggufFile = LlamaGgufFile.Open(sourceModelPath);
             var architectureId = ResolveArchitecture(ggufFile);
             var layerCount = ResolveLayerCount(ggufFile);
+            var paramCount = ResolveParameterCount(ggufFile);
 
             var weightTensors = ggufFile.Tensors
                 .Where(t => t.Dimensions.Length > 1 && t.Name.EndsWith(".weight", StringComparison.Ordinal))
@@ -177,7 +202,7 @@ public static class LlamaSensitivityProfileBuilder
                 }
             }
 
-            // --- 2. Build the F16 baseline + every (category, type) ablation
+            // --- 3. Build the F16 baseline + every (category, type) ablation
             //        quant. All written into workDir as <label>.gguf.
             var baselinePath = Path.Combine(workDir, "baseline.gguf");
             int totalJobs = 1 + opts.Categories.Count * opts.CandidateTypes.Count;
@@ -186,78 +211,53 @@ public static class LlamaSensitivityProfileBuilder
             void ReportQuant(string label) =>
                 progress?.Report(new Progress(Stage.Quantizing, completed, totalJobs, label));
 
-            // Two distinct knobs that used to be conflated:
-            //   - batch size: how many ablations we quantize+score per
-            //     pipeline iteration. Bounds peak disk use and the number
-            //     of files in flight.
-            //   - PPL concurrency: how many of those run on the GPU
-            //     simultaneously. This wants per-batch sizing because
-            //     ablation files vary 3× in size between Q2_K (~25% F16)
-            //     and Q8_0 (~53% F16). Sizing PPL concurrency from the
-            //     F16 source over-reserves VRAM by 2-4× on every non-
-            //     baseline batch.
-            //
-            // Fix: batch size stays bounded (CPU/2 or user override),
-            // PPL concurrency is auto-detected per-batch from the actual
-            // quantized file paths via RunParallelAsync's built-in
-            // RecommendConcurrency call.
-            int totalAblations = opts.Categories.Count * opts.CandidateTypes.Count;
             int batchSize = opts.MaxConcurrent > 0
                 ? opts.MaxConcurrent
                 : Math.Min(Environment.ProcessorCount, 8);
 
             // Default to n_ctx=512 to match the wikitext-2 published-number
             // convention used in Run 9/11 (and what GGUFLab's standalone
-            // Perplexity tool uses). The bindings' raw default is 2048,
-            // which gives lower absolute PPL but doesn't match the
-            // existing investigation numbers.
+            // Perplexity tool uses).
             var pplOpts = opts.PerplexityOptions ?? new LlamaPerplexityOptions { ContextSize = 512 };
-            var ablationPpl = new Dictionary<(string Cat, LlamaTensorType Type), double>();
 
-            // ---- Resumability ----
-            // Load any prior checkpoint that was written by a crashed or
-            // interrupted earlier run. We only honor it if the campaign
-            // signature matches (same source, same corpus, same specs);
-            // otherwise we ignore it and start fresh — better than
-            // silently merging partial results from a different setup.
-            var checkpointPath = opts.CheckpointPath ?? Path.Combine(workDir, "checkpoint.json");
-            var corpusName = Path.GetFileName(corpusPath);
-            var checkpoint = TryLoadCheckpoint(checkpointPath, sourceModelPath, corpusName,
-                opts.Categories, opts.CandidateTypes);
-            double? resumedBaseline = checkpoint?.Baseline;
-            if (checkpoint is not null)
+            // ---- Resumability via DB ----
+            // Pull every existing measurement for this exact campaign
+            // signature into an in-memory dict so the inner loop's
+            // skip-check is O(1). The DB is the source of truth across
+            // process restarts; the dict is just a cache for this run.
+            var ablationPpl = new Dictionary<(string Cat, LlamaTensorType Type), double>();
+            double? resumedBaseline = null;
+            foreach (var existing in db.Query(new LlamaMeasurementFilter
             {
-                foreach (var (key, ppl) in checkpoint.Ablations)
+                ModelSha = modelSha, CorpusSha = corpusSha, ImatrixSha = imatrixSha,
+                ContextSize = pplOpts.ContextSize,
+            }))
+            {
+                if (existing.AblationTarget == BaselineTarget)
                 {
-                    var split = key.Split('|');
-                    if (split.Length == 2 && Enum.TryParse<LlamaTensorType>(split[1], out var t))
-                        ablationPpl[(split[0], t)] = ppl;
+                    // Latest baseline wins (Query returns DESC by date).
+                    resumedBaseline ??= existing.AblationPpl;
+                    continue;
                 }
+                if (!existing.AblationTarget.StartsWith("category:", StringComparison.Ordinal))
+                    continue;    // tensor: rows belong to per-layer mode
+                var catName = existing.AblationTarget["category:".Length..];
+                if (!opts.Categories.Contains(catName)) continue;
+                if (!opts.CandidateTypes.Contains(existing.AblationType)) continue;
+                ablationPpl.TryAdd((catName, existing.AblationType), existing.AblationPpl);
             }
 
-            // ---- Pipelined disk-bounded campaign ----
-            // The naive design ("quantize all 22 files, then PPL them all,
-            // then delete") needs ~22× the source size on disk. For
-            // Qwen3-1.7B F16 that's 77 GB, which busts /tmp on most
-            // machines. Instead we pipeline in batches of `concurrency`:
-            //   • Quantize the next batch (sequential — quantize is fast)
-            //   • Run those PPLs through the parallel runner
-            //   • Delete each ablation's file as soon as its PPL completes
-            // Disk peak is bounded by concurrency × file_size — so 8 × 1.4 GB
-            // = ~11 GB for the 0.6B model, 5 × 3.5 GB = ~18 GB for 1.7B.
-
             // First: baseline. One file in flight, then deleted. If the
-            // checkpoint already has it, skip both the quantize and the
-            // PPL — saves ~30 s on small models, more on big ones.
+            // DB already has it, skip both quantize and PPL.
             double baseline;
             int scored;
             if (resumedBaseline is double cachedBaseline)
             {
                 baseline = cachedBaseline;
-                completed++;  // count the would-have-quantized baseline
-                scored = 1 + ablationPpl.Count;  // baseline + any cached ablations
+                completed++;
+                scored = 1 + ablationPpl.Count;
                 progress?.Report(new Progress(Stage.Scoring, scored, totalJobs,
-                    CurrentLabel: $"resumed from checkpoint (baseline + {ablationPpl.Count} ablations)"));
+                    CurrentLabel: $"resumed from DB (baseline + {ablationPpl.Count} ablations)"));
             }
             else
             {
@@ -280,21 +280,30 @@ public static class LlamaSensitivityProfileBuilder
                     baseline = jr.Result.Perplexity;
                 }
                 try { File.Delete(baselinePath); } catch { /* best-effort */ }
+                if (double.IsNaN(baseline))
+                    throw new InvalidOperationException("Baseline PPL never returned from runner.");
+
+                db.RecordMeasurement(BuildMeasurementRecord(
+                    modelSha, architectureId, paramCount, corpusSha, corpusName,
+                    imatrixSha, pplOpts.ContextSize,
+                    target:        BaselineTarget,
+                    ablationType:  LlamaTensorType.F16,
+                    baselineType:  LlamaTensorType.F16,
+                    baselinePpl:   baseline,
+                    ablationPpl:   baseline,
+                    deltaPpl:      0.0,
+                    gpuModel:      opts.GpuModel));
                 scored = 1;
-                SaveCheckpoint(checkpointPath, sourceModelPath, corpusName,
-                    opts.Categories, opts.CandidateTypes, baseline, ablationPpl);
                 progress?.Report(new Progress(Stage.Scoring, scored, totalJobs, CurrentLabel: "baseline done"));
             }
 
-            // Now the ablation specs, batched into rounds of `batchSize`.
-            // Skip any (cat, type) the checkpoint already has scored.
+            // Now the ablation specs, batched into rounds of batchSize.
+            // Skip any (cat, type) the DB already has.
             var allSpecs = new List<(string Category, LlamaTensorType Type)>();
             foreach (var category in opts.Categories)
                 foreach (var type in opts.CandidateTypes)
                     if (!ablationPpl.ContainsKey((category, type)))
                         allSpecs.Add((category, type));
-            // Account for already-completed jobs in `completed` so progress
-            // reports remain meaningful (denominator is total, not remaining).
             completed += ablationPpl.Count;
 
             for (int batchStart = 0; batchStart < allSpecs.Count; batchStart += batchSize)
@@ -303,9 +312,6 @@ public static class LlamaSensitivityProfileBuilder
                 var batch = allSpecs.Skip(batchStart).Take(batchSize).ToList();
                 var batchPaths = new List<(string Cat, LlamaTensorType Type, string Path)>();
 
-                // Quantize this batch sequentially (quantize is CPU-only
-                // and not the bottleneck — overlapping with PPL would
-                // double the disk peak for marginal time savings).
                 foreach (var (cat, type) in batch)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -322,17 +328,11 @@ public static class LlamaSensitivityProfileBuilder
                     completed++;
                 }
 
-                // Run PPLs for this batch in parallel. As each finishes,
-                // delete its file to keep disk peak bounded.
                 var batchJobs = batchPaths.Select(bp =>
                     new LlamaPerplexity.PerplexityJob(
                         ModelPath: bp.Path, Corpus: corpusText, Options: pplOpts,
                         Tag: $"{bp.Cat}|{bp.Type}|{bp.Path}")).ToList();
 
-                // maxConcurrent: 0 → RunParallelAsync auto-detects from
-                // the actual quantized file paths, so a Q2_K-heavy batch
-                // (small files) gets higher PPL concurrency than a
-                // Q8_0-heavy batch (larger files).
                 await foreach (var jr in LlamaPerplexity.RunParallelAsync(
                     batchJobs, maxConcurrent: 0, cancellationToken: cancellationToken))
                 {
@@ -343,18 +343,24 @@ public static class LlamaSensitivityProfileBuilder
                         var cat = split[0];
                         var type = Enum.Parse<LlamaTensorType>(split[1]);
                         var path = split[2];
-                        ablationPpl[(cat, type)] = jr.Result.Perplexity;
-                        SaveCheckpoint(checkpointPath, sourceModelPath, corpusName,
-                            opts.Categories, opts.CandidateTypes, baseline, ablationPpl);
+                        var ablation = jr.Result.Perplexity;
+                        ablationPpl[(cat, type)] = ablation;
+                        db.RecordMeasurement(BuildMeasurementRecord(
+                            modelSha, architectureId, paramCount, corpusSha, corpusName,
+                            imatrixSha, pplOpts.ContextSize,
+                            target:        $"category:{cat}",
+                            ablationType:  type,
+                            baselineType:  LlamaTensorType.F16,
+                            baselinePpl:   baseline,
+                            ablationPpl:   ablation,
+                            deltaPpl:      ablation - baseline,
+                            gpuModel:      opts.GpuModel));
                         progress?.Report(new Progress(Stage.Scoring, scored, totalJobs,
-                            CurrentLabel: $"{cat} @ {type} = {jr.Result.Perplexity:F4}"));
+                            CurrentLabel: $"{cat} @ {type} = {ablation:F4}"));
                         try { File.Delete(path); } catch { /* best-effort */ }
                     }
                 }
             }
-
-            if (double.IsNaN(baseline))
-                throw new InvalidOperationException("Baseline PPL never returned from runner.");
 
             // --- 4. Build the per-category coefficient records.
             var categories = new Dictionary<string, LlamaSensitivityCategoryCoefficient>();
@@ -368,9 +374,6 @@ public static class LlamaSensitivityProfileBuilder
                 }
 
                 LlamaTensorType? floor = null;
-                // Walk types small→large; first one whose ΔPPL is below the
-                // catastrophic threshold sets the floor (anything smaller
-                // than that is the "do not cross" band).
                 foreach (var type in opts.CandidateTypes
                              .OrderBy(t => GetBitsPerElement(t)))
                 {
@@ -387,8 +390,8 @@ public static class LlamaSensitivityProfileBuilder
             var provenance = new LlamaSensitivityProvenance(
                 Method:               "ablation",
                 SourceModel:          Path.GetFileName(sourceModelPath),
-                SourceParameterCount: ResolveParameterCount(ggufFile),
-                Corpus:               Path.GetFileName(corpusPath),
+                SourceParameterCount: paramCount,
+                Corpus:               corpusName,
                 BuiltAtUtc:           DateTime.UtcNow,
                 BuilderVersion:       BuilderVersionString);
             return new LlamaSensitivityProfile(
@@ -403,6 +406,7 @@ public static class LlamaSensitivityProfileBuilder
         }
         finally
         {
+            if (ownsDb) db.Dispose();
             if (opts.CleanupWorkingDirectory)
             {
                 try { Directory.Delete(workDir, recursive: true); }
@@ -411,72 +415,31 @@ public static class LlamaSensitivityProfileBuilder
         }
     }
 
-    // ---- checkpoint -----------------------------------------------------
-
-    /// <summary>
-    /// On-disk checkpoint shape. Carries enough identity bits
-    /// (<c>SourceModelPath</c>, <c>CorpusName</c>, <c>Categories</c>,
-    /// <c>CandidateTypes</c>) to detect mismatch and refuse to resume
-    /// across incompatible campaigns.
-    /// </summary>
-    private sealed record Checkpoint(
-        string SourceModelPath,
-        string CorpusName,
-        IReadOnlyList<string> Categories,
-        IReadOnlyList<LlamaTensorType> CandidateTypes,
-        double? Baseline,
-        Dictionary<string, double> Ablations,
-        DateTime UpdatedAtUtc);
-
-    private static readonly JsonSerializerOptions CheckpointJsonOpts = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new JsonStringEnumConverter() },
-        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
-    };
-
-    private static Checkpoint? TryLoadCheckpoint(
-        string path, string sourceModelPath, string corpusName,
-        IReadOnlyList<string> categories, IReadOnlyList<LlamaTensorType> candidateTypes)
-    {
-        if (!File.Exists(path)) return null;
-        try
-        {
-            var cp = JsonSerializer.Deserialize<Checkpoint>(File.ReadAllText(path), CheckpointJsonOpts);
-            if (cp is null) return null;
-            // Reject mismatched campaigns — silently merging would produce
-            // a bogus profile (different corpus → different baselines).
-            if (cp.SourceModelPath != sourceModelPath) return null;
-            if (cp.CorpusName != corpusName) return null;
-            if (!cp.Categories.SequenceEqual(categories)) return null;
-            if (!cp.CandidateTypes.SequenceEqual(candidateTypes)) return null;
-            return cp;
-        }
-        catch
-        {
-            // Corrupt checkpoint → start over rather than crashing.
-            return null;
-        }
-    }
-
-    private static void SaveCheckpoint(
-        string path, string sourceModelPath, string corpusName,
-        IReadOnlyList<string> categories, IReadOnlyList<LlamaTensorType> candidateTypes,
-        double baseline,
-        Dictionary<(string Cat, LlamaTensorType Type), double> ablations)
-    {
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var dict = ablations.ToDictionary(kv => $"{kv.Key.Cat}|{kv.Key.Type}", kv => kv.Value);
-        var cp = new Checkpoint(sourceModelPath, corpusName, categories, candidateTypes,
-            double.IsNaN(baseline) ? null : baseline, dict, DateTime.UtcNow);
-        // Atomic write: stage to .tmp, then rename. Avoids a half-written
-        // file if the process is killed mid-serialize.
-        var tmp = path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(cp, CheckpointJsonOpts));
-        File.Move(tmp, path, overwrite: true);
-    }
+    private static LlamaMeasurementRecord BuildMeasurementRecord(
+        string modelSha, string archId, long paramCount,
+        string corpusSha, string corpusName, string imatrixSha, int contextSize,
+        string target, LlamaTensorType ablationType, LlamaTensorType baselineType,
+        double baselinePpl, double ablationPpl, double deltaPpl,
+        string? gpuModel) =>
+        new(
+            ModelSha:        modelSha,
+            ArchId:          archId,
+            ParamCount:      paramCount,
+            CorpusSha:       corpusSha,
+            CorpusName:      corpusName,
+            ImatrixSha:      imatrixSha,
+            ContextSize:     contextSize,
+            AblationTarget:  target,
+            AblationType:    ablationType,
+            BaselineType:    baselineType,
+            BaselinePpl:     baselinePpl,
+            AblationPpl:     ablationPpl,
+            DeltaPpl:        deltaPpl,
+            MeasuredAtUtc:   DateTime.UtcNow,
+            BuilderVersion:  BuilderVersionString,
+            LlamaCppVersion: LlamaCppVersionInfo.GitDescribe,
+            GpuModel:        gpuModel,
+            Notes:           null);
 
     // ---- helpers --------------------------------------------------------
 
@@ -507,16 +470,6 @@ public static class LlamaSensitivityProfileBuilder
     /// the Run 9/11 investigation scripts and llama-quant.cpp's
     /// <c>tensor_get_category</c>.
     /// </summary>
-    /// <remarks>
-    /// For category strings containing a dot (e.g. <c>attn_q.weight</c>,
-    /// <c>output.weight</c>), match by exact equality OR suffix preceded
-    /// by a period: this keeps <c>blk.0.attn_q.weight</c> matching
-    /// <c>attn_q.weight</c> while preventing <c>blk.0.attn_output.weight</c>
-    /// from spuriously matching the top-level <c>output.weight</c>
-    /// category. (Found Run 17 prep: a naive <c>EndsWith("output.weight")</c>
-    /// double-counted all 28 attention outputs into the output category,
-    /// producing nonsense ΔPPL of +10 PPL at Q2_K.)
-    /// </remarks>
     private static bool CategoryMatch(string tensorName, string category) =>
         category.Contains('.')
             ? tensorName == category ||
@@ -554,7 +507,6 @@ public static class LlamaSensitivityProfileBuilder
 
     private static int ResolveLayerCount(LlamaGgufFile file)
     {
-        // Architecture-specific key — try the standard pattern first.
         var arch = ResolveArchitecture(file);
         var key = $"{arch}.block_count";
         var entry = file.Metadata.FirstOrDefault(m => m.Key == key);
@@ -570,10 +522,7 @@ public static class LlamaSensitivityProfileBuilder
 
     /// <summary>
     /// Total parameter count = sum over all weight tensors of the
-    /// product of their dimensions. Used by the recipe builder's
-    /// size-scaling factor (target_params / source_params), so we
-    /// store it in the profile's provenance rather than recomputing
-    /// it later from a possibly-missing source file.
+    /// product of their dimensions.
     /// </summary>
     private static long ResolveParameterCount(LlamaGgufFile file)
     {
@@ -590,12 +539,7 @@ public static class LlamaSensitivityProfileBuilder
     private static readonly string BuilderVersionString =
         $"LlamaSensitivityProfileBuilder/{typeof(LlamaSensitivityProfileBuilder).Assembly.GetName().Version}";
 
-    /// <summary>
-    /// Quantize <paramref name="source"/> to <paramref name="output"/>
-    /// with optional imatrix and optional recipe. Wrapper around
-    /// <see cref="LlamaQuantizer.QuantizeAsync"/> that applies the
-    /// recipe through <see cref="LlamaQuantRecipe.ToTtOverrides"/>.
-    /// </summary>
+    /// <summary>Quantize <paramref name="source"/> to <paramref name="output"/> with optional imatrix and recipe.</summary>
     private static Task QuantizeAsync(
         string source, string output,
         LlamaFileType ftype,
