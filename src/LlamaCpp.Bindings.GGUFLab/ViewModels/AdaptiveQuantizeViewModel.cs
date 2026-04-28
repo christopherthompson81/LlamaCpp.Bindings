@@ -203,82 +203,182 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         };
     }
 
+    /// <summary>
+    /// Coalescing counter for background refreshes — every property
+    /// change kicks a Task.Run; results from earlier (superseded)
+    /// runs are dropped. Without this, picking an active model would
+    /// freeze the page transition for ~500 ms (three GGUF opens +
+    /// profile-directory scan + recipe enumeration on the UI thread).
+    /// </summary>
+    private int _refreshSeq;
+
     partial void OnInputPathChanged(string value)
     {
-        ResolveProfileFromInputs();
-        RebuildRecipe();
         NotifyRemediesChanged();
+        _ = ScheduleRefreshAsync();
     }
 
     partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
 
-    partial void OnProfilePathChanged(string value)
-    {
-        ResolveProfileFromInputs();
-        RebuildRecipe();
-    }
-
-    partial void OnTargetBitsPerElementChanged(double value) => RebuildRecipe();
-    partial void OnMinPredictedGainPplChanged(double value)  => RebuildRecipe();
-    partial void OnMinPplGainPerBpwChanged(double value)     => RebuildRecipe();
-    partial void OnApplyStockBaselineChanged(bool value)     => RebuildRecipe();
-    partial void OnSizeScalingExponentChanged(double value)  => RebuildRecipe();
-    partial void OnUsePerTensorDataChanged(bool value)       => RebuildRecipe();
+    partial void OnProfilePathChanged(string value)             => _ = ScheduleRefreshAsync();
+    partial void OnTargetBitsPerElementChanged(double value)    => _ = ScheduleRefreshAsync();
+    partial void OnMinPredictedGainPplChanged(double value)     => _ = ScheduleRefreshAsync();
+    partial void OnMinPplGainPerBpwChanged(double value)        => _ = ScheduleRefreshAsync();
+    partial void OnApplyStockBaselineChanged(bool value)        => _ = ScheduleRefreshAsync();
+    partial void OnSizeScalingExponentChanged(double value)     => _ = ScheduleRefreshAsync();
+    partial void OnUsePerTensorDataChanged(bool value)          => _ = ScheduleRefreshAsync();
 
     /// <summary>
-    /// Resolve the active profile: explicit path wins; otherwise scan
-    /// <c>data/profiles/</c> beside the repo root and pick the best
-    /// arch+size match for the input GGUF.
+    /// Snapshot inputs on the UI thread, run the heavy work
+    /// (profile resolution + GGUF read + recipe enumeration + rails
+    /// computation) on the thread pool, drop the result if a newer
+    /// refresh has been kicked, otherwise apply on the UI thread.
     /// </summary>
-    private void ResolveProfileFromInputs()
+    private async Task ScheduleRefreshAsync()
     {
-        // Explicit profile path takes priority.
-        if (!string.IsNullOrWhiteSpace(ProfilePath) && File.Exists(ProfilePath))
-        {
-            try
-            {
-                LoadedProfile = LlamaSensitivityProfile.LoadFromJson(ProfilePath);
-                ProfileResolutionLine = $"Using explicit profile: {Path.GetFileName(ProfilePath)}";
-                return;
-            }
-            catch (Exception ex)
-            {
-                LoadedProfile = null;
-                ProfileResolutionLine = $"Failed to load {ProfilePath}: {ex.Message}";
-                return;
-            }
-        }
+        var seq = System.Threading.Interlocked.Increment(ref _refreshSeq);
 
-        // Auto-match by reading the input GGUF's architecture + parameter count.
-        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath))
+        // Capture inputs — these may change while the refresh runs;
+        // the sequence counter discards stale results.
+        var inputPath   = InputPath;
+        var profilePath = ProfilePath;
+        var targetBpw   = TargetBitsPerElement;
+        var opts = new LlamaQuantRecipeFromProfileOptions
         {
-            LoadedProfile = null;
-            ProfileResolutionLine = "Pick an input GGUF to auto-match a profile.";
-            return;
-        }
+            MinPredictedGainPpl  = MinPredictedGainPpl,
+            MinPplGainPerBpw     = MinPplGainPerBpw,
+            ApplyStockBaseline   = ApplyStockBaseline,
+            SizeScalingExponent  = SizeScalingExponent,
+            UsePerTensorData     = UsePerTensorData,
+        };
 
         try
         {
-            // LlamaBackend is initialized once by MainWindowViewModel; no
-            // need to re-init here.
-            var gguf = LlamaGgufFile.Open(InputPath);
-            var arch = gguf.Metadata.FirstOrDefault(m => m.Key == "general.architecture")?.Value.AsString();
-            if (string.IsNullOrEmpty(arch))
+            var result = await Task.Run(() => ComputeRefresh(inputPath, profilePath, targetBpw, opts));
+            if (_refreshSeq != seq) return;    // superseded by a newer change
+            ApplyRefreshResult(result);
+        }
+        catch (Exception ex)
+        {
+            if (_refreshSeq != seq) return;
+            RecipeSummaryLine = $"Refresh failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Pure computation: produce the refreshed profile + recipe + rails
+    /// from the captured inputs. Runs on a thread pool worker; must not
+    /// touch UI state. Reads the source GGUF exactly once.
+    /// </summary>
+    private static RefreshResult ComputeRefresh(
+        string inputPath,
+        string profilePath,
+        double targetBpw,
+        LlamaQuantRecipeFromProfileOptions opts)
+    {
+        // ---- 1. Resolve profile (explicit > auto-match > none) ----
+        LlamaSensitivityProfile? profile = null;
+        string profileMsg;
+
+        if (!string.IsNullOrWhiteSpace(profilePath) && File.Exists(profilePath))
+        {
+            try
             {
-                LoadedProfile = null;
-                ProfileResolutionLine = "Couldn't read general.architecture from the GGUF.";
-                return;
+                profile = LlamaSensitivityProfile.LoadFromJson(profilePath);
+                profileMsg = $"Using explicit profile: {Path.GetFileName(profilePath)}";
             }
+            catch (Exception ex)
+            {
+                profileMsg = $"Failed to load {profilePath}: {ex.Message}";
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(inputPath) && File.Exists(inputPath))
+        {
+            (profile, profileMsg) = AutoMatchProfile(inputPath);
+        }
+        else
+        {
+            profileMsg = "Pick an input GGUF to auto-match a profile.";
+        }
+
+        if (profile is null
+            || string.IsNullOrWhiteSpace(inputPath)
+            || !File.Exists(inputPath)
+            || !(targetBpw > 0))
+        {
+            return new RefreshResult(profile, profileMsg, null, string.Empty,
+                Array.Empty<RecipeRow>(), Array.Empty<RailMessage>());
+        }
+
+        // ---- 2. Open GGUF once for everything below ----
+        LlamaGgufFile gguf;
+        try
+        {
+            gguf = LlamaGgufFile.Open(inputPath);
+        }
+        catch (Exception ex)
+        {
+            return new RefreshResult(profile, profileMsg, null,
+                $"Failed to open GGUF: {ex.Message}",
+                Array.Empty<RecipeRow>(), Array.Empty<RailMessage>());
+        }
+
+        var targetArch = gguf.Metadata
+            .FirstOrDefault(m => m.Key == "general.architecture")
+            ?.Value.AsString();
+        long paramCount = gguf.Tensors.Sum(t => t.Dimensions.Aggregate(1L, (a, b) => a * (long)b));
+        var weightLayout = gguf.Tensors
+            .Where(t => t.Dimensions.Length > 1 && t.Name.EndsWith(".weight", StringComparison.Ordinal))
+            .Select(t => (Name: t.Name, Elements: t.Dimensions.Aggregate(1L, (a, b) => a * (long)b)))
+            .ToList();
+
+        // ---- 3. Build recipe (no second GGUF open) ----
+        LlamaQuantRecipe? recipe = null;
+        string recipeSummary = string.Empty;
+        var rows = new List<RecipeRow>();
+        try
+        {
+            recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+                profile, weightLayout, paramCount, targetBpw, opts);
+            foreach (var e in recipe.Entries)
+                rows.Add(new RecipeRow(
+                    e.TensorName, e.ChosenType.ToString(),
+                    e.BitsPerElement, e.RelativeMse));
+
+            var distinct = recipe.Entries.Select(e => e.ChosenType).Distinct().Count();
+            var totalGain = recipe.Entries.Sum(e => e.RelativeMse);
+            var snapFired = distinct <= 2;
+            recipeSummary =
+                $"avg {recipe.AverageBitsPerElement:F3} bpw  ·  {recipe.Entries.Count} tensors  ·  " +
+                $"{distinct} distinct types  ·  predicted ΔPPL sum = {totalGain:F2}" +
+                (snapFired ? "  ·  snap-to-stock fired" : "");
+        }
+        catch (Exception ex)
+        {
+            recipeSummary = $"Recipe build failed: {ex.Message}";
+        }
+
+        // ---- 4. Compute rails (uses already-read GGUF info) ----
+        var rails = ComputeRails(profile, targetArch, paramCount, targetBpw);
+
+        return new RefreshResult(profile, profileMsg, recipe, recipeSummary, rows, rails);
+    }
+
+    private static (LlamaSensitivityProfile? profile, string message) AutoMatchProfile(string inputPath)
+    {
+        try
+        {
+            var gguf = LlamaGgufFile.Open(inputPath);
+            var arch = gguf.Metadata
+                .FirstOrDefault(m => m.Key == "general.architecture")
+                ?.Value.AsString();
+            if (string.IsNullOrEmpty(arch))
+                return (null, "Couldn't read general.architecture from the GGUF.");
 
             long targetParams = gguf.Tensors.Sum(t => t.Dimensions.Aggregate(1L, (a, b) => a * (long)b));
-
             var profilesDir = ResolveProfilesDirectory();
             if (profilesDir is null || !Directory.Exists(profilesDir))
-            {
-                LoadedProfile = null;
-                ProfileResolutionLine = "No data/profiles/ directory found — pick a profile manually.";
-                return;
-            }
+                return (null, "No data/profiles/ directory found — pick a profile manually.");
 
             (string Path, LlamaSensitivityProfile Profile, double SizeRatio)? best = null;
             foreach (var jsonPath in Directory.EnumerateFiles(profilesDir, "*.profile.json"))
@@ -297,24 +397,110 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
             }
 
             if (best is null)
-            {
-                LoadedProfile = null;
-                ProfileResolutionLine = $"No profile matches arch={arch}. Build one (Profile Builder) or pick manually.";
-                return;
-            }
+                return (null, $"No profile matches arch={arch}. Build one (Profile Builder) or pick manually.");
 
-            LoadedProfile = best.Value.Profile;
             var srcParams = best.Value.Profile.Provenance.SourceParameterCount ?? 0;
             var sizeRatio = srcParams > 0 ? (double)targetParams / srcParams : 1.0;
-            ProfileResolutionLine =
-                $"Auto-matched: {Path.GetFileName(best.Value.Path)} (target/source size ratio = {sizeRatio:F2}×)";
+            return (best.Value.Profile,
+                $"Auto-matched: {Path.GetFileName(best.Value.Path)} (target/source size ratio = {sizeRatio:F2}×)");
         }
         catch (Exception ex)
         {
-            LoadedProfile = null;
-            ProfileResolutionLine = $"Profile resolution failed: {ex.Message}";
+            return (null, $"Profile resolution failed: {ex.Message}");
         }
     }
+
+    private static IReadOnlyList<RailMessage> ComputeRails(
+        LlamaSensitivityProfile profile, string? targetArch, long paramCount, double targetBpw)
+    {
+        var rails = new List<RailMessage>();
+
+        if (!string.IsNullOrEmpty(targetArch) &&
+            !string.Equals(targetArch, profile.ArchitectureId, StringComparison.Ordinal))
+        {
+            rails.Add(new RailMessage(RailSeverity.Block,
+                $"Architecture mismatch: profile is for {profile.ArchitectureId}, model is {targetArch}. " +
+                $"Recipe would mostly miss the target's tensors. Pick a profile built for {targetArch}."));
+        }
+
+        long sourceParams = profile.Provenance.SourceParameterCount ?? 0;
+        if (paramCount > 0 && sourceParams > 0)
+        {
+            var ratio = (double)paramCount / sourceParams;
+            if (ratio > 5.0 || ratio < 0.2)
+            {
+                rails.Add(new RailMessage(RailSeverity.Warn,
+                    $"Cross-size ratio is {ratio:F2}× (target/source). " +
+                    "Linear coefficient scaling extrapolates poorly past ~5×; expect predicted ΔPPLs to be " +
+                    "either far too optimistic (large→small) or pessimistic (small→large)."));
+            }
+        }
+
+        var measuredTypes = profile.Categories.Values
+            .SelectMany(c => c.DeltaPplByType.Keys)
+            .Distinct()
+            .OrderBy(LlamaQuantRecipe.GetBitsPerElement)
+            .ToList();
+        if (measuredTypes.Count > 0)
+        {
+            var minBpw = LlamaQuantRecipe.GetBitsPerElement(measuredTypes[0]);
+            var maxBpw = LlamaQuantRecipe.GetBitsPerElement(measuredTypes[^1]);
+            if (targetBpw < minBpw - 0.05)
+            {
+                rails.Add(new RailMessage(RailSeverity.Block,
+                    $"Target {targetBpw:F2} bpw is below the profile's lowest measured rung " +
+                    $"({measuredTypes[0]} = {minBpw:F2} bpw). Recipe builder can't extrapolate below; " +
+                    "build a profile that covers lower types or raise the target."));
+            }
+            else if (targetBpw > maxBpw + 0.5)
+            {
+                rails.Add(new RailMessage(RailSeverity.Warn,
+                    $"Target {targetBpw:F2} bpw is well above the profile's highest measured rung " +
+                    $"({measuredTypes[^1]} = {maxBpw:F2} bpw). Above this, the recipe pins everything to the highest measured type — no further refinement possible."));
+            }
+
+            var completeness = profile.ComputeCompleteness(profile.Categories.Keys.ToList(), measuredTypes);
+            if (!completeness.IsComplete)
+            {
+                var missing = completeness.MissingCategoryCells.Take(3).Select(c => $"{c.Category}@{c.Type}");
+                var more = completeness.MissingCategoryCells.Count > 3
+                    ? $" (+{completeness.MissingCategoryCells.Count - 3} more)"
+                    : "";
+                rails.Add(new RailMessage(RailSeverity.Warn,
+                    $"Profile is partial: {completeness.MeasuredCategoryCells}/{completeness.TotalCategoryCells} cells measured. " +
+                    $"Missing: {string.Join(", ", missing)}{more}. " +
+                    "Recipe builder will still work but choices are limited to what's measured."));
+            }
+        }
+
+        return rails;
+    }
+
+    private void ApplyRefreshResult(RefreshResult r)
+    {
+        LoadedProfile = r.Profile;
+        ProfileResolutionLine = r.ProfileMessage;
+        RecipeSummaryLine = r.RecipeSummaryLine;
+        BuiltRecipe = r.Recipe;
+
+        RecipeRows.Clear();
+        foreach (var row in r.Rows) RecipeRows.Add(row);
+
+        Rails.Clear();
+        foreach (var rail in r.Rails) Rails.Add(rail);
+
+        OnPropertyChanged(nameof(HasBlockingRail));
+        OnPropertyChanged(nameof(HasAnyRail));
+        OnPropertyChanged(nameof(CanQuantize));
+    }
+
+    private sealed record RefreshResult(
+        LlamaSensitivityProfile? Profile,
+        string ProfileMessage,
+        LlamaQuantRecipe? Recipe,
+        string RecipeSummaryLine,
+        IReadOnlyList<RecipeRow> Rows,
+        IReadOnlyList<RailMessage> Rails);
 
     /// <summary>
     /// Walk up from the running binary to find the repo's
@@ -338,57 +524,6 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
             dir = Path.GetDirectoryName(dir);
         }
         return null;
-    }
-
-    private void RebuildRecipe()
-    {
-        RecipeRows.Clear();
-        BuiltRecipe = null;
-        RecipeSummaryLine = string.Empty;
-        RefreshRails();
-
-        if (LoadedProfile is null) return;
-        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath)) return;
-        if (!(TargetBitsPerElement > 0)) return;
-
-        try
-        {
-            var opts = new LlamaQuantRecipeFromProfileOptions
-            {
-                MinPredictedGainPpl  = MinPredictedGainPpl,
-                MinPplGainPerBpw     = MinPplGainPerBpw,
-                ApplyStockBaseline   = ApplyStockBaseline,
-                SizeScalingExponent  = SizeScalingExponent,
-                UsePerTensorData     = UsePerTensorData,
-            };
-            var recipe = LlamaQuantRecipeFromProfile.Build(
-                LoadedProfile, InputPath, TargetBitsPerElement, opts);
-            BuiltRecipe = recipe;
-
-            foreach (var e in recipe.Entries)
-            {
-                RecipeRows.Add(new RecipeRow(
-                    e.TensorName,
-                    e.ChosenType.ToString(),
-                    e.BitsPerElement,
-                    e.RelativeMse));
-            }
-
-            // Snap detection: if every category lands on the same type
-            // (the largest ladder type with bpw ≤ target) modulo
-            // baseline-protected upgrades, the snap fired.
-            var distinct = recipe.Entries.Select(e => e.ChosenType).Distinct().Count();
-            var totalGain = recipe.Entries.Sum(e => e.RelativeMse);
-            var snapFired = distinct <= 2;    // recipe-pick + Q6_K-baseline override = 2 types
-            RecipeSummaryLine =
-                $"avg {recipe.AverageBitsPerElement:F3} bpw  ·  {recipe.Entries.Count} tensors  ·  " +
-                $"{distinct} distinct types  ·  predicted ΔPPL sum = {totalGain:F2}" +
-                (snapFired ? "  ·  snap-to-stock fired" : "");
-        }
-        catch (Exception ex)
-        {
-            RecipeSummaryLine = $"Recipe build failed: {ex.Message}";
-        }
     }
 
     [RelayCommand]
@@ -503,102 +638,6 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
         {
             StatusLine = $"Save failed: {ex.Message}";
         }
-    }
-
-    /// <summary>
-    /// Recompute the apply-time rails from the current inputs. The
-    /// rails are designed to catch the specific avoidable bad-decision
-    /// patterns we know about — cross-arch, cross-size extrapolation,
-    /// out-of-band target bpw, partial profile coverage. Any rail at
-    /// <see cref="RailSeverity.Block"/> disables the Quantize button.
-    /// </summary>
-    private void RefreshRails()
-    {
-        Rails.Clear();
-
-        if (LoadedProfile is not { } profile) goto Done;
-        if (string.IsNullOrWhiteSpace(InputPath) || !File.Exists(InputPath)) goto Done;
-
-        // 1) Cross-arch: profile arch must match target arch.
-        try
-        {
-            var gguf = LlamaGgufFile.Open(InputPath);
-            var targetArch = gguf.Metadata.FirstOrDefault(m => m.Key == "general.architecture")?.Value.AsString();
-            if (!string.IsNullOrEmpty(targetArch) && !string.Equals(targetArch, profile.ArchitectureId, StringComparison.Ordinal))
-            {
-                Rails.Add(new RailMessage(RailSeverity.Block,
-                    $"Architecture mismatch: profile is for {profile.ArchitectureId}, model is {targetArch}. " +
-                    "Recipe would mostly miss the target's tensors. Pick a profile built for {targetArch}."));
-            }
-
-            // 2) Cross-size ratio.
-            long targetParams = gguf.Tensors.Sum(t => t.Dimensions.Aggregate(1L, (a, b) => a * (long)b));
-            long sourceParams = profile.Provenance.SourceParameterCount ?? 0;
-            if (targetParams > 0 && sourceParams > 0)
-            {
-                var ratio = (double)targetParams / sourceParams;
-                if (ratio > 5.0 || ratio < 0.2)
-                {
-                    Rails.Add(new RailMessage(RailSeverity.Warn,
-                        $"Cross-size ratio is {ratio:F2}× (target/source). " +
-                        "Linear coefficient scaling extrapolates poorly past ~5×; expect predicted ΔPPLs to be " +
-                        "either far too optimistic (large→small) or pessimistic (small→large)."));
-                }
-            }
-        }
-        catch
-        {
-            // Best-effort — if we can't read the GGUF, skip these rails;
-            // the build/apply path will surface the real error.
-        }
-
-        // 3) Target bpw outside profile's measured ladder.
-        var measuredTypes = profile.Categories.Values
-            .SelectMany(c => c.DeltaPplByType.Keys)
-            .Distinct()
-            .OrderBy(LlamaQuantRecipe.GetBitsPerElement)
-            .ToList();
-        if (measuredTypes.Count > 0)
-        {
-            var minBpw = LlamaQuantRecipe.GetBitsPerElement(measuredTypes[0]);
-            var maxBpw = LlamaQuantRecipe.GetBitsPerElement(measuredTypes[^1]);
-            if (TargetBitsPerElement < minBpw - 0.05)
-            {
-                Rails.Add(new RailMessage(RailSeverity.Block,
-                    $"Target {TargetBitsPerElement:F2} bpw is below the profile's lowest measured rung " +
-                    $"({measuredTypes[0]} = {minBpw:F2} bpw). Recipe builder can't extrapolate below; " +
-                    "build a profile that covers lower types or raise the target."));
-            }
-            else if (TargetBitsPerElement > maxBpw + 0.5)
-            {
-                Rails.Add(new RailMessage(RailSeverity.Warn,
-                    $"Target {TargetBitsPerElement:F2} bpw is well above the profile's highest measured rung " +
-                    $"({measuredTypes[^1]} = {maxBpw:F2} bpw). Above this, the recipe pins everything to the highest measured type — no further refinement possible."));
-            }
-        }
-
-        // 4) Profile completeness.
-        if (measuredTypes.Count > 0)
-        {
-            var completeness = profile.ComputeCompleteness(profile.Categories.Keys.ToList(), measuredTypes);
-            if (!completeness.IsComplete)
-            {
-                var missing = completeness.MissingCategoryCells.Take(3)
-                    .Select(c => $"{c.Category}@{c.Type}");
-                var more = completeness.MissingCategoryCells.Count > 3
-                    ? $" (+{completeness.MissingCategoryCells.Count - 3} more)"
-                    : "";
-                Rails.Add(new RailMessage(RailSeverity.Warn,
-                    $"Profile is partial: {completeness.MeasuredCategoryCells}/{completeness.TotalCategoryCells} cells measured. " +
-                    $"Missing: {string.Join(", ", missing)}{more}. " +
-                    "Recipe builder will still work but choices are limited to what's measured."));
-            }
-        }
-
-    Done:
-        OnPropertyChanged(nameof(HasBlockingRail));
-        OnPropertyChanged(nameof(HasAnyRail));
-        OnPropertyChanged(nameof(CanQuantize));
     }
 
     public override void ApplyActiveModel(string? path)
