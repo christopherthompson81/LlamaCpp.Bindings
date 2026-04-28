@@ -135,6 +135,33 @@ public sealed class LlamaQuantRecipeFromProfileOptions
     /// </para>
     /// </remarks>
     public double MinPplGainPerBpw { get; set; } = 0.05;
+
+    /// <summary>
+    /// Snap-to-stock threshold in absolute PPL units. If the optimal
+    /// recipe's predicted ΔPPL gain over the stock-equivalent
+    /// assignment (every category at the highest ladder type whose
+    /// bpw is ≤ <c>targetBitsPerElement</c>, baseline floors applied)
+    /// falls below this value, the builder discards the recipe and
+    /// emits the stock-equivalent assignment instead.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Why this exists: Run 20 (Qwen3-4B) showed the recipe builder
+    /// will happily emit a recipe that differs from stock and predict
+    /// a sub-0.2 PPL improvement when the profile has no real headroom
+    /// to exploit (all Q4_K deltas &lt; 0.4, several already optimal
+    /// or negative). A profile that says "stock is near-optimal"
+    /// should produce a recipe that says the same — not a noise-level
+    /// wiggle on top of stock that ships with implied confidence.
+    /// </para>
+    /// <para>
+    /// Default <c>0.25</c> PPL — comfortably above measured noise on
+    /// our wiki.test corpus while still letting through the 1.7B-class
+    /// wins (those predict multi-PPL gains). Set to <c>0</c> to
+    /// disable snapping.
+    /// </para>
+    /// </remarks>
+    public double MinPredictedGainPpl { get; set; } = 0.25;
 }
 
 /// <summary>
@@ -353,8 +380,24 @@ public static class LlamaQuantRecipeFromProfile
         // which is bigger than typical tolerance bands. Exhaustive is
         // optimal, deterministic, and cheap at this scale. Revisit if
         // candidate sets grow past ~10 types × 8+ categories.
+        //
+        // Clamp the per-category deltas before scoring:
+        //   1. Zero-floor: a quantized type can never strictly improve
+        //      PPL over F16, so any δ < 0 is measurement noise (small
+        //      effect size + finite-corpus PPL variance). Floor at 0.
+        //   2. Monotone-from-above-bpw: a lower-bpw type can't have
+        //      smaller PPL impact than a higher-bpw type from the same
+        //      category. Walk the ladder by bpw descending; each lower
+        //      type's δ is at least its higher neighbor's δ.
+        // The clamp is uniform across categories — no special-casing
+        // attn_v or other "noisy" tensors. The combined clamp
+        // automatically degrades to a no-op for cleanly monotone
+        // categories (1.7B's ffn_down Q2_K=3709 is unaffected) and
+        // suppresses noise where it dominates (4B's attn_v Q2_K=−0.45
+        // becomes 0.93 from monotone-clamping against Q3_K).
+        var clampedDelta = BuildClampedScaledDeltas(profile, ladder, sizeScale);
         double ScaledDelta(string cat, LlamaTensorType type) =>
-            profile.Categories[cat].DeltaPplByType.GetValueOrDefault(type, 0.0) * sizeScale;
+            clampedDelta.GetValueOrDefault((cat, type), 0.0);
 
         // Only enumerate over categories that have at least one matching
         // tensor in the target model. This skips e.g. <c>output.weight</c>
@@ -437,6 +480,59 @@ public static class LlamaQuantRecipeFromProfile
             ?? throw new InvalidOperationException(
                 "Recipe enumeration produced no assignment — empty category space.");
 
+        // ---- 6b. Snap to stock when predicted gain is below threshold ----
+        // Build a "stock-equivalent" assignment: every category at the
+        // highest ladder type whose bpw is ≤ targetBitsPerElement (with
+        // each category's floor honored). Compare its predicted pplSum
+        // to the picked recipe's pplSum; if the gain is below the
+        // configured threshold, use the stock-equivalent instead.
+        // Rationale: when the profile says "no real headroom"
+        // (Run 20 case), shipping a noise-level wiggle off stock is
+        // strictly worse than just declaring stock optimal.
+        if (opts.MinPredictedGainPpl > 0 && perCategoryChoices.Count > 0)
+        {
+            var stockType = ladder
+                .Where(t => LlamaQuantRecipe.GetBitsPerElement(t) <= targetBitsPerElement)
+                .DefaultIfEmpty(ladder[0])
+                .Last();
+
+            var stockEquivalent = new Dictionary<string, LlamaTensorType>(StringComparer.Ordinal);
+            foreach (var (cat, allowed) in perCategoryChoices)
+            {
+                // Pick the allowed type closest to stockType from below;
+                // floor handling means some categories may be pinned above.
+                var chosen = allowed
+                    .Where(t => LlamaQuantRecipe.GetBitsPerElement(t) <=
+                                LlamaQuantRecipe.GetBitsPerElement(stockType))
+                    .DefaultIfEmpty(allowed[0])
+                    .Last();
+                stockEquivalent[cat] = chosen;
+            }
+
+            double pickPplSum = 0;
+            double stockPplSum = 0;
+            foreach (var (cat, type) in pick)
+            {
+                long catTotal = categoryElements[cat];
+                long atT = categoryAtTElements.GetValueOrDefault((cat, type));
+                if (catTotal > 0)
+                    pickPplSum += ScaledDelta(cat, type) * ((double)atT / catTotal);
+            }
+            foreach (var (cat, type) in stockEquivalent)
+            {
+                long catTotal = categoryElements[cat];
+                long atT = categoryAtTElements.GetValueOrDefault((cat, type));
+                if (catTotal > 0)
+                    stockPplSum += ScaledDelta(cat, type) * ((double)atT / catTotal);
+            }
+
+            double predictedGain = stockPplSum - pickPplSum;
+            if (predictedGain < opts.MinPredictedGainPpl)
+            {
+                pick = stockEquivalent;
+            }
+        }
+
         // ---- 7. Materialize per-tensor entries ----
         // Each tensor's effective type = max(baseline, recipe choice).
         var entries = new List<LlamaQuantRecipeEntry>(weightTensors.Count);
@@ -497,6 +593,60 @@ public static class LlamaQuantRecipeFromProfile
             EnumerateAssignments(categories, index + 1, choices, current, visit);
         }
         current.Remove(cat);
+    }
+
+    /// <summary>
+    /// Build a per-(category, ladder type) table of size-scaled
+    /// per-category ΔPPL coefficients with zero-floor + monotone-from-
+    /// above-bpw clamping applied.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Why clamp:
+    /// <list type="number">
+    ///   <item><b>Zero-floor.</b> Quantization is a strict information
+    ///     loss vs F16. A measured δ &lt; 0 means the F16-vs-quantized
+    ///     PPL difference is below the corpus's PPL measurement
+    ///     variance — noise, not signal. Floor at 0 to refuse phantom
+    ///     "free wins" (Run 20 case: 4B attn_v Q2_K = −0.45).</item>
+    ///   <item><b>Monotone-from-above-bpw.</b> A lower-bpw type can't
+    ///     strictly cause less PPL impact than a higher-bpw type from
+    ///     the same category. Non-monotonicity (4B attn_v: Q2=−0.45,
+    ///     Q3=+0.93, Q4=−0.06) signals ablation noise dominating real
+    ///     effect; pin each type's δ at ≥ its higher-bpw neighbor's δ.</item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// Implementation: walk the ladder in <em>descending</em> bpw order,
+    /// tracking a running max that doubles as the zero-floor (initialized
+    /// to 0). Each lower type's clamped δ = max(raw_scaled_δ, running_max).
+    /// One pass; both clamps fall out simultaneously.
+    /// </para>
+    /// </remarks>
+    private static Dictionary<(string Cat, LlamaTensorType T), double>
+        BuildClampedScaledDeltas(
+            LlamaSensitivityProfile profile,
+            IReadOnlyList<LlamaTensorType> ladder,
+            double sizeScale)
+    {
+        var result = new Dictionary<(string, LlamaTensorType), double>();
+        // Walk highest-bpw → lowest-bpw so each lower type can clamp
+        // against the (already-finalized) higher-bpw types' running max.
+        var byBpwDescending = ladder
+            .OrderByDescending(LlamaQuantRecipe.GetBitsPerElement)
+            .ToList();
+        foreach (var (cat, coef) in profile.Categories)
+        {
+            double runningMax = 0.0;    // zero-floor
+            foreach (var T in byBpwDescending)
+            {
+                var raw = coef.DeltaPplByType.GetValueOrDefault(T, 0.0) * sizeScale;
+                var clamped = Math.Max(raw, runningMax);
+                result[(cat, T)] = clamped;
+                runningMax = clamped;
+            }
+        }
+        return result;
     }
 
     /// <summary>

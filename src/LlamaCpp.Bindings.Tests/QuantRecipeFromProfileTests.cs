@@ -317,6 +317,218 @@ public class QuantRecipeFromProfileTests
     }
 
     [Fact]
+    public void SnapToStock_WhenPredictedGainBelowThreshold_RecipeEqualsStockEquivalent()
+    {
+        // Profile with mild sensitivities everywhere — Q4_K is already
+        // near-optimal for both categories, so any "promotion" the
+        // optimizer picks at a Q5_K-ish budget produces only a sliver
+        // of predicted gain. With MinPredictedGainPpl in force, the
+        // builder should discard the wiggle and emit the stock-
+        // equivalent (every category at the target's nearest ladder
+        // type from below).
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId:        "mild",
+            LayerCount:            4,
+            FamilyNotes:           null,
+            Provenance:            new LlamaSensitivityProvenance(
+                "ablation", "mild.gguf", 100_000_000, null, DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize:   512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 0.20,
+                        [LlamaTensorType.Q4_K] = 0.05,
+                        [LlamaTensorType.Q6_K] = 0.01,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K),
+                ["ffn_gate"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 0.10,
+                        [LlamaTensorType.Q4_K] = 0.03,
+                        [LlamaTensorType.Q6_K] = 0.00,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K),
+            });
+        var layout = SyntheticLayout(4, 1_000_000);
+
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 5.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline = false,    // isolate snap behavior from baseline floors
+            });
+
+        // Stock-equivalent at target=5.5 with ladder {Q2,Q4,Q6} = all at Q4_K
+        // (highest ladder type with bpw ≤ 5.5). The optimizer might prefer
+        // Q6_K for ffn_up to save a sliver of PPL, but the predicted gain
+        // (≤ 0.05 PPL) is below the 0.25 default → snap.
+        Assert.All(recipe.Entries, e => Assert.Equal(LlamaTensorType.Q4_K, e.ChosenType));
+    }
+
+    [Fact]
+    public void SnapToStock_WhenPredictedGainAboveThreshold_KeepsRecipeChoice()
+    {
+        // The default SyntheticProfile has ffn_up Q4_K=0.5 (and Q6_K=0.05).
+        // At target 5.5, the recipe promotes ffn_up→Q6_K, predicted gain ~0.45
+        // PPL — comfortably above the 0.25 default threshold. The snap
+        // logic must NOT discard a real win.
+        var profile = SyntheticProfile();
+        var layout = SyntheticLayout(4, 1_000_000);
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 5.5);
+
+        var ffnUp = recipe.Entries.First(e => e.TensorName.Contains("ffn_up"));
+        Assert.Equal(LlamaTensorType.Q6_K, ffnUp.ChosenType);    // promotion preserved
+    }
+
+    [Fact]
+    public void SnapToStock_DisabledWhenThresholdIsZero()
+    {
+        // Setting MinPredictedGainPpl=0 turns snapping off entirely; even
+        // sliver-of-gain recipes should ship as-is. Use the mild profile
+        // from the snap test — without snapping, the optimizer should
+        // promote ffn_up to Q6_K to claim the 0.04 PPL gain.
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId:        "mild",
+            LayerCount:            4,
+            FamilyNotes:           null,
+            Provenance:            new LlamaSensitivityProvenance(
+                "ablation", "mild.gguf", 100_000_000, null, DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize:   512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 0.20,
+                        [LlamaTensorType.Q4_K] = 0.05,
+                        [LlamaTensorType.Q6_K] = 0.01,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K),
+                ["ffn_gate"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 0.10,
+                        [LlamaTensorType.Q4_K] = 0.03,
+                        [LlamaTensorType.Q6_K] = 0.00,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K),
+            });
+        var layout = SyntheticLayout(4, 1_000_000);
+
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 5.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline = false,
+                MinPredictedGainPpl = 0.0,
+                MinPplGainPerBpw    = 0.0,    // also disable the per-bpw efficiency gate
+            });
+
+        // Without snapping, the optimizer's pure-min-pplSum pick within
+        // budget should land at Q6_K for at least one category.
+        Assert.Contains(recipe.Entries, e => e.ChosenType == LlamaTensorType.Q6_K);
+    }
+
+    [Fact]
+    public void NoiseClamp_NegativeAndNonMonotoneDeltasDontProduceFakeWins()
+    {
+        // Build a profile that mimics the 4B attn_v pathology:
+        // ablation noise produces a negative Q2_K delta and a
+        // non-monotone Q3_K. Without the noise clamp, the optimizer
+        // would happily put the noisy category at Q2_K (looks like a
+        // "−0.5 PPL win!") and starve the genuinely-sensitive category.
+        // With the clamp, the noisy category's Q2_K and Q3_K deltas
+        // get pinned to ≥ Q4_K's value, removing the fake win.
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion:         LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId:        "noisy",
+            LayerCount:            4,
+            FamilyNotes:           null,
+            Provenance:            new LlamaSensitivityProvenance(
+                "ablation", "noisy.gguf", 100_000_000, null, DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize:   512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = -0.50,    // negative — ablation noise
+                        [LlamaTensorType.Q3_K] =  0.05,    // non-monotone vs Q4_K
+                        [LlamaTensorType.Q4_K] =  0.20,
+                        [LlamaTensorType.Q6_K] =  0.10,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K),
+                ["ffn_gate"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] =  3.00,    // genuine signal
+                        [LlamaTensorType.Q3_K] =  1.00,
+                        [LlamaTensorType.Q4_K] =  0.30,
+                        [LlamaTensorType.Q6_K] =  0.05,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K),
+            });
+        var layout = SyntheticLayout(4, 1_000_000);
+
+        // Tight budget (3.5 bpw) forces a real tradeoff. Without the
+        // clamp, ffn_up's "−0.50 at Q2_K" would dominate and the
+        // optimizer would put ffn_up at Q2_K (free PPL!) to fund a
+        // ffn_gate promotion. With the clamp, ffn_up Q2_K is pinned
+        // to its monotone-bound (≥ Q4_K's 0.20), so Q2_K is no longer
+        // a free win.
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 3.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline = false,
+                MinPplGainPerBpw   = 0.0,
+                MinPredictedGainPpl = 0.0,
+            });
+
+        // Verify: every entry's reported predicted ΔPPL (RelativeMse) is
+        // non-negative. No fake wins survive into the recipe.
+        Assert.All(recipe.Entries, e =>
+            Assert.True(e.RelativeMse >= 0.0,
+                $"{e.TensorName} at {e.ChosenType}: predicted ΔPPL {e.RelativeMse} < 0 — clamp failed"));
+    }
+
+    [Fact]
+    public void NoiseClamp_PreservesCleanlyMonotoneSignal()
+    {
+        // The default SyntheticProfile is cleanly monotone-decreasing
+        // in bpw (Q2=4.0, Q4=0.5, Q6=0.05 for ffn_up). The clamp must
+        // be a no-op on this — every type's predicted ΔPPL should
+        // match the raw profile value (× scaling, here 1.0).
+        var profile = SyntheticProfile();
+        var layout = SyntheticLayout(4, 1_000_000);
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 5.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                ApplyStockBaseline = false,
+            });
+        // ffn_up at Q6_K → raw 0.05, scale 1.0, clamp running_max starts
+        // at 0 → max(0.05, 0) = 0.05. Unchanged.
+        var ffnUp = recipe.Entries.First(e => e.TensorName.Contains("ffn_up"));
+        Assert.Equal(LlamaTensorType.Q6_K, ffnUp.ChosenType);
+        Assert.Equal(0.05, ffnUp.RelativeMse, precision: 4);
+    }
+
+    [Fact]
     public void EndToEnd_FromQwen3Profile_BuildsWithoutTargetGguf()
     {
         // Real reference profile + synthetic target the same size as the
