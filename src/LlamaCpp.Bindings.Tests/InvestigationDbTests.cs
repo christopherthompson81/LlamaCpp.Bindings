@@ -14,9 +14,10 @@ public class InvestigationDbTests
     private static LlamaMeasurementRecord SampleRecord(
         string target = "category:ffn_up",
         LlamaTensorType type = LlamaTensorType.Q4_K,
-        double deltaPpl = 0.123) =>
+        double deltaPpl = 0.123,
+        string modelSha = "model_abc") =>
         new(
-            ModelSha:        "model_abc",
+            ModelSha:        modelSha,
             ArchId:          "qwen3",
             ParamCount:      1_000_000_000,
             CorpusSha:       "corpus_def",
@@ -133,6 +134,70 @@ public class InvestigationDbTests
             var tensors = db.Query(new LlamaMeasurementFilter { AblationTargetPrefix = "tensor:" }).ToList();
             Assert.Equal(2, tensors.Count);
             Assert.All(tensors, r => Assert.StartsWith("tensor:", r.AblationTarget));
+        }
+        finally { TryDelete(path); }
+    }
+
+    [Fact]
+    public void DeleteMatching_FilterByTargetsAndTypes_RemovesOnlyMatchingRows()
+    {
+        // Drop the same kind of bogus rows the v3 demote-drop bug produced:
+        // tensor:* ffn_down rows at Q4_K and Q6_K, leaving Q2_K alone.
+        var path = TempDbPath();
+        try
+        {
+            using var db = LlamaInvestigationDb.Open(path);
+            db.RecordMeasurement(SampleRecord("baseline",                       LlamaTensorType.F16));
+            db.RecordMeasurement(SampleRecord("tensor:blk.5.ffn_down.weight",   LlamaTensorType.Q2_K));
+            db.RecordMeasurement(SampleRecord("tensor:blk.5.ffn_down.weight",   LlamaTensorType.Q4_K));
+            db.RecordMeasurement(SampleRecord("tensor:blk.5.ffn_down.weight",   LlamaTensorType.Q6_K));
+            db.RecordMeasurement(SampleRecord("tensor:blk.11.ffn_down.weight",  LlamaTensorType.Q4_K));
+            db.RecordMeasurement(SampleRecord("tensor:blk.11.ffn_down.weight",  LlamaTensorType.Q6_K));
+            db.RecordMeasurement(SampleRecord("tensor:blk.5.attn_v.weight",     LlamaTensorType.Q4_K));    // unrelated category — keep
+
+            var matching = db.CountMatching(
+                modelSha: "model_abc", corpusSha: "corpus_def",
+                imatrixSha: LlamaInvestigationDb.NoImatrixSha, contextSize: 512,
+                ablationTargets: new[] { "tensor:blk.5.ffn_down.weight", "tensor:blk.11.ffn_down.weight" },
+                ablationTypes:   new[] { LlamaTensorType.Q4_K, LlamaTensorType.Q6_K });
+            Assert.Equal(4, matching);
+
+            var deleted = db.DeleteMatching(
+                modelSha: "model_abc", corpusSha: "corpus_def",
+                imatrixSha: LlamaInvestigationDb.NoImatrixSha, contextSize: 512,
+                ablationTargets: new[] { "tensor:blk.5.ffn_down.weight", "tensor:blk.11.ffn_down.weight" },
+                ablationTypes:   new[] { LlamaTensorType.Q4_K, LlamaTensorType.Q6_K });
+            Assert.Equal(4, deleted);
+
+            // Survivors: F16 baseline, Q2_K (excluded by type filter),
+            // attn_v Q4_K (excluded by target filter).
+            Assert.Equal(3, db.Count());
+            Assert.True(db.HasMeasurement(
+                "model_abc", "corpus_def", LlamaInvestigationDb.NoImatrixSha,
+                512, "tensor:blk.5.ffn_down.weight", LlamaTensorType.Q2_K));
+            Assert.True(db.HasMeasurement(
+                "model_abc", "corpus_def", LlamaInvestigationDb.NoImatrixSha,
+                512, "tensor:blk.5.attn_v.weight", LlamaTensorType.Q4_K));
+        }
+        finally { TryDelete(path); }
+    }
+
+    [Fact]
+    public void DeleteMatching_NoFilters_RemovesAllForCampaign()
+    {
+        var path = TempDbPath();
+        try
+        {
+            using var db = LlamaInvestigationDb.Open(path);
+            db.RecordMeasurement(SampleRecord("baseline", LlamaTensorType.F16, modelSha: "model_a"));
+            db.RecordMeasurement(SampleRecord("category:ffn_up", LlamaTensorType.Q4_K, modelSha: "model_a"));
+            db.RecordMeasurement(SampleRecord("category:ffn_up", LlamaTensorType.Q4_K, modelSha: "model_b"));    // different campaign
+
+            var deleted = db.DeleteMatching(
+                modelSha: "model_a", corpusSha: "corpus_def",
+                imatrixSha: LlamaInvestigationDb.NoImatrixSha, contextSize: 512);
+            Assert.Equal(2, deleted);
+            Assert.Equal(1, db.Count());    // only model_b's row left
         }
         finally { TryDelete(path); }
     }

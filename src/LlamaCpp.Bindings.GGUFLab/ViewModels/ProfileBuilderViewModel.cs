@@ -316,6 +316,29 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 
     private CancellationTokenSource? _cts;
 
+    /// <summary>
+    /// Row count in the investigation DB matching the current campaign
+    /// configuration (model + corpus + imatrix + ctx + selected
+    /// categories × layers × types). Updated lazily by
+    /// <see cref="RefreshDbRowCountsCommand"/> — the count requires
+    /// content-hashing the source/imatrix files and reading the corpus,
+    /// which we don't want to redo on every keystroke.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasMatchingDbRows))]
+    private long _dbRowCountMatchingSelection;
+
+    /// <summary>Total rows in the DB matching this campaign signature, regardless of selection.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasCampaignRows))]
+    private long _dbRowCountForCampaign;
+
+    public bool HasMatchingDbRows => DbRowCountMatchingSelection > 0;
+    public bool HasCampaignRows   => DbRowCountForCampaign       > 0;
+
+    [ObservableProperty]
+    private string _dbStatusLine = "Click 'Refresh DB counts' to see what's already measured.";
+
     public ProfileBuilderViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
@@ -797,6 +820,192 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         }
         return target;
     }
+
+    /// <summary>
+    /// Compute the campaign identity tuple (model_sha, corpus_sha,
+    /// imatrix_sha, ctx) for the current form state, plus the resolved
+    /// list of ablation targets and types from the user's selections.
+    /// Returns null when any input is missing — callers display an
+    /// "incomplete inputs" state in that case.
+    /// </summary>
+    /// <remarks>
+    /// Hashing the source GGUF and (optional) imatrix files reads ~2 MB
+    /// each (head + tail samples); reading the corpus is the full file.
+    /// Run on a background task — the DB controls explicitly trigger
+    /// this rather than recomputing on every form change.
+    /// </remarks>
+    private async Task<DbScope?> ResolveDbScopeAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(SourceModelPath) || !File.Exists(SourceModelPath)) return null;
+        if (string.IsNullOrWhiteSpace(CorpusPath) || !File.Exists(CorpusPath)) return null;
+
+        return await Task.Run(() =>
+        {
+            var modelSha   = LlamaInvestigationDb.ComputeContentSha(SourceModelPath);
+            var corpusText = File.ReadAllText(CorpusPath);
+            var corpusSha  = LlamaInvestigationDb.ComputeTextSha(corpusText);
+            var imatrixSha = string.IsNullOrEmpty(ImatrixPath) || !File.Exists(ImatrixPath)
+                ? LlamaInvestigationDb.NoImatrixSha
+                : LlamaInvestigationDb.ComputeContentSha(ImatrixPath);
+
+            // Resolve the targets from the current category × layer ×
+            // mode selection, matching the same logic BuildAsync uses
+            // when the campaign actually runs.
+            var targets = ResolveCurrentTargets();
+            var types   = ResolveCandidateTypes();
+            return new DbScope(modelSha, corpusSha, imatrixSha, ContextSize, targets, types);
+        }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Build the list of ablation targets the current selection would
+    /// produce. Per-category mode produces "category:&lt;name&gt;" entries;
+    /// per-layer mode expands the architecture spec across selected
+    /// categories and layers.
+    /// </summary>
+    private IReadOnlyList<string> ResolveCurrentTargets()
+    {
+        var selectedCats = Categories.Where(c => c.IsSelected).Select(c => c.Name).ToList();
+        if (selectedCats.Count == 0) return Array.Empty<string>();
+
+        if (Mode == CampaignMode.PerCategory)
+            return selectedCats.Select(c => $"category:{c}").ToList();
+
+        // Per-layer: same call BuildAsync uses, scoped to current selection.
+        var spec = LlamaArchitectureRegistry.Lookup(DetectedArchitecture)
+                ?? LlamaArchitectureRegistry.StandardTransformer;
+        var layers = ParseLayers();
+        var layerFilter = layers.Count == 0 ? null : layers;
+        return spec.ResolveTensors(Math.Max(1, DetectedLayerCount), selectedCats, layerFilter)
+            .Select(t => $"tensor:{t}")
+            .ToList();
+    }
+
+    /// <summary>
+    /// Refresh the two DB row-count properties from the live DB. Call
+    /// this from the UI before previewing or invoking the invalidation
+    /// commands — the counts make the buttons' effects visible without
+    /// re-running the campaign.
+    /// </summary>
+    [RelayCommand]
+    private async Task RefreshDbRowCountsAsync()
+    {
+        try
+        {
+            var scope = await ResolveDbScopeAsync();
+            if (scope is null)
+            {
+                DbRowCountMatchingSelection = 0;
+                DbRowCountForCampaign = 0;
+                DbStatusLine = "Need source GGUF + corpus to inspect the DB.";
+                return;
+            }
+
+            await Task.Run(() =>
+            {
+                using var db = LlamaInvestigationDb.Open();
+                var campaign = db.CountMatching(scope.ModelSha, scope.CorpusSha, scope.ImatrixSha, scope.ContextSize);
+                var selection = scope.Targets.Count == 0 || scope.Types.Count == 0
+                    ? 0L
+                    : db.CountMatching(scope.ModelSha, scope.CorpusSha, scope.ImatrixSha, scope.ContextSize,
+                        scope.Targets, scope.Types);
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    DbRowCountMatchingSelection = selection;
+                    DbRowCountForCampaign = campaign;
+                    DbStatusLine = $"DB has {campaign} rows for this campaign signature " +
+                                   $"({selection} match the current category × layer × type selection).";
+                });
+            });
+        }
+        catch (Exception ex)
+        {
+            DbStatusLine = $"DB inspect failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Delete the rows that the current category × layer × type selection
+    /// would re-measure on the next Build. The next campaign will run
+    /// every previously-deleted cell from scratch; cells outside the
+    /// selection are preserved.
+    /// </summary>
+    [RelayCommand]
+    private async Task InvalidateMatchingSelectionAsync()
+    {
+        try
+        {
+            var scope = await ResolveDbScopeAsync();
+            if (scope is null || scope.Targets.Count == 0 || scope.Types.Count == 0)
+            {
+                DbStatusLine = "Need source GGUF + corpus + at least one selected category and type.";
+                return;
+            }
+
+            await Task.Run(() =>
+            {
+                using var db = LlamaInvestigationDb.Open();
+                var deleted = db.DeleteMatching(
+                    scope.ModelSha, scope.CorpusSha, scope.ImatrixSha, scope.ContextSize,
+                    scope.Targets, scope.Types);
+                var remaining = db.CountMatching(scope.ModelSha, scope.CorpusSha, scope.ImatrixSha, scope.ContextSize);
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    DbRowCountMatchingSelection = 0;
+                    DbRowCountForCampaign = remaining;
+                    DbStatusLine = $"Deleted {deleted} matching rows. {remaining} rows remain for this campaign signature.";
+                });
+            });
+        }
+        catch (Exception ex)
+        {
+            DbStatusLine = $"Invalidation failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Delete every row for this campaign's identity tuple — wipes the
+    /// baseline along with all ablation cells. The next campaign runs
+    /// from scratch.
+    /// </summary>
+    [RelayCommand]
+    private async Task InvalidateAllForCampaignAsync()
+    {
+        try
+        {
+            var scope = await ResolveDbScopeAsync();
+            if (scope is null)
+            {
+                DbStatusLine = "Need source GGUF + corpus to identify the campaign.";
+                return;
+            }
+
+            await Task.Run(() =>
+            {
+                using var db = LlamaInvestigationDb.Open();
+                var deleted = db.DeleteMatching(scope.ModelSha, scope.CorpusSha, scope.ImatrixSha, scope.ContextSize);
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    DbRowCountMatchingSelection = 0;
+                    DbRowCountForCampaign = 0;
+                    DbStatusLine = $"Deleted {deleted} rows. Campaign starts fresh on next Build.";
+                });
+            });
+        }
+        catch (Exception ex)
+        {
+            DbStatusLine = $"Invalidation failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>Resolved campaign-identity tuple + selection. Internal helper for the DB controls.</summary>
+    private sealed record DbScope(
+        string ModelSha,
+        string CorpusSha,
+        string ImatrixSha,
+        int ContextSize,
+        IReadOnlyList<string> Targets,
+        IReadOnlyList<LlamaTensorType> Types);
 
     public override void ApplyActiveModel(string? path)
     {

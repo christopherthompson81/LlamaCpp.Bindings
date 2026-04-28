@@ -263,6 +263,103 @@ public sealed class LlamaInvestigationDb : IDisposable
         return (long)(cmd.ExecuteScalar() ?? 0L);
     }
 
+    /// <summary>
+    /// Count measurements matching a campaign signature, optionally
+    /// filtered to specific ablation targets and/or types. Used by the
+    /// UI's invalidation controls to preview "X rows would be deleted"
+    /// before committing to a delete.
+    /// </summary>
+    public long CountMatching(
+        string modelSha,
+        string corpusSha,
+        string imatrixSha,
+        int contextSize,
+        IReadOnlyList<string>? ablationTargets = null,
+        IReadOnlyList<LlamaTensorType>? ablationTypes = null)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = "SELECT COUNT(*) FROM measurements WHERE " +
+                  "model_sha = $model AND corpus_sha = $corpus AND " +
+                  "imatrix_sha = $imatrix AND context_size = $ctx";
+        cmd.Parameters.AddWithValue("$model", modelSha);
+        cmd.Parameters.AddWithValue("$corpus", corpusSha);
+        cmd.Parameters.AddWithValue("$imatrix", imatrixSha);
+        cmd.Parameters.AddWithValue("$ctx", contextSize);
+        AppendTargetTypeWhere(cmd, ref sql, ablationTargets, ablationTypes);
+        cmd.CommandText = sql;
+        return (long)(cmd.ExecuteScalar() ?? 0L);
+    }
+
+    /// <summary>
+    /// Delete measurements matching a campaign signature, optionally
+    /// filtered to specific ablation targets and/or types. Returns the
+    /// number of rows removed. Useful for invalidating bogus rows after
+    /// a builder bug fix (Run 14-style demote-drop bug) or for forcing a
+    /// re-measurement of a specific cell with refreshed conditions
+    /// (e.g. after a llama.cpp version bump that changed quantization
+    /// tables).
+    /// </summary>
+    /// <remarks>
+    /// Pass <c>null</c> for <paramref name="ablationTargets"/> or
+    /// <paramref name="ablationTypes"/> to leave that dimension
+    /// unconstrained. Passing both null deletes every row for the
+    /// campaign signature.
+    /// </remarks>
+    public int DeleteMatching(
+        string modelSha,
+        string corpusSha,
+        string imatrixSha,
+        int contextSize,
+        IReadOnlyList<string>? ablationTargets = null,
+        IReadOnlyList<LlamaTensorType>? ablationTypes = null)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = "DELETE FROM measurements WHERE " +
+                  "model_sha = $model AND corpus_sha = $corpus AND " +
+                  "imatrix_sha = $imatrix AND context_size = $ctx";
+        cmd.Parameters.AddWithValue("$model", modelSha);
+        cmd.Parameters.AddWithValue("$corpus", corpusSha);
+        cmd.Parameters.AddWithValue("$imatrix", imatrixSha);
+        cmd.Parameters.AddWithValue("$ctx", contextSize);
+        AppendTargetTypeWhere(cmd, ref sql, ablationTargets, ablationTypes);
+        cmd.CommandText = sql;
+        return cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Append <c>AND ablation_target IN (...)</c> and <c>AND ablation_type IN (...)</c>
+    /// clauses to the running SQL when filters are present. Parameterized
+    /// to keep target names and type ints out of the SQL text proper.
+    /// </summary>
+    private static void AppendTargetTypeWhere(
+        SqliteCommand cmd, ref string sql,
+        IReadOnlyList<string>? ablationTargets,
+        IReadOnlyList<LlamaTensorType>? ablationTypes)
+    {
+        if (ablationTargets is { Count: > 0 })
+        {
+            var names = new List<string>(ablationTargets.Count);
+            for (int i = 0; i < ablationTargets.Count; i++)
+            {
+                var p = $"$tgt{i}";
+                names.Add(p);
+                cmd.Parameters.AddWithValue(p, ablationTargets[i]);
+            }
+            sql += $" AND ablation_target IN ({string.Join(", ", names)})";
+        }
+        if (ablationTypes is { Count: > 0 })
+        {
+            var names = new List<string>(ablationTypes.Count);
+            for (int i = 0; i < ablationTypes.Count; i++)
+            {
+                var p = $"$typ{i}";
+                names.Add(p);
+                cmd.Parameters.AddWithValue(p, (int)ablationTypes[i]);
+            }
+            sql += $" AND ablation_type IN ({string.Join(", ", names)})";
+        }
+    }
+
     public void Dispose()
     {
         _conn.Dispose();
