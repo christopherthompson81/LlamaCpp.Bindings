@@ -63,14 +63,26 @@ public sealed partial class PerplexityViewModel : ToolPageViewModel
 
     public bool IsIdle => !IsRunning;
 
-    public string LogText => _logBuilder.ToString();
+    public string LogText => _log.Text;
 
-    private readonly System.Text.StringBuilder _logBuilder = new();
+    /// <summary>
+    /// Throttled log surface — native llama.cpp emits hundreds of log
+    /// lines per PPL run; the naive StringBuilder + per-line
+    /// PropertyChanged path forced a TextBlock re-render per line and
+    /// starved the UI thread of input events. Same pattern as the
+    /// Imatrix / Profile Builder / Adaptive Quantization pages.
+    /// </summary>
+    private readonly ThrottledLogBuffer _log = new();
     private CancellationTokenSource? _cts;
 
     public PerplexityViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
+        _log.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ThrottledLogBuffer.Text))
+                OnPropertyChanged(nameof(LogText));
+        };
     }
 
     /// <summary>
@@ -144,8 +156,7 @@ public sealed partial class PerplexityViewModel : ToolPageViewModel
             return;
         }
 
-        _logBuilder.Clear();
-        OnPropertyChanged(nameof(LogText));
+        _log.Clear();
         ResultText = string.Empty;
         ProgressFraction = 0;
 
@@ -153,11 +164,7 @@ public sealed partial class PerplexityViewModel : ToolPageViewModel
         IsRunning = true;
         StatusLine = "Loading model…";
 
-        var unsubscribe = _logBus.Subscribe(line =>
-        {
-            _logBuilder.AppendLine(line);
-            OnPropertyChanged(nameof(LogText));
-        });
+        var unsubscribe = _logBus.Subscribe(line => _log.Append(line));
 
         try
         {
@@ -210,12 +217,12 @@ public sealed partial class PerplexityViewModel : ToolPageViewModel
         catch (Exception ex)
         {
             StatusLine = $"Failed: {ex.Message}";
-            _logBuilder.AppendLine($"[error] {ex}");
-            OnPropertyChanged(nameof(LogText));
+            _log.Append($"[error] {ex}");
         }
         finally
         {
             unsubscribe();
+            _log.Stop();    // flush any pending tick before idle
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;

@@ -61,14 +61,20 @@ public sealed partial class HfConvertViewModel : ToolPageViewModel
 
     public bool IsIdle => !IsRunning;
 
-    public string LogText => _logBuilder.ToString();
+    public string LogText => _log.Text;
 
-    private readonly System.Text.StringBuilder _logBuilder = new();
+    /// <summary>Throttled log surface — same pattern as the other long-running pages.</summary>
+    private readonly ThrottledLogBuffer _log = new();
     private CancellationTokenSource? _cts;
 
     public HfConvertViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
+        _log.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ThrottledLogBuffer.Text))
+                OnPropertyChanged(nameof(LogText));
+        };
     }
 
     public override void ApplyActiveModel(string? path)
@@ -104,8 +110,7 @@ public sealed partial class HfConvertViewModel : ToolPageViewModel
             }
         }
 
-        _logBuilder.Clear();
-        OnPropertyChanged(nameof(LogText));
+        _log.Clear();
         ResultText = string.Empty;
         ProgressFraction = 0;
 
@@ -113,11 +118,7 @@ public sealed partial class HfConvertViewModel : ToolPageViewModel
         IsRunning = true;
         StatusLine = "Reading HF model…";
 
-        var unsubscribe = _logBus.Subscribe(line =>
-        {
-            _logBuilder.AppendLine(line);
-            OnPropertyChanged(nameof(LogText));
-        });
+        var unsubscribe = _logBus.Subscribe(line => _log.Append(line));
 
         try
         {
@@ -157,12 +158,12 @@ public sealed partial class HfConvertViewModel : ToolPageViewModel
         catch (Exception ex)
         {
             StatusLine = $"Failed: {ex.Message}";
-            _logBuilder.AppendLine($"[error] {ex}");
-            OnPropertyChanged(nameof(LogText));
+            _log.Append($"[error] {ex}");
         }
         finally
         {
             unsubscribe();
+            _log.Stop();
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;

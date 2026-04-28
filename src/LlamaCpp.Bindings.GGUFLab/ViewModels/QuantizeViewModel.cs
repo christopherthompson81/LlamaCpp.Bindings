@@ -74,17 +74,25 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
     public bool IsIdle => !IsRunning;
 
     /// <summary>Streaming text shown in the log pane.</summary>
-    public string LogText
-    {
-        get => _logBuilder.ToString();
-    }
+    public string LogText => _log.Text;
 
-    private readonly System.Text.StringBuilder _logBuilder = new();
+    /// <summary>
+    /// Throttled, deduped log surface — native llama.cpp emits hundreds
+    /// of log lines per quantize; the naive StringBuilder + per-line
+    /// PropertyChanged path starves the UI thread of input events. Same
+    /// pattern as the other long-running pages.
+    /// </summary>
+    private readonly ThrottledLogBuffer _log = new();
     private CancellationTokenSource? _cts;
 
     public QuantizeViewModel(NativeLogBus logBus)
     {
         _logBus = logBus;
+        _log.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ThrottledLogBuffer.Text))
+                OnPropertyChanged(nameof(LogText));
+        };
     }
 
     [RelayCommand]
@@ -112,8 +120,7 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
             }
         }
 
-        _logBuilder.Clear();
-        OnPropertyChanged(nameof(LogText));
+        _log.Clear();
 
         _cts = new CancellationTokenSource();
         IsRunning = true;
@@ -122,13 +129,7 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
 
         // Subscribe to native logs for this run only — they're noisy and we
         // don't want stale lines bleeding into the next run.
-        var unsubscribe = _logBus.Subscribe(line =>
-        {
-            _logBuilder.AppendLine(line);
-            // Property change must marshal back to the UI thread; the bus
-            // already does that for its subscribers.
-            OnPropertyChanged(nameof(LogText));
-        });
+        var unsubscribe = _logBus.Subscribe(line => _log.Append(line));
 
         try
         {
@@ -159,12 +160,12 @@ public sealed partial class QuantizeViewModel : ToolPageViewModel
         catch (Exception ex)
         {
             StatusLine = $"Failed: {ex.Message}";
-            _logBuilder.AppendLine($"[error] {ex}");
-            OnPropertyChanged(nameof(LogText));
+            _log.Append($"[error] {ex}");
         }
         finally
         {
             unsubscribe();
+            _log.Stop();
             IsRunning = false;
             _cts?.Dispose();
             _cts = null;
