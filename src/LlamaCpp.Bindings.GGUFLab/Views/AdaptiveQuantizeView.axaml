@@ -138,10 +138,10 @@
                         </Grid>
                         <StackPanel Orientation="Horizontal" Spacing="6" Margin="120,0,0,0">
                             <TextBlock Text="Presets:" Opacity="0.6" VerticalAlignment="Center" FontSize="11" />
-                            <Button Content="Q4_K_M (4.95)" Click="OnPresetQ4KM" Padding="8,2" />
-                            <Button Content="Q5_K_M (5.50)" Click="OnPresetQ5KM" Padding="8,2" />
-                            <Button Content="Q6_K (6.56)"   Click="OnPresetQ6K"  Padding="8,2" />
-                            <Button Content="Q8_0 (8.50)"   Click="OnPresetQ80"  Padding="8,2" />
+                            <Button Click="OnPresetQ4KM" Padding="8,2"><TextBlock Text="Q4_K_M (4.95)" /></Button>
+                            <Button Click="OnPresetQ5KM" Padding="8,2"><TextBlock Text="Q5_K_M (5.50)" /></Button>
+                            <Button Click="OnPresetQ6K"  Padding="8,2"><TextBlock Text="Q6_K (6.56)"   /></Button>
+                            <Button Click="OnPresetQ80"  Padding="8,2"><TextBlock Text="Q8_0 (8.50)"   /></Button>
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -180,9 +180,10 @@
                                       Text="{Binding SizeScalingExponent, Mode=TwoWay, StringFormat=F2}"
                                       VerticalAlignment="Center" />
                         </Grid>
-                        <CheckBox Content="Apply stock baseline (Q4_K_M-style per-layer protection)"
-                                  IsChecked="{Binding ApplyStockBaseline, Mode=TwoWay}"
-                                  ToolTip.Tip="Treats llama.cpp's hand-tuned per-layer protection table as a hard floor: recipe can promote above it but never demote below. Recommended on." />
+                        <CheckBox IsChecked="{Binding ApplyStockBaseline, Mode=TwoWay}"
+                                  ToolTip.Tip="Treats llama.cpp's hand-tuned per-layer protection table as a hard floor: recipe can promote above it but never demote below. Recommended on.">
+                            <TextBlock Text="Apply stock baseline (Q4_K_M-style per-layer protection)" />
+                        </CheckBox>
                         <CheckBox Content="Use per-tensor data (when present) to demote individual tensors"
                                   IsChecked="{Binding UsePerTensorData, Mode=TwoWay}"
                                   ToolTip.Tip="When the profile has per-layer ablation data, demote tensors below the category-level pick where the per-tensor sensitivity is below the category average. Demote-only — never promotes. Requires per-layer profile data; ignored when only per-category data exists." />

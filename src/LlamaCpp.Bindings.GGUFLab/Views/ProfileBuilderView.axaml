@@ -199,10 +199,15 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate DataType="vm:ProfileBuilderViewModel+CategoryItem">
-                                    <CheckBox Content="{Binding Name}"
-                                              IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                    <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
                                               MinWidth="180"
-                                              Margin="0,2,12,2" />
+                                              Margin="0,2,12,2">
+                                        <!-- TextBlock child instead of string Content
+                                             so Avalonia doesn't treat the first
+                                             underscore as an access-key marker
+                                             (ffn_down → "ffndown" otherwise). -->
+                                        <TextBlock Text="{Binding Name}" />
+                                    </CheckBox>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
@@ -229,8 +234,10 @@
                             <Button Content="All"           Command="{Binding PresetLayersAllCommand}"          Padding="8,2" />
                             <Button Content="First 4"       Command="{Binding PresetLayersFirst4Command}"        Padding="8,2" />
                             <Button Content="Last 4"        Command="{Binding PresetLayersLast4Command}"         Padding="8,2" />
-                            <Button Content="use_more_bits" Command="{Binding PresetLayersUseMoreBitsCommand}"   Padding="8,2"
-                                    ToolTip.Tip="The set of layers llama.cpp's hand-tuned heuristic protects with extra bpw — first n/8, last n/8, every 3rd middle layer." />
+                            <Button Command="{Binding PresetLayersUseMoreBitsCommand}" Padding="8,2"
+                                    ToolTip.Tip="The set of layers llama.cpp's hand-tuned heuristic protects with extra bpw — first n/8, last n/8, every 3rd middle layer.">
+                                <TextBlock Text="use_more_bits" />
+                            </Button>
                             <Button Content="Stratified"    Command="{Binding PresetLayersStratifiedCommand}"    Padding="8,2"
                                     ToolTip.Tip="First, last, and 3 evenly-spaced middle layers — quick architectural sample." />
                         </StackPanel>
@@ -251,24 +258,42 @@
                         <TextBlock Text="Candidate types (one PPL run per target × type)"
                                    FontWeight="SemiBold" FontSize="11" Opacity="0.7" />
                         <WrapPanel Orientation="Horizontal" ItemWidth="120">
-                            <CheckBox Content="IQ2_S"  IsChecked="{Binding UseIQ2S, Mode=TwoWay}"
-                                      ToolTip.Tip="2.5 bpw — codebook + importance, often beats Q2_K on per-tensor profile" />
-                            <CheckBox Content="Q2_K"   IsChecked="{Binding UseQ2K, Mode=TwoWay}"
-                                      ToolTip.Tip="2.625 bpw — block-256 super-block scaling" />
-                            <CheckBox Content="IQ3_S"  IsChecked="{Binding UseIQ3S, Mode=TwoWay}"
-                                      ToolTip.Tip="3.44 bpw — IQ-family, often beats Q3_K" />
-                            <CheckBox Content="Q3_K"   IsChecked="{Binding UseQ3K, Mode=TwoWay}"
-                                      ToolTip.Tip="3.4375 bpw" />
-                            <CheckBox Content="IQ4_XS" IsChecked="{Binding UseIQ4XS, Mode=TwoWay}"
-                                      ToolTip.Tip="4.25 bpw — non-linear Q4 variant" />
-                            <CheckBox Content="Q4_K"   IsChecked="{Binding UseQ4K, Mode=TwoWay}"
-                                      ToolTip.Tip="4.5 bpw" />
-                            <CheckBox Content="Q5_K"   IsChecked="{Binding UseQ5K, Mode=TwoWay}"
-                                      ToolTip.Tip="5.5 bpw" />
-                            <CheckBox Content="Q6_K"   IsChecked="{Binding UseQ6K, Mode=TwoWay}"
-                                      ToolTip.Tip="6.5625 bpw" />
-                            <CheckBox Content="Q8_0"   IsChecked="{Binding UseQ8_0, Mode=TwoWay}"
-                                      ToolTip.Tip="8.5 bpw — usually within noise of F16" />
+                            <CheckBox IsChecked="{Binding UseIQ2S, Mode=TwoWay}"
+                                      ToolTip.Tip="2.5 bpw — codebook + importance, often beats Q2_K on per-tensor profile">
+                                <TextBlock Text="IQ2_S" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseQ2K, Mode=TwoWay}"
+                                      ToolTip.Tip="2.625 bpw — block-256 super-block scaling">
+                                <TextBlock Text="Q2_K" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseIQ3S, Mode=TwoWay}"
+                                      ToolTip.Tip="3.44 bpw — IQ-family, often beats Q3_K">
+                                <TextBlock Text="IQ3_S" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseQ3K, Mode=TwoWay}"
+                                      ToolTip.Tip="3.4375 bpw">
+                                <TextBlock Text="Q3_K" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseIQ4XS, Mode=TwoWay}"
+                                      ToolTip.Tip="4.25 bpw — non-linear Q4 variant">
+                                <TextBlock Text="IQ4_XS" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseQ4K, Mode=TwoWay}"
+                                      ToolTip.Tip="4.5 bpw">
+                                <TextBlock Text="Q4_K" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseQ5K, Mode=TwoWay}"
+                                      ToolTip.Tip="5.5 bpw">
+                                <TextBlock Text="Q5_K" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseQ6K, Mode=TwoWay}"
+                                      ToolTip.Tip="6.5625 bpw">
+                                <TextBlock Text="Q6_K" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding UseQ8_0, Mode=TwoWay}"
+                                      ToolTip.Tip="8.5 bpw — usually within noise of F16">
+                                <TextBlock Text="Q8_0" />
+                            </CheckBox>
                         </WrapPanel>
                         <TextBlock Text="{Binding CostEstimateText}"
                                    FontFamily="Cascadia Mono, Menlo, Consolas, monospace"
