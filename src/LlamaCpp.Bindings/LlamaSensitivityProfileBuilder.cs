@@ -122,7 +122,17 @@ public static class LlamaSensitivityProfileBuilder
         /// <summary>Measured ΔPPL when <see cref="CellState"/> is Done.</summary>
         double? CellDelta = null,
         /// <summary>For <see cref="Stage.Plan"/>: the complete list of (target, type) cells the campaign will run, in deterministic order.</summary>
-        IReadOnlyList<(string Target, LlamaTensorType Type)>? Plan = null);
+        IReadOnlyList<(string Target, LlamaTensorType Type)>? Plan = null,
+        /// <summary>
+        /// Monotonic progress fraction in <c>[0, 1]</c>, treating each
+        /// cell as contributing two work units (one for quantize, one
+        /// for score). Always advances; never rewinds when the campaign
+        /// transitions from a quantize batch to its score batch. UIs
+        /// should bind progress bars to this rather than computing
+        /// <c>CompletedJobs / TotalJobs</c>, since those count post-PPL
+        /// cells and don't move during the quantize phase.
+        /// </summary>
+        double Fraction = 0.0);
 
     /// <summary>Coarse phases of the campaign for progress reporting.</summary>
     public enum Stage
@@ -390,6 +400,21 @@ public static class LlamaSensitivityProfileBuilder
 
             int totalJobs = 1 + specs.Count;
             int completed = 0;
+            int scored = 0;    // assigned again when baseline path is resolved
+
+            // Monotonic progress fraction. Each cell contributes two
+            // work units (quantize + score), so the bar advances
+            // smoothly through both phases instead of rewinding when a
+            // batch transitions from quantize to score.
+            // Clamp to [0, 1] — resumed-cells bookkeeping can briefly
+            // make the numerator overshoot before completed catches up
+            // post-resume-loop, which we'd rather hide than expose.
+            double Fraction()
+            {
+                if (totalJobs <= 0) return 0.0;
+                var f = (completed + scored) / (2.0 * totalJobs);
+                return f < 0.0 ? 0.0 : f > 1.0 ? 1.0 : f;
+            }
 
             // Plan event: tells the UI exactly which (target, type)
             // cells to allocate in the progress grid. Fired once,
@@ -399,10 +424,13 @@ public static class LlamaSensitivityProfileBuilder
             progress?.Report(new Progress(
                 Stage.Plan, 0, totalJobs,
                 CurrentLabel: $"{planCells.Count} ablation cells planned",
-                Plan: planCells));
+                Plan: planCells,
+                Fraction: 0.0));
 
             void ReportQuant(string label) =>
-                progress?.Report(new Progress(Stage.Quantizing, completed, totalJobs, label));
+                progress?.Report(new Progress(
+                    Stage.Quantizing, completed, totalJobs, label,
+                    Fraction: Fraction()));
 
             void ReportCell(AblationSpec spec, CellState state, double? delta = null) =>
                 progress?.Report(new Progress(
@@ -412,7 +440,8 @@ public static class LlamaSensitivityProfileBuilder
                     CellTarget: spec.Target,
                     CellType:   spec.Type,
                     CellState:  state,
-                    CellDelta:  delta));
+                    CellDelta:  delta,
+                    Fraction:   Fraction()));
 
             // ---- Resume from DB ----
             // Pull every existing measurement that matches this campaign
@@ -440,14 +469,14 @@ public static class LlamaSensitivityProfileBuilder
 
             // ---- Baseline ----
             double baseline;
-            int scored;
             if (resumedBaseline is double cachedBaseline)
             {
                 baseline = cachedBaseline;
                 completed++;
                 scored = 1 + ablationPpl.Count;
                 progress?.Report(new Progress(Stage.Scoring, scored, totalJobs,
-                    CurrentLabel: $"resumed from DB (baseline + {ablationPpl.Count} ablations)"));
+                    CurrentLabel: $"resumed from DB (baseline + {ablationPpl.Count} ablations)",
+                    Fraction: Fraction()));
             }
             else
             {
@@ -461,7 +490,8 @@ public static class LlamaSensitivityProfileBuilder
                 completed++;
 
                 progress?.Report(new Progress(Stage.Scoring, 0, totalJobs,
-                    CurrentLabel: $"baseline (batch={batchSize}, ppl-concurrency=auto)"));
+                    CurrentLabel: $"baseline (batch={batchSize}, ppl-concurrency=auto)",
+                    Fraction: Fraction()));
                 var baselineJob = new LlamaPerplexity.PerplexityJob(
                     ModelPath: baselinePath, Corpus: corpusText, Options: pplOpts, Tag: "BASELINE");
                 baseline = double.NaN;
@@ -485,12 +515,18 @@ public static class LlamaSensitivityProfileBuilder
                     deltaPpl:      0.0,
                     gpuModel:      opts.GpuModel));
                 scored = 1;
-                progress?.Report(new Progress(Stage.Scoring, scored, totalJobs, CurrentLabel: "baseline done"));
+                progress?.Report(new Progress(Stage.Scoring, scored, totalJobs,
+                    CurrentLabel: "baseline done",
+                    Fraction: Fraction()));
             }
 
             // ---- Ablation specs, batched ----
-            // Emit Resumed events for cells that came from the DB so the
-            // grid UI shows them as already-done at startup.
+            // Bump completed BEFORE emitting Resumed events so the
+            // monotonic Fraction() includes them — otherwise the bar
+            // briefly understates progress at startup before the
+            // batch loop catches up.
+            completed += ablationPpl.Count;
+
             foreach (var s in specs)
             {
                 if (ablationPpl.TryGetValue((s.Target, s.Type), out var ppl))
@@ -500,13 +536,13 @@ public static class LlamaSensitivityProfileBuilder
                         CellTarget:   s.Target,
                         CellType:     s.Type,
                         CellState:    CellState.Resumed,
-                        CellDelta:    ppl - baseline));
+                        CellDelta:    ppl - baseline,
+                        Fraction:     Fraction()));
             }
 
             var pendingSpecs = specs
                 .Where(s => !ablationPpl.ContainsKey((s.Target, s.Type)))
                 .ToList();
-            completed += ablationPpl.Count;
 
             for (int batchStart = 0; batchStart < pendingSpecs.Count; batchStart += batchSize)
             {
@@ -564,13 +600,14 @@ public static class LlamaSensitivityProfileBuilder
                             CellTarget:   spec.Target,
                             CellType:     spec.Type,
                             CellState:    CellState.Done,
-                            CellDelta:    ablation - baseline));
+                            CellDelta:    ablation - baseline,
+                            Fraction:     Fraction()));
                         try { File.Delete(path); } catch { /* best-effort */ }
                     }
                 }
             }
 
-            progress?.Report(new Progress(Stage.Done, scored, totalJobs));
+            progress?.Report(new Progress(Stage.Done, scored, totalJobs, Fraction: 1.0));
             return new CampaignResults(baseline, ablationPpl);
         }
         finally

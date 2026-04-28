@@ -450,8 +450,11 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             var progress = new Progress<LlamaSensitivityProfileBuilder.Progress>(p =>
             {
                 StageText = p.Stage.ToString();
-                if (p.TotalJobs > 0)
-                    ProgressFraction = (double)p.CompletedJobs / p.TotalJobs;
+                // Bind the bar to the library's monotonic Fraction so it
+                // never rewinds when a batch flips from quantize to score.
+                // p.CompletedJobs still counts whole cells (post-PPL),
+                // which is the more meaningful number for the label.
+                ProgressFraction = p.Fraction;
                 ProgressLabel = $"{p.CompletedJobs}/{p.TotalJobs}" +
                     (string.IsNullOrEmpty(p.CurrentLabel) ? "" : $"  ·  {p.CurrentLabel}");
 
