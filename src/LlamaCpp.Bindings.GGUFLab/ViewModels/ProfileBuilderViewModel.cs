@@ -59,6 +59,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     private string _outputProfilePath = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private int _contextSize = 512;
 
     [ObservableProperty]
@@ -103,6 +104,14 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private int _detectedLayerCount;
+
+    /// <summary>
+    /// Total parameter count of the source model (sum of tensor element
+    /// counts). Drives the wall-time heuristic in the cost estimate.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CostEstimateText))]
+    private long _detectedParamCount;
 
     /// <summary>Tensor count auto-derived for per-layer mode (read-only).</summary>
     [ObservableProperty]
@@ -224,9 +233,57 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             var layerNote = Mode == CampaignMode.PerLayer && EffectiveLayerCount > 0
                 ? $", layers={EffectiveLayerCount}"
                 : "";
-            return $"≈ {total} PPL runs ({targetCount} {targetLabel} × {typeCount} types + 1 baseline{layerNote}). " +
+            var timeNote = EstimateWallTimeText(total) is { } te
+                ? $"  ·  estimated time: {te}"
+                : "";
+            return $"≈ {total} PPL runs ({targetCount} {targetLabel} × {typeCount} types + 1 baseline{layerNote}){timeNote}. " +
                    "Already-measured cells in the DB are skipped.";
         }
+    }
+
+    /// <summary>
+    /// Rough wall-time estimate based on a (param-count × context-size)
+    /// heuristic calibrated against the runs we have data on:
+    /// 0.6B/512 ≈ ~16 s/cell, 1.7B/512 ≈ ~50 s/cell, 4B/512 ≈ ~120 s/cell.
+    /// Returns null when paramCount or ctx aren't known yet — caller
+    /// hides the time note in that case.
+    /// </summary>
+    /// <remarks>
+    /// This is a forward-projection heuristic, not a measurement. The
+    /// actual wall time depends on GPU concurrency (the parallel PPL
+    /// runner is the dominant factor on big-VRAM hardware), file I/O,
+    /// and PPL chunk count from the corpus. Treat the estimate as an
+    /// upper-bound rule of thumb.
+    /// </remarks>
+    private string? EstimateWallTimeText(int totalCells)
+    {
+        if (DetectedParamCount <= 0 || ContextSize <= 0 || totalCells <= 0) return null;
+        var paramsB = DetectedParamCount / 1e9;
+        // 30 s/cell at 1 B params and ctx=512 — fits the empirical
+        // 1.7B/512 ≈ 50 s and 4B/512 ≈ 120 s observations.
+        var perCellSeconds = 30.0 * paramsB * (ContextSize / 512.0);
+        var totalSeconds = perCellSeconds * totalCells;
+        return FormatDuration(totalSeconds);
+    }
+
+    /// <summary>Compact human duration: 45s / 12m / 2h 15m / 3d 4h.</summary>
+    private static string FormatDuration(double seconds)
+    {
+        if (seconds < 60) return $"{seconds:F0} s";
+        if (seconds < 3600)
+        {
+            var m = seconds / 60.0;
+            return $"{m:F0} min";
+        }
+        if (seconds < 86400)
+        {
+            int h = (int)(seconds / 3600);
+            int m = (int)((seconds % 3600) / 60);
+            return m > 0 ? $"{h} h {m} min" : $"{h} h";
+        }
+        int d = (int)(seconds / 86400);
+        int rh = (int)((seconds % 86400) / 3600);
+        return rh > 0 ? $"{d} d {rh} h" : $"{d} d";
     }
 
     /// <summary>
@@ -483,6 +540,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         Categories.Clear();
         DetectedArchitecture = string.Empty;
         DetectedLayerCount = 0;
+        DetectedParamCount = 0;
         PerLayerTensorCount = 0;
 
         if (string.IsNullOrWhiteSpace(SourceModelPath) || !File.Exists(SourceModelPath)) return;
@@ -502,6 +560,12 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
                 LlamaGgufType.Uint64 => (int)layerEntry.Value.AsUInt64(),
                 _                    => 0,
             };
+
+            // Total parameter count = sum of element counts across all
+            // tensors. Drives the wall-time heuristic for the cost
+            // estimate; matches the convention LlamaSensitivityProfileBuilder
+            // uses for the same purpose.
+            DetectedParamCount = gguf.Tensors.Sum(t => t.Dimensions.Aggregate(1L, (a, b) => a * (long)b));
 
             var spec = LlamaArchitectureRegistry.Lookup(archId)
                     ?? LlamaArchitectureRegistry.StandardTransformer;
