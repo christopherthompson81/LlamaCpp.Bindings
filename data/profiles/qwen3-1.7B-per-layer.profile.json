@@ -1,0 +1,380 @@
+{
+  "schemaVersion": 1,
+  "architectureId": "qwen3",
+  "layerCount": 28,
+  "familyNotes": "QK-norm architecture (Qwen3 family, 28 layers). HAND-AUTHORED per-layer extension built from the ffn_down \u00d7 use_more_bits-set drill on 2026-04-28: 28 ffn_down tensors \u00d7 {Q2_K, Q4_K, IQ4_XS, Q6_K} measurements. Two empirical findings drove this profile: (1) per-layer Q2_K sum (~1.18 PPL) \u2248 category-level Q4_K (linear regime) but is ~3000\u00d7 lower than category-level Q2_K (+3709 PPL) \u2014 at catastrophic-bpw, single-tensor ablations under-predict compounding effects. (2) Stock's use_more_bits set is empirically miscalibrated on this model: protected layers' mean Q4_K \u0394 is +0.001, unprotected is +0.012 (9\u00d7 ratio inverted). Recommended workflow: pair this profile with ApplyStockBaseline=false and target Q4_K_M (4.95 bpw) \u2014 the resulting recipe demotes all 14 use_more_bits-protected ffn_down layers from Q6_K to Q4_K, predicted quality cost dominated by blk.11 (\u0394 \u2248 +0.025).",
+  "provenance": {
+    "method": "ablation",
+    "sourceModel": "Qwen3-1.7B.F16.gguf",
+    "sourceParameterCount": 2031739904,
+    "corpus": "wiki.test.raw",
+    "builtAtUtc": "2026-04-28T19:49:51Z",
+    "builderVersion": "LlamaSensitivityProfileBuilder/1.0.0.0+per-layer-ffn-down"
+  },
+  "f16BaselinePerplexity": 16.886536888019734,
+  "baselineContextSize": 512,
+  "categories": {
+    "attn_q.weight": {
+      "deltaPplByType": {
+        "Q2_K": 1.9757073829667178,
+        "Q3_K": 0.22421713727688086,
+        "Q4_K": 0.039847933667864766,
+        "Q5_K": -0.06041104657255758,
+        "Q6_K": 0.0180056611197017,
+        "Q8_0": 0.0027614537718783083,
+        "IQ4_XS": 0.07967664683875952
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_k.weight": {
+      "deltaPplByType": {
+        "Q2_K": 4.8125402879084405,
+        "Q3_K": -0.011441594612101369,
+        "Q4_K": 0.31403837163140125,
+        "Q5_K": 0.026156642852527057,
+        "Q6_K": -0.059843209720551016,
+        "Q8_0": 0.011319189863236545,
+        "IQ4_XS": -0.10865441644675045
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "attn_v.weight": {
+      "deltaPplByType": {
+        "Q2_K": 15.845430263839177,
+        "Q3_K": 1.343593444141959,
+        "Q4_K": 0.34025465740555205,
+        "Q5_K": 0.04379389037151782,
+        "Q6_K": 0.0014637792643554803,
+        "Q8_0": 0.0005335186975088391,
+        "IQ4_XS": 0.7802489390505691
+      },
+      "recommendedFloor": "Q3_K"
+    },
+    "attn_output.weight": {
+      "deltaPplByType": {
+        "Q2_K": 2.4238912370801025,
+        "Q3_K": -0.36867085862050075,
+        "Q4_K": 0.07888328599574024,
+        "Q5_K": 0.009296258761743559,
+        "Q6_K": 0.02268702838749448,
+        "Q8_0": 0.00016945691444547606,
+        "IQ4_XS": 0.33883049071950566
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_up": {
+      "deltaPplByType": {
+        "Q2_K": 7.9514429556182975,
+        "Q3_K": 0.613097179509662,
+        "Q4_K": 0.44248420195702565,
+        "Q5_K": 0.003991464128851874,
+        "Q6_K": 0.04479114490860425,
+        "Q8_0": -0.014924831170006314,
+        "IQ4_XS": 0.07108943941331347
+      },
+      "recommendedFloor": "Q3_K"
+    },
+    "ffn_gate": {
+      "deltaPplByType": {
+        "Q2_K": 2.6119140805173657,
+        "Q3_K": 0.10768879219944694,
+        "Q4_K": 0.23220066017467644,
+        "Q5_K": 0.046133499774906994,
+        "Q6_K": -0.003534866398968717,
+        "Q8_0": 0.013749882462242624,
+        "IQ4_XS": 0.13199593566437073
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "ffn_down": {
+      "deltaPplByType": {
+        "Q2_K": 3709.5890091661377,
+        "Q3_K": 3.7891942240486998,
+        "Q4_K": 0.11209619283834726,
+        "Q5_K": 0.29571030669584175,
+        "Q6_K": -0.009405537064299807,
+        "Q8_0": -0.03560463180961548,
+        "IQ4_XS": 0.006516825901293544
+      },
+      "recommendedFloor": "Q3_K"
+    },
+    "output.weight": {
+      "deltaPplByType": {
+        "Q2_K": 2.9753793012332643,
+        "Q3_K": 1.2194818062172423,
+        "Q4_K": -0.013831361656610142,
+        "Q5_K": 0.023392382666145295,
+        "Q6_K": -0.013831361656610142,
+        "Q8_0": 0.0016697245149472906,
+        "IQ4_XS": 0.22559536311642958
+      },
+      "recommendedFloor": "Q2_K"
+    },
+    "token_embd.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.12822591576119535,
+        "Q3_K": 0.02869212593541448,
+        "Q4_K": 0.025255020231995218,
+        "Q5_K": -0.015350223320375278,
+        "Q6_K": 0.0001497575443210053,
+        "Q8_0": 0.0006684622781847338,
+        "IQ4_XS": 0.03582042494652171
+      },
+      "recommendedFloor": "Q2_K"
+    }
+  },
+  "perTensor": {
+    "blk.0.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.06295,
+        "Q4_K": -0.01673,
+        "IQ4_XS": -0.01276,
+        "Q6_K": -0.0015
+      },
+      "notes": null
+    },
+    "blk.1.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.05447,
+        "Q4_K": -0.00203,
+        "IQ4_XS": 0.01311,
+        "Q6_K": 0.00644
+      },
+      "notes": null
+    },
+    "blk.2.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.04656,
+        "Q4_K": 0.00084,
+        "IQ4_XS": -0.02336,
+        "Q6_K": -0.02024
+      },
+      "notes": null
+    },
+    "blk.3.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.01548,
+        "Q4_K": 0.05626,
+        "IQ4_XS": -0.01581,
+        "Q6_K": 0.0
+      },
+      "notes": null
+    },
+    "blk.4.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.29744,
+        "Q4_K": 0.03152,
+        "IQ4_XS": 0.01271,
+        "Q6_K": 0.00276
+      },
+      "notes": null
+    },
+    "blk.5.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.14361,
+        "Q4_K": 0.00555,
+        "IQ4_XS": 0.0053,
+        "Q6_K": -0.0154
+      },
+      "notes": null
+    },
+    "blk.6.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.06345,
+        "Q4_K": 0.00721,
+        "IQ4_XS": 0.02711,
+        "Q6_K": 0.0077
+      },
+      "notes": null
+    },
+    "blk.7.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.07409,
+        "Q4_K": 0.06695,
+        "IQ4_XS": 0.03943,
+        "Q6_K": 0.01574
+      },
+      "notes": null
+    },
+    "blk.8.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.22407,
+        "Q4_K": -0.01671,
+        "IQ4_XS": 0.02982,
+        "Q6_K": 0.0024
+      },
+      "notes": null
+    },
+    "blk.9.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.01515,
+        "Q4_K": 0.00402,
+        "IQ4_XS": 0.01373,
+        "Q6_K": -0.00273
+      },
+      "notes": null
+    },
+    "blk.10.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.03686,
+        "Q4_K": -0.00719,
+        "IQ4_XS": -0.02416,
+        "Q6_K": 0.00056
+      },
+      "notes": null
+    },
+    "blk.11.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.17944,
+        "Q4_K": 0.02539,
+        "IQ4_XS": -0.00157,
+        "Q6_K": 0.00702
+      },
+      "notes": null
+    },
+    "blk.12.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.16694,
+        "Q4_K": 0.02112,
+        "IQ4_XS": -0.01004,
+        "Q6_K": 0.00108
+      },
+      "notes": null
+    },
+    "blk.13.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.08994,
+        "Q4_K": 0.01809,
+        "IQ4_XS": 0.02636,
+        "Q6_K": -0.00186
+      },
+      "notes": null
+    },
+    "blk.14.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.03466,
+        "Q4_K": -0.00949,
+        "IQ4_XS": 0.00517,
+        "Q6_K": -0.00127
+      },
+      "notes": null
+    },
+    "blk.15.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.04447,
+        "Q4_K": -0.02788,
+        "IQ4_XS": 0.00281,
+        "Q6_K": 0.00745
+      },
+      "notes": null
+    },
+    "blk.16.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.00683,
+        "Q4_K": -0.01207,
+        "IQ4_XS": 0.00361,
+        "Q6_K": -0.004
+      },
+      "notes": null
+    },
+    "blk.17.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.05499,
+        "Q4_K": -0.00779,
+        "IQ4_XS": 0.03179,
+        "Q6_K": -0.00349
+      },
+      "notes": null
+    },
+    "blk.18.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.04062,
+        "Q4_K": 0.01147,
+        "IQ4_XS": 0.00613,
+        "Q6_K": -0.00776
+      },
+      "notes": null
+    },
+    "blk.19.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": -0.04813,
+        "Q4_K": -0.02525,
+        "IQ4_XS": -0.00032,
+        "Q6_K": -0.00437
+      },
+      "notes": null
+    },
+    "blk.20.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.03139,
+        "Q4_K": 0.01644,
+        "IQ4_XS": 0.01683,
+        "Q6_K": 0.00601
+      },
+      "notes": null
+    },
+    "blk.21.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.0622,
+        "Q4_K": 0.01283,
+        "IQ4_XS": 0.00235,
+        "Q6_K": 0.00229
+      },
+      "notes": null
+    },
+    "blk.22.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.06212,
+        "Q4_K": 0.01067,
+        "IQ4_XS": -0.00644,
+        "Q6_K": 0.00158
+      },
+      "notes": null
+    },
+    "blk.23.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.02534,
+        "Q4_K": -0.00175,
+        "IQ4_XS": 0.00703,
+        "Q6_K": -0.00089
+      },
+      "notes": null
+    },
+    "blk.24.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.04456,
+        "Q4_K": -0.00349,
+        "IQ4_XS": -0.00381,
+        "Q6_K": -0.00767
+      },
+      "notes": null
+    },
+    "blk.25.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.04377,
+        "Q4_K": 0.01277,
+        "IQ4_XS": 0.00856,
+        "Q6_K": 0.00293
+      },
+      "notes": null
+    },
+    "blk.26.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.08034,
+        "Q4_K": 0.0033,
+        "IQ4_XS": 0.00177,
+        "Q6_K": -0.00404
+      },
+      "notes": null
+    },
+    "blk.27.ffn_down.weight": {
+      "deltaPplByType": {
+        "Q2_K": 0.14294,
+        "Q4_K": 0.0114,
+        "IQ4_XS": 0.09259,
+        "Q6_K": 0.00966
+      },
+      "notes": null
+    }
+  }
+}
