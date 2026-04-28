@@ -437,8 +437,19 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
                     ? $"{p.CompletedTensors}/{p.TotalTensors}"
                     : $"{p.CompletedTensors}/{p.TotalTensors} — {p.CurrentTensor} → {p.AppliedType}";
             });
-            await LlamaCustomQuantizer.QuantizeWithRecipeAsync(
-                InputPath, OutputPath, BuiltRecipe, opts, progress, _cts.Token);
+            // Wrap in Task.Run so the synchronous prefix (GGUF open,
+            // tensor enumeration, recipe expansion) runs off-thread.
+            // The internal awaits are already correctly async; this
+            // covers the pre-first-await CPU work that'd otherwise
+            // freeze the UI on a multi-GB source.
+            var inPath  = InputPath;
+            var outPath = OutputPath;
+            var recipe  = BuiltRecipe;
+            var optsLocal = opts;
+            var ct = _cts.Token;
+            await Task.Run(
+                () => LlamaCustomQuantizer.QuantizeWithRecipeAsync(inPath, outPath, recipe, optsLocal, progress, ct),
+                ct);
 
             var elapsed = DateTime.Now - startedAt;
             StatusLine = $"Wrote {OutputPath} in {elapsed.TotalSeconds:F1}s ({BuiltRecipe.Entries.Count} tensors).";

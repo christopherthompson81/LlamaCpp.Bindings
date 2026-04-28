@@ -454,10 +454,24 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
                 }
             });
 
+            // Wrap the whole call in Task.Run so the synchronous prefix
+            // of BuildAsync (GGUF open, tensor enumeration, identity
+            // hashing of multi-GB files) doesn't block the UI thread.
+            // The async method's internal awaits are already correctly
+            // off-thread, but the work *before* the first await runs
+            // on the caller's thread — which is the UI dispatcher when
+            // invoked from a RelayCommand. progress.Report still
+            // dispatches back to the UI thread via its captured
+            // SynchronizationContext, so binding updates are unaffected.
             if (Mode == CampaignMode.PerCategory)
             {
-                var profile = await LlamaSensitivityProfileBuilder.BuildAsync(
-                    SourceModelPath, CorpusPath, opts, progress, _cts.Token);
+                var src = SourceModelPath;
+                var corp = CorpusPath;
+                var optsLocal = opts;
+                var ct = _cts.Token;
+                var profile = await Task.Run(
+                    () => LlamaSensitivityProfileBuilder.BuildAsync(src, corp, optsLocal, progress, ct),
+                    ct);
 
                 profile.SaveToJson(OutputProfilePath);
                 var elapsed = DateTime.Now - startedAt;
@@ -467,8 +481,6 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             }
             else
             {
-                // Targeted drill: caller-built tensor list filtered by
-                // the user's category and layer selections.
                 var spec = LlamaArchitectureRegistry.Lookup(DetectedArchitecture)
                         ?? LlamaArchitectureRegistry.StandardTransformer;
                 var selectedCats = Categories.Where(c => c.IsSelected).Select(c => c.Name).ToList();
@@ -477,8 +489,14 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
                 var targetTensors = spec.ResolveTensors(
                     Math.Max(1, DetectedLayerCount), selectedCats, layerFilter).ToList();
 
-                var newCount = await LlamaSensitivityProfileBuilder.BuildPerLayerAsync(
-                    SourceModelPath, CorpusPath, targetTensors, opts, progress, _cts.Token);
+                var src = SourceModelPath;
+                var corp = CorpusPath;
+                var optsLocal = opts;
+                var ct = _cts.Token;
+                var targets = targetTensors;
+                var newCount = await Task.Run(
+                    () => LlamaSensitivityProfileBuilder.BuildPerLayerAsync(src, corp, targets, optsLocal, progress, ct),
+                    ct);
                 var elapsed = DateTime.Now - startedAt;
                 StatusLine =
                     $"Recorded {newCount} new per-tensor measurements in {elapsed.TotalMinutes:F1} min " +
