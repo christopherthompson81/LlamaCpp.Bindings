@@ -350,7 +350,7 @@ public static class LlamaQuantSensitivity
             }
 
             Report(LlamaQuantSensitivityPhase.Dequantize);
-            var toFloat = Marshal.GetDelegateForFunctionPointer<GgmlToFloatDelegate>(traits.to_float);
+            var toFloat = Marshal.GetDelegateForFunctionPointer<NativeMethods.GgmlToFloatDelegate>(traits.to_float);
             fixed (byte*  pdst = quantBuf)
             fixed (float* prt  = roundTripped)
             {
@@ -429,7 +429,7 @@ public static class LlamaQuantSensitivity
             // Dequantize via the type-traits to_float function pointer.
             // Note: to_float is declared as void(*)(const void*, float*, int64_t)
             // — k is the total element count.
-            var toFloat = Marshal.GetDelegateForFunctionPointer<GgmlToFloatDelegate>(traits.to_float);
+            var toFloat = Marshal.GetDelegateForFunctionPointer<NativeMethods.GgmlToFloatDelegate>(traits.to_float);
             toFloat((IntPtr)pdst, (IntPtr)prt, source.Length);
         }
 
@@ -530,7 +530,7 @@ public static class LlamaQuantSensitivity
                         $"Tensor '{t.Name}' has type {t.TypeId} with no type-traits — can't dequantize.");
                 }
                 var traits = Marshal.PtrToStructure<ggml_type_traits>(traitsPtr);
-                var toFloat = Marshal.GetDelegateForFunctionPointer<GgmlToFloatDelegate>(traits.to_float);
+                var toFloat = Marshal.GetDelegateForFunctionPointer<NativeMethods.GgmlToFloatDelegate>(traits.to_float);
                 fixed (byte* pq = raw)
                 fixed (float* pa = arr)
                 {
@@ -616,9 +616,6 @@ public static class LlamaQuantSensitivity
             got += n;
         }
     }
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate void GgmlToFloatDelegate(IntPtr src, IntPtr dst, long k);
 
     // ----- JSON save/load -----
 

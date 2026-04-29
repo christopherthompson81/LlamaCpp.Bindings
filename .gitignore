@@ -34,3 +34,5 @@ Thumbs.db
 *.scratch.md
 
 .claude/
+# Local CMake build dir for native shims (output goes to runtimes/<rid>/native/, gitignored).
+tools/native-shims/build-*/

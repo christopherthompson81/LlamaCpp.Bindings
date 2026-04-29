@@ -417,6 +417,15 @@ public static class LlamaCustomQuantizer
     /// <c>in_sum2 / counts</c>, averaged across the nmat axis for
     /// dense tensors.
     /// </summary>
+    /// <summary>
+    /// Public alias of the imatrix loader so other in-process callers
+    /// (notably <see cref="LlamaInPlaceAblator"/> via the campaign
+    /// builder) can reuse the same per-column-importance computation
+    /// without duplicating the in_sum2/counts normalization logic.
+    /// </summary>
+    public static IReadOnlyDictionary<string, float[]> LoadImatrixForExternalUse(string path)
+        => LoadImatrix(path);
+
     private static Dictionary<string, float[]> LoadImatrix(string path)
     {
         var f = LlamaGgufFile.Open(path);

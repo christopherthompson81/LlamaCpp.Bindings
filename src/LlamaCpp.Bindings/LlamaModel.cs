@@ -297,6 +297,181 @@ public sealed class LlamaModel : IDisposable
 
     internal void EnsureNotDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
+    /// <summary>
+    /// Overwrite the data of an already-loaded tensor in this model.
+    /// Locates the tensor by exact-match name in the model's
+    /// <c>tensors_by_name</c> vector, then dispatches the bytes to the
+    /// owning backend (CUDA / CPU / Metal / …) via
+    /// <c>ggml_backend_tensor_set</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Used by the AdaptiveQuantization profile builder to apply per-cell
+    /// ablations without reloading the model: the same F16 model stays
+    /// resident in VRAM across ablations, and only the affected tensor's
+    /// bytes are rewritten between PPL passes.
+    /// </para>
+    /// <para>
+    /// <strong>Buffer-size constraint:</strong> the model's tensor
+    /// allocation is fixed at load time by the source GGUF's tensor type.
+    /// Writes must match the existing tensor's byte size — i.e., to ablate
+    /// an F16 tensor through Q4_K, callers must round-trip the data
+    /// (F16 → Q4_K → F16) so the bytes written are still F16-shaped.
+    /// Writing fewer or more bytes than the tensor's allocated buffer
+    /// silently corrupts neighbouring tensors.
+    /// </para>
+    /// <para>
+    /// Bypasses llama.cpp's public API by reaching into the internal
+    /// <c>llama_internal_get_tensor_map</c> symbol via the
+    /// <c>libllamashim</c> shim. The shim is rebuilt against each pinned
+    /// llama.cpp version (<c>tools/native-shims/build.sh</c>); failure to
+    /// rebuild after a pin bump will surface as a missing-symbol
+    /// <see cref="DllNotFoundException"/> on first call.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// No tensor with that name exists in the model, or the shim
+    /// rejected the call (returned a non-zero status).
+    /// </exception>
+    public unsafe void SetTensorData(string tensorName, ReadOnlySpan<byte> data, long offset = 0)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tensorName);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        EnsureNotDisposed();
+
+        var tensor = NativeMethods.llamashim_get_model_tensor(_handle.DangerousGetHandle(), tensorName);
+        if (tensor == IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                $"Tensor '{tensorName}' not found in model. Use {nameof(EnumerateTensorNames)} to inspect available names.");
+        }
+
+        fixed (byte* dataPtr = data)
+        {
+            int rc = NativeMethods.llamashim_set_tensor_data(
+                tensor, dataPtr, (nuint)offset, (nuint)data.Length);
+            if (rc != 0)
+            {
+                throw new InvalidOperationException(
+                    $"llamashim_set_tensor_data returned {rc} for tensor '{tensorName}'.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Compute a content fingerprint (SHA-256) of an already-loaded
+    /// tensor's GPU bytes. Diagnostic helper for the in-place ablator
+    /// path — lets callers confirm "the bytes I wrote are still there"
+    /// without serializing the whole tensor.
+    /// </summary>
+    /// <remarks>
+    /// Reads the full tensor buffer via <see cref="GetTensorData"/>
+    /// (one D2H of the tensor's <c>ByteSize</c>) and hashes it.
+    /// Cost is dominated by the d2h transfer.
+    /// </remarks>
+    public string FingerprintTensor(string tensorName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tensorName);
+        EnsureNotDisposed();
+
+        var tensor = NativeMethods.llamashim_get_model_tensor(_handle.DangerousGetHandle(), tensorName);
+        if (tensor == IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                $"Tensor '{tensorName}' not found in model.");
+        }
+
+        // Pull the tensor's byte size from the shim's get-by-index path —
+        // we don't have a direct "tensor.ByteSize" accessor, so we rely
+        // on the caller having a LlamaGgufFile or pass it explicitly.
+        // Simplest portable solution: take size from a one-time GgufFile
+        // open. Callers who already have an LlamaGgufFile should use the
+        // <see cref="FingerprintTensorWithSize"/> overload instead to
+        // avoid re-reading the GGUF header.
+        var ggufFile = LlamaGgufFile.Open(ModelPath);
+        var info = ggufFile.Tensors.FirstOrDefault(t => t.Name == tensorName)
+            ?? throw new InvalidOperationException(
+                $"Tensor '{tensorName}' missing from GGUF header.");
+        return FingerprintTensorWithSize(tensorName, info.ByteSize);
+    }
+
+    /// <summary>
+    /// Faster variant of <see cref="FingerprintTensor"/> when the
+    /// caller already knows the tensor's byte size (e.g. from a
+    /// previously-opened <see cref="LlamaGgufFile"/>) — avoids the
+    /// per-call GGUF header reparse.
+    /// </summary>
+    public string FingerprintTensorWithSize(string tensorName, long byteSize)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tensorName);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteSize);
+        EnsureNotDisposed();
+
+        var buf = new byte[byteSize];
+        GetTensorData(tensorName, buf);
+        var hash = System.Security.Cryptography.SHA256.HashData(buf);
+        return Convert.ToHexString(hash);
+    }
+
+    /// <summary>
+    /// Read the raw bytes of an already-loaded tensor's buffer.
+    /// Symmetric companion to <see cref="SetTensorData"/>; primarily
+    /// used to verify that a prior write actually landed in GPU memory
+    /// (i.e., distinguishing "the write took effect" from "the API
+    /// returned success but nothing changed").
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No tensor with that name, or shim returned non-zero status.</exception>
+    public unsafe void GetTensorData(string tensorName, Span<byte> destination, long offset = 0)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tensorName);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        EnsureNotDisposed();
+
+        var tensor = NativeMethods.llamashim_get_model_tensor(_handle.DangerousGetHandle(), tensorName);
+        if (tensor == IntPtr.Zero)
+        {
+            throw new InvalidOperationException(
+                $"Tensor '{tensorName}' not found in model.");
+        }
+
+        fixed (byte* dataPtr = destination)
+        {
+            int rc = NativeMethods.llamashim_get_tensor_data(
+                tensor, dataPtr, (nuint)offset, (nuint)destination.Length);
+            if (rc != 0)
+            {
+                throw new InvalidOperationException(
+                    $"llamashim_get_tensor_data returned {rc} for tensor '{tensorName}'.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enumerate every tensor name in the model's
+    /// <c>tensors_by_name</c> vector. Order is the load-time ordering
+    /// (deterministic given a fixed GGUF + llama.cpp version).
+    /// </summary>
+    /// <remarks>
+    /// Useful for sanity-checking <see cref="SetTensorData"/> targets and
+    /// for building name → index caches. Materializes the names eagerly;
+    /// for large models (10K+ tensors) consider caching the result.
+    /// </remarks>
+    public IReadOnlyList<string> EnumerateTensorNames()
+    {
+        EnsureNotDisposed();
+        var handle = _handle.DangerousGetHandle();
+        var count = (int)NativeMethods.llamashim_get_tensor_count(handle);
+        var names = new List<string>(count);
+        for (int i = 0; i < count; i++)
+        {
+            var ptr = NativeMethods.llamashim_get_tensor_name_at(handle, (nuint)i);
+            if (ptr == IntPtr.Zero) break;
+            var name = Marshal.PtrToStringUTF8(ptr);
+            if (name is not null) names.Add(name);
+        }
+        return names;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

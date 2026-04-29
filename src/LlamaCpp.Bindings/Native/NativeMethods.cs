@@ -18,6 +18,10 @@ internal static partial class NativeMethods
     private const string LibName = "llama";
     private const string LibMtmd = "mtmd";
     private const string LibGgml = "ggml";
+    // Custom C shim built alongside the fetched native binaries. Exposes
+    // llama.cpp internals (currently: tensor lookup by name) that the
+    // public llama.h doesn't surface. See tools/native-shims/.
+    private const string LibLlamaShim = "llamashim";
 
     // ----- Backend lifecycle -----
 
@@ -89,6 +93,48 @@ internal static partial class NativeMethods
     internal static unsafe partial void ggml_backend_tensor_get(
         IntPtr tensor, void* data, nuint offset, nuint size);
 
+    // ----- llamashim: thin wrappers for llama.cpp internals not surfaced
+    // by the public llama.h. See tools/native-shims/llamashim.cpp.
+
+    // Lookup a tensor in <model>'s tensors_by_name vector by exact-match
+    // string. Returns NULL when no match.
+    [LibraryImport(LibLlamaShim, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr llamashim_get_model_tensor(IntPtr model, string name);
+
+    // Write <size> bytes from <data> into <tensor>'s buffer at <offset>.
+    // Dispatches via ggml_backend_tensor_set, so the upload goes to the
+    // tensor's owning backend (CUDA D2H, CPU memcpy, etc.). Returns 0 on
+    // success, -1 if <tensor> is NULL.
+    [LibraryImport(LibLlamaShim)]
+    internal static unsafe partial int llamashim_set_tensor_data(
+        IntPtr tensor, void* data, nuint offset, nuint size);
+
+    // Read <size> bytes from <tensor>'s buffer at <offset> into <data>.
+    // Symmetric companion to llamashim_set_tensor_data; used for
+    // verification ("did the write take effect?") and for snapshotting
+    // tensor contents off the device.
+    [LibraryImport(LibLlamaShim)]
+    internal static unsafe partial int llamashim_get_tensor_data(
+        IntPtr tensor, void* data, nuint offset, nuint size);
+
+    // Number of tensors in <model>'s tensors_by_name vector. Used for
+    // pre-flight sizing on the binding side (e.g. enumeration, restore
+    // caches). 0 if <model> is NULL.
+    [LibraryImport(LibLlamaShim)]
+    internal static partial nuint llamashim_get_tensor_count(IntPtr model);
+
+    // Returns a pointer to a UTF-8 C string naming the i-th tensor in the
+    // model's tensors_by_name vector, or NULL if out of range. The pointer
+    // is valid for the lifetime of the model. Marshalled as IntPtr so the
+    // caller can decide whether to copy or read in place.
+    [LibraryImport(LibLlamaShim)]
+    internal static partial IntPtr llamashim_get_tensor_name_at(IntPtr model, nuint index);
+
+    // Returns the i-th ggml_tensor pointer in tensors_by_name, or NULL.
+    // Pairs with llamashim_get_tensor_name_at for index-based iteration.
+    [LibraryImport(LibLlamaShim)]
+    internal static partial IntPtr llamashim_get_tensor_at(IntPtr model, nuint index);
+
     // ----- Per-tensor quantize / dequantize (used by the
     // quantization-sensitivity sweep) -----
     //
@@ -118,6 +164,27 @@ internal static partial class NativeMethods
     // the process. Used to obtain a type's `to_float` dequantize fn.
     [LibraryImport(LibGgml)]
     internal static partial IntPtr ggml_get_type_traits(ggml_type type);
+
+    // Convert <n> contiguous F16 (ggml_fp16_t = uint16_t) values from
+    // <src> to F32 in <dst>. Used by the round-trip encoder when the
+    // source GGUF stores tensors as F16 but ggml_quantize_chunk expects
+    // F32 input.
+    [LibraryImport(LibGgml)]
+    internal static unsafe partial void ggml_fp16_to_fp32_row(
+        ushort* src, float* dst, long n);
+
+    // Convert <n> contiguous F32 values from <src> to F16 in <dst>.
+    // Pairs with ggml_fp16_to_fp32_row to close the round-trip cycle
+    // before writing back to an F16-allocated tensor via SetTensorData.
+    [LibraryImport(LibGgml)]
+    internal static unsafe partial void ggml_fp32_to_fp16_row(
+        float* src, ushort* dst, long n);
+
+    // Marshalling delegate for <c>ggml_type_traits.to_float</c>:
+    // dequantizes a quant-format buffer into F32. Signature matches
+    // <c>void(*)(const void*, float*, int64_t)</c> in ggml.h.
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void GgmlToFloatDelegate(IntPtr src, IntPtr dst, long count);
 
     // Callback: void (*)(ggml_log_level level, const char * text, void * user_data)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
