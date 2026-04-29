@@ -188,7 +188,20 @@ public static class LlamaPerplexity
                 int start = chunk * chunkSize;
                 context.ClearKvCache();
 
-                PopulateBatchAllLogits(ref batch, tokens, start, chunkSize);
+                int firstScored = options.ScoreSecondHalfOnly ? chunkSize / 2 : 1;
+                // Match llama-perplexity: only request logits at the
+                // positions we'll actually score. With ScoreSecondHalfOnly
+                // (the default) this halves both the LM-head matmul work
+                // and the GPU→CPU logits readback — readback dominates
+                // wall on this path (eager-touch experiment 2026-04-28
+                // measured 32.6s of a 47.7s wall on Qwen3-1.7B Q4_K_M).
+                // See docs/investigations/qwen3_qk_sensitivity.md Run 23
+                // and closed issue #43 for the full breakdown of why a
+                // device-side reduction subgraph isn't achievable with
+                // llama.cpp's current public API.
+                PopulateBatchScoredLogits(
+                    ref batch, tokens, start, chunkSize,
+                    firstNeededPosition: firstScored - 1);
                 unsafe
                 {
                     var rc = NativeMethods.llama_decode(context.Handle.DangerousHandle, batch);
@@ -201,22 +214,6 @@ public static class LlamaPerplexity
                     }
                 }
 
-                // Per-chunk wall is dominated by the GPU→CPU logit readback
-                // (~65% on Qwen3-1.7B / RTX 3090 — confirmed via two
-                // trace iterations + a ComputeBatchedAsync sweep): ~150 MB
-                // of logits per chunk arrive lazily as managed-memory
-                // page faults during softmax touches. Softmax compute is
-                // ~16s genuine compute, already vectorized via
-                // TensorPrimitives. ComputeBatchedAsync (n_seq=2,4,8)
-                // gives at most 5% wall reduction over the sequential
-                // path — chunks share the GPU forward but readback still
-                // serializes. The only meaningful win from here is a
-                // device-side logsumexp+gather subgraph (return only
-                // target_logit + logsumexp per position) — ~3× wall.
-                // Tracked but not on the critical path; the parallel
-                // runner amortizes the per-job 50s cost when multiple
-                // PPL jobs run concurrently.
-                int firstScored = options.ScoreSecondHalfOnly ? chunkSize / 2 : 1;
                 var (chunkNllSum, chunkScored) = ParallelChunkScore(
                     context, tokens, start, firstScored, chunkSize, nVocab,
                     options.ThreadCount);
@@ -358,8 +355,11 @@ public static class LlamaPerplexity
                 int firstChunk = round * B;
                 int chunksInRound = Math.Min(B, chunkCount - firstChunk);
 
+                int firstScored = options.ScoreSecondHalfOnly ? chunkSize / 2 : 1;
                 context.ClearKvCache();
-                PopulateMultiSeqBatch(ref batch, tokens, firstChunk, chunksInRound, chunkSize);
+                PopulateMultiSeqBatch(
+                    ref batch, tokens, firstChunk, chunksInRound, chunkSize,
+                    firstNeededPositionPerSeq: firstScored - 1);
 
                 unsafe
                 {
@@ -376,7 +376,6 @@ public static class LlamaPerplexity
                 // Same parallel softmax as the sequential path, but the
                 // index space is (chunksInRound × scored-positions)
                 // flattened into one Parallel.For range.
-                int firstScored = options.ScoreSecondHalfOnly ? chunkSize / 2 : 1;
                 var (roundNllSum, roundScored) = ParallelRoundScore(
                     context, tokens, firstChunk, chunksInRound, chunkSize,
                     firstScored, nVocab, options.ThreadCount);
@@ -417,12 +416,15 @@ public static class LlamaPerplexity
     /// Pack <paramref name="chunksInRound"/> consecutive chunks into a
     /// single multi-sequence batch. Sequence i runs over batch positions
     /// [i*chunkSize .. (i+1)*chunkSize), with <c>pos</c> reset to 0 within
-    /// each sequence and <c>seq_id</c> = i. Logits enabled at every
-    /// position (perplexity scores every token).
+    /// each sequence and <c>seq_id</c> = i. Logits enabled only at
+    /// in-sequence positions <c>p &gt;= firstNeededPositionPerSeq</c> —
+    /// halves both LM-head matmul work and logits readback when
+    /// <c>ScoreSecondHalfOnly</c> is on.
     /// </summary>
     private static unsafe void PopulateMultiSeqBatch(
         ref llama_batch batch, int[] tokens,
-        int firstChunk, int chunksInRound, int chunkSize)
+        int firstChunk, int chunksInRound, int chunkSize,
+        int firstNeededPositionPerSeq)
     {
         int totalTokens = chunksInRound * chunkSize;
         batch.n_tokens = totalTokens;
@@ -443,7 +445,7 @@ public static class LlamaPerplexity
                 posPtr[b]      = i;       // position within the sequence
                 nSeqPtr[b]     = 1;
                 seqIdArr[b][0] = seq;     // sequence index 0..chunksInRound-1
-                logits[b]      = 1;
+                logits[b]      = (sbyte)(i >= firstNeededPositionPerSeq ? 1 : 0);
             }
         }
     }
@@ -829,12 +831,17 @@ public static class LlamaPerplexity
     /// <summary>
     /// Fill <paramref name="batch"/> with <paramref name="count"/> tokens
     /// starting at <paramref name="offset"/>, all on sequence 0, with
-    /// logits enabled at every position. Mirrors the layout
-    /// <see cref="LlamaGenerator"/> uses internally for prompt prefill,
-    /// but with <c>logits[i] = 1</c> for all i.
+    /// logits enabled only at positions <c>i &gt;= firstNeededPosition</c>.
     /// </summary>
-    private static unsafe void PopulateBatchAllLogits(
-        ref llama_batch batch, int[] tokens, int offset, int count)
+    /// <remarks>
+    /// Setting <c>logits[i] = 0</c> tells llama.cpp to skip the LM-head
+    /// matmul at that position AND skip including those logits in the
+    /// per-chunk readback buffer. For the second-half-only scoring
+    /// recipe this halves both costs.
+    /// </remarks>
+    private static unsafe void PopulateBatchScoredLogits(
+        ref llama_batch batch, int[] tokens, int offset, int count,
+        int firstNeededPosition)
     {
         batch.n_tokens = count;
         var tokPtr   = (int*)batch.token;
@@ -849,7 +856,7 @@ public static class LlamaPerplexity
             posPtr[i]      = i;
             nSeqPtr[i]     = 1;
             seqIdArr[i][0] = 0;
-            logits[i]      = 1;
+            logits[i]      = (sbyte)(i >= firstNeededPosition ? 1 : 0);
         }
     }
 }
