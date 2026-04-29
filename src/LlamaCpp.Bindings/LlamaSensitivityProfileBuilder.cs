@@ -126,6 +126,43 @@ public static class LlamaSensitivityProfileBuilder
         /// </para>
         /// </remarks>
         public bool UseInPlaceAblator { get; set; } = true;
+
+        /// <summary>
+        /// When <see cref="UseInPlaceAblator"/> is on, route ablations
+        /// targeting the lm-head tensor through the disk-quantize path
+        /// instead of the in-place path. Default <c>true</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The in-place path encodes the round-trip Q-quant values back
+        /// as F16 and runs the F16-kernel matmul at inference. For
+        /// weight tensors deep in the network this agrees with the
+        /// Q-kernel matmul to F32 reduction-order noise (~0.002 PPL,
+        /// Run 24). For the lm-head matmul — whose output feeds the
+        /// final softmax — the kernel choice has a much larger effect:
+        /// in-place under-predicts the cost of low-bpw quantization on
+        /// <c>token_embd.weight</c> (under tied embeddings) by up to
+        /// 0.55 PPL at Q2_K (Run 27 / issue #48).
+        /// </para>
+        /// <para>
+        /// "lm-head tensor" means <c>output.weight</c> always, plus
+        /// <c>token_embd.weight</c> when the architecture has tied
+        /// embeddings (no separate <c>output.weight</c> in the model).
+        /// In per-category mode that's at most one cell per candidate
+        /// type; in per-tensor mode it's the same single tensor across
+        /// the candidate types. Disk-path cost on those few cells is
+        /// the usual ~22 s vs ~10 s — small total impact, large
+        /// correctness gain at low-bpw budgets.
+        /// </para>
+        /// <para>
+        /// Set to <c>false</c> for pure-speed campaigns where the user
+        /// has confirmed they don't care about low-bpw lm-head
+        /// calibration accuracy (e.g., they're targeting Q4_K_M-class
+        /// budgets where the optimizer pins lm-head at Q4_K via the
+        /// stock baseline floor anyway).
+        /// </para>
+        /// </remarks>
+        public bool DiskFallbackForLmHeadAblations { get; set; } = true;
     }
 
     /// <summary>
@@ -620,6 +657,7 @@ public static class LlamaSensitivityProfileBuilder
                     pendingSpecs, baseline, modelSha, architectureId, paramCount,
                     corpusSha, corpusName, imatrixSha, pplOpts, consumerPplOpts,
                     pplConcurrency, db, ablationPpl, sharedLock,
+                    workDir,
                     () => Fraction(),
                     setScored: v => { scored = v; },
                     getScored: () => scored,
@@ -862,6 +900,7 @@ public static class LlamaSensitivityProfileBuilder
         LlamaInvestigationDb db,
         Dictionary<(string Target, LlamaTensorType Type), double> ablationPpl,
         object sharedLock,
+        string workDir,
         Func<double> fraction,
         Action<int> setScored,
         Func<int> getScored,
@@ -881,9 +920,40 @@ public static class LlamaSensitivityProfileBuilder
         // Materialize each pending spec into the explicit tensor list
         // up front, so workers don't replay the predicate on every
         // dequeue. Done once; cheap (O(specs × tensors)).
-        var workItems = pendingSpecs
+        var allItems = pendingSpecs
             .Select(s => (Spec: s, Tensors: MaterializeAblationTensors(weightTensors, s)))
             .ToList();
+
+        // Issue #48: split items so any cell touching the lm-head goes
+        // through the disk path. The in-place path's F16-encoded
+        // round-trip + F16-kernel matmul under-predicts low-bpw
+        // quantization cost on the lm-head matmul (output drives the
+        // final softmax, where per-element rounding becomes per-logit
+        // PPL drift). Disk path keeps the Q-storage and uses the
+        // Q-kernel matmul, agreeing with what the user's deployed
+        // model would actually compute.
+        bool tiedEmbeddings = !weightTensors.Any(n => n == "output.weight");
+        bool IsLmHeadCell(IReadOnlyList<(string Name, LlamaTensorType Type)> tensors)
+        {
+            foreach (var (name, _) in tensors)
+            {
+                if (name == "output.weight") return true;
+                if (tiedEmbeddings && name == "token_embd.weight") return true;
+            }
+            return false;
+        }
+
+        var inPlaceItems = new List<(AblationSpec Spec, IReadOnlyList<(string TensorName, LlamaTensorType Type)> Tensors)>();
+        var diskFallbackItems = new List<(AblationSpec Spec, IReadOnlyList<(string TensorName, LlamaTensorType Type)> Tensors)>();
+        foreach (var item in allItems)
+        {
+            if (opts.DiskFallbackForLmHeadAblations && IsLmHeadCell(item.Tensors))
+                diskFallbackItems.Add(item);
+            else
+                inPlaceItems.Add(item);
+        }
+        // Backwards-compat alias for existing channel-prime loop below.
+        var workItems = inPlaceItems;
 
         // Unbounded channel — the work items are tiny (a list of tensor
         // names per cell), so memory cost of pre-loading all of them
@@ -970,6 +1040,76 @@ public static class LlamaSensitivityProfileBuilder
             .Select(WorkerLoopAsync)
             .ToArray();
         await Task.WhenAll(workers).ConfigureAwait(false);
+
+        // Disk fallback for lm-head cells. Serial (one cell at a time):
+        // they're a small minority (per-category mode: 1 cell per type
+        // = 7 of 56; per-tensor mode: same single tensor across types).
+        // Wall-time hit is bounded; correctness gain is large at low-bpw
+        // budgets (issue #48).
+        foreach (var (spec, tensors) in diskFallbackItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (sharedLock)
+            {
+                progress?.Report(new Progress(
+                    Stage.Quantizing, getScored(), totalJobs,
+                    CurrentLabel: $"{spec.Target} @ {spec.Type} (disk fallback for lm-head)",
+                    CellTarget: spec.Target,
+                    CellType: spec.Type,
+                    CellState: CellState.Quantizing,
+                    Fraction: fraction()));
+            }
+
+            var slug = $"{Slugify(spec.Target)}_{spec.Type}_lmhead";
+            var outPath = Path.Combine(workDir, $"{slug}.gguf");
+            var recipe = BuildAblationRecipe(weightTensors, spec);
+            await QuantizeAsync(
+                sourceModelPath, outPath,
+                ftype: LlamaFileType.Q4_K_M,
+                imatrixPath: opts.ImatrixPath,
+                recipe: recipe,
+                cancellationToken).ConfigureAwait(false);
+
+            double ablation;
+            try
+            {
+                var modelOpts = new LlamaModelParameters { UseMmap = true, GpuLayerCount = -1 };
+                using var model = new LlamaModel(outPath, modelOpts);
+                var result = await LlamaPerplexity.ComputeAsync(
+                    model, corpusText, consumerPplOpts,
+                    progress: null, cancellationToken).ConfigureAwait(false);
+                ablation = result.Perplexity;
+            }
+            finally
+            {
+                try { if (File.Exists(outPath)) File.Delete(outPath); }
+                catch { /* best-effort cleanup; mirrors the disk path */ }
+            }
+
+            lock (sharedLock)
+            {
+                ablationPpl[(spec.Target, spec.Type)] = ablation;
+                db.RecordMeasurement(BuildMeasurementRecord(
+                    modelSha, architectureId, paramCount, corpusSha, corpusName,
+                    imatrixSha, pplOpts.ContextSize,
+                    target:        spec.Target,
+                    ablationType:  spec.Type,
+                    baselineType:  LlamaTensorType.F16,
+                    baselinePpl:   baseline,
+                    ablationPpl:   ablation,
+                    deltaPpl:      ablation - baseline,
+                    gpuModel:      opts.GpuModel));
+                setScored(getScored() + 1);
+                progress?.Report(new Progress(
+                    Stage.Scoring, getScored(), totalJobs,
+                    CurrentLabel: $"{spec.Target} @ {spec.Type} = {ablation:F4} (disk fallback)",
+                    CellTarget: spec.Target,
+                    CellType: spec.Type,
+                    CellState: CellState.Done,
+                    CellDelta: ablation - baseline,
+                    Fraction: fraction()));
+            }
+        }
     }
 
     /// <summary>
