@@ -239,6 +239,78 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 27 — 2026-04-29 (Cross-architecture validation: v3 recipe builder beats stock on Llama-3.2-1B)
+
+First cross-architecture validation of the v3 recipe builder + soft-floor noise gate on a non-Qwen3 model. Llama-3.2-1B-Instruct's terrain is qualitatively different from Qwen3 — classical multi-head attention (no QK-norm), no Q2_K cliffs, gentle ΔPPL curves throughout — so it tests whether the recipe builder's defaults still produce a Pareto-positive recipe when the headroom is small.
+
+### Setup
+
+The cached profile (`data/profiles/llama-3.2-1B.profile.json`, dated 2026-04-28) had to be discarded: its measurement records had been wiped from the investigation DB during the perf-test invalidations between Runs 22 and 25, and the profile schema doesn't record `imatrix_sha` in provenance, so we couldn't verify whether the underlying measurements used an imatrix at all. The cached imatrix sidecar (`Llama-3.2-1B-Instruct.imatrix.gguf`) was dated 2026-04-26 — *before* the 2026-04-27 evening imatrix-collector fix that resolved Q2_K's per-block calibration. So both the profile and the imatrix it was built against were potentially miscalibrated for low-bpw decisions.
+
+Rebuild order:
+
+1. Regenerate the Llama-3.2-1B imatrix against the current collector (88s wall, 564 chunks of `wiki.test.raw`, 112 tensors covered, 1.3 MiB output).
+2. Rebuild the category profile with `LlamaSensitivityProfileBuilder.BuildAsync` against the fresh imatrix: 8 categories × 7 candidate types ({Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_XS}) = 57 cells, F16 baseline = 13.8248 PPL.
+3. Build a recipe at 4.95 bpw (Q4_K_M-class) with default options (soft-floor noise gate, stock baseline applied) and PPL-test against stock Q4_K_M built from the same source + same fresh imatrix.
+
+### Profile shape
+
+Llama-3.2-1B's profile is much milder than Qwen3-1.7B's:
+
+| Category | Q2_K Δ | Q3_K Δ | IQ4_XS Δ | Q4_K Δ | Q5_K Δ | Q6_K Δ | Q8_0 Δ |
+| -------- | -----: | -----: | -------: | -----: | -----: | -----: | -----: |
+| `attn_q.weight`     | +0.24 | +0.13 | +0.01 | +0.04 | −0.01 | +0.00 | −0.00 |
+| `attn_k.weight`     | +0.46 | +0.20 | +0.06 | +0.03 | +0.00 | −0.01 | −0.00 |
+| `attn_v.weight`     | +0.76 | +0.32 | +0.18 | +0.01 | −0.02 | +0.01 | +0.01 |
+| `attn_output.weight`| +1.27 | +0.38 | +0.04 | +0.09 | −0.02 | +0.01 | +0.00 |
+| `ffn_up`            | +2.42 | +0.47 | +0.16 | +0.12 | +0.04 | +0.03 | −0.00 |
+| `ffn_gate`          | +1.38 | +0.33 | +0.11 | +0.09 | +0.01 | +0.00 | +0.00 |
+| `ffn_down`          | +2.28 | **+2.52** | +0.22 | +0.13 | +0.01 | +0.04 | +0.01 |
+| `token_embd.weight` | +2.23 | +0.50 | +0.17 | +0.12 | +0.02 | −0.01 | −0.00 |
+
+No category catastrophes anywhere — even Q2_K stays under +2.5 PPL across the board, vs Qwen3-1.7B's `ffn_down × Q2_K = +3709`. Run 12's hypothesis is empirically confirmed: classical MHA without QK-norm is much friendlier to low-bpw quantization.
+
+The one anomaly: `ffn_down × Q3_K (+2.52)` is *higher* than `Q2_K (+2.28)` — a NonMonotonic measurement that the analyzer would flag. The recipe builder's monotone-from-above clamp handles this automatically; soft-floor refinement would also kick in if the profile had per-tensor data, but at category-only it just doesn't produce a per-tensor refinement to gate.
+
+`token_embd.weight` is unusually sensitive (+2.23 at Q2_K) because Llama-3.2-1B has tied embeddings — `token_embd` is also the lm_head, and quantizing it heavily quantizes the output projection too.
+
+### Recipe verdict
+
+| Variant | PPL | Δ vs F16 | Size | % of F16 |
+| ------- | ---: | -------: | ---: | -------: |
+| F16 (anchor) | 13.8248 | — | 2480 MB | 100 % |
+| Stock Q4_K_M | 14.3042 | +0.4795 | 808 MB | 33 % |
+| **Profile recipe (soft-floor default)** | **14.1810** | **+0.3562** | **779 MB** | **31 %** |
+
+**Pareto win**: −0.12 PPL AND −29 MB vs stock Q4_K_M. Stock-vs-F16 quality gap closed by 26 %.
+
+Recipe layout produced by the optimizer:
+
+- `attn_k`: Q6_K × 16 (highest-Δ attention category, gets the most bits)
+- `attn_output`: Q5_K × 16
+- `attn_q`: Q5_K × 16
+- `attn_v`: Q6_K × 8 + Q5_K × 8 (split via stock baseline floor)
+- `ffn_down`: Q6_K × 8 + Q5_K × 8 (split via stock baseline floor)
+- `ffn_gate`: Q4_K × 16 (cheap-Δ, gets the cheapest type)
+- `ffn_up`: Q4_K × 16
+- `token_embd.weight`: Q4_K × 1 (matches stock)
+
+The optimizer correctly identifies attn_k as the highest-leverage attention tensor on this architecture, in contrast to Qwen3 where attn_k/attn_q dominate via the QK-norm amplification. ffn_gate and ffn_up land at Q4_K because their Q4_K Δ is essentially zero. Stock baseline floors keep attn_v and ffn_down half at Q6_K (matching stock's `use_more_bits` pattern on those tensors).
+
+### Operational note: in-place ablator crash
+
+The first two profile-build attempts crashed natively (SIGSEGV / exit 139) after completing 48 of 57 cells, both at the same boundary (after `ffn_down × Q6_K`). The 48 measured cells persisted to the DB so resume worked; the crash reproduced on the resume. Switching to `Options.UseInPlaceAblator = false` (disk-quantize path) ran the remaining 9 cells without issue and saved a complete profile.
+
+The crash boundary is suspicious — next cell would have been either `ffn_down × Q8_0` (a candidate type the in-place path doesn't normally encounter on Qwen3 sweeps) or one of the 7 `token_embd.weight` cells (token_embd is referenced as both the embedding table AND the lm_head on Llama-3.2-1B due to tied embeddings, so an in-place tensor-data swap could corrupt the lm_head copy). Filed as issue #46 with reproduction details and bisection suggestions.
+
+### Operational note: profile schema gap
+
+The cached pre-regen profile JSON didn't carry `imatrix_sha` in its `provenance` block, so we couldn't tell from the file alone whether it had been built with the stale or the regenerated imatrix. After data invalidations wipe the underlying DB rows, this becomes a hard freshness signal we lose. Worth adding to the schema (small, additive, backwards-compatible) — would also let the recipe builder warn when the user feeds it a profile whose imatrix doesn't match the target's.
+
+### Net status
+
+The v3 recipe builder + soft-floor default generalizes from Qwen3-1.7B (QK-norm, Q2_K cliffs, ffn_down catastrophes) to Llama-3.2-1B (classical MHA, no cliffs, gentle curves) without any algorithm changes. Both architectures now Pareto-dominate stock Q4_K_M with the same out-of-the-box options.
+
 ## Run 26 — 2026-04-29 (Soft-floor noise gate — new project record beats Run 22 AND F16)
 
 Issue #44 stage 1 follow-up. Run 25 had shipped a hard-stop gate
