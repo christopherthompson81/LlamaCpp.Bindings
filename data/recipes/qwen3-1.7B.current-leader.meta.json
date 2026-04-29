@@ -1,0 +1,9 @@
+{
+  "perplexity": 16.84604102698257,
+  "sizeBytes": 1227487392,
+  "averageBitsPerElement": 4.808153225806452,
+  "targetBitsPerElement": 4.95,
+  "recipeBuiltAtUtc": "2026-04-29T16:56:40.9097167Z",
+  "sourceRun": "Run 25 (DB-derived, soft-floor default)",
+  "profilePath": "/home/chris/Programming/LlamaCpp.Bindings/data/profiles/qwen3-1.7B-per-layer.profile.json"
+}

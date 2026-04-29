@@ -262,6 +262,39 @@ public sealed class LlamaQuantRecipeFromProfileOptions
     public double MaxRelativeStdForRefinement { get; set; } = 1.0;
 
     /// <summary>
+    /// When <see cref="NoiseAwareRefinement"/> flags a category as
+    /// noise-suspect, raise the per-tensor refinement floor to this
+    /// type instead of skipping refinement entirely. Default
+    /// <c>Q3_K</c> (3.4375 bpw). Set to <c>null</c> to revert to the
+    /// original hard-stop behavior (skip refinement on noise flag).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Why a soft floor: hard-stopping refinement on every noise flag
+    /// is too blunt. Run 22's <c>ffn_down</c> measurements had
+    /// rel-std@worst = 2.29 — well above the 1.0 default — yet its
+    /// per-tensor picks (Q6_K×15 + IQ4_XS×9 + Q4_K×4) gave 16.8989 PPL,
+    /// the project record. The hard-stop gate refused all of those
+    /// refinements and shipped uniform Q6_K×28 (16.96 PPL, 1256 MB).
+    /// </para>
+    /// <para>
+    /// What goes wrong on Run 25 isn't refinement itself — it's
+    /// <em>catastrophic demotion</em>. <c>ffn_down × Q2_K</c> costs
+    /// +3709 PPL standalone; refining toward Q2_K on noise-flagged data
+    /// is the failure mode worth blocking. A floor at Q3_K (3.4375 bpw)
+    /// blocks Q2_K and IQ2_S while leaving the Q3_K / IQ3_S / IQ4_XS /
+    /// Q4_K / Q5_K / Q6_K / Q8_0 ladder fully available — exactly the
+    /// types Run 22's good picks lived in.
+    /// </para>
+    /// <para>
+    /// Tune up (e.g. <c>Q4_K</c>) if you want a more conservative floor
+    /// for higher-bpw budgets. Tune to <c>null</c> to disable the soft
+    /// floor and restore the legacy hard-stop behavior.
+    /// </para>
+    /// </remarks>
+    public LlamaTensorType? RefinementFloorWhenNoisy { get; set; } = LlamaTensorType.Q3_K;
+
+    /// <summary>
     /// Restrict the optimizer's per-category type pick when the
     /// drill-candidates analyzer classifies a category's bpw curve
     /// as noise-dominated (<see cref="LlamaCategoryShape.NonMonotonic"/>
@@ -784,13 +817,18 @@ public static class LlamaQuantRecipeFromProfile
                     .ToDictionary(t => t.Name, t => perTensorMap[t.Name], StringComparer.Ordinal);
                 if (perTensorInCat.Count == 0) continue;
 
-                // Noise-aware gate: drop per-tensor refinement for
-                // categories whose drilled data is below the noise
-                // floor. NonMonotonic curves contain mathematically-
-                // impossible inversions (a higher-bpw measurement
-                // greater than a lower-bpw one); high relative-std at
-                // the worst type means individual-layer ΔPPL can't be
-                // reliably distinguished from the mean.
+                // Noise-aware gate: when a category's drilled data is
+                // noise-flagged, instead of skipping refinement entirely
+                // (legacy hard-stop), raise the refinement floor to a
+                // safe rung. NonMonotonic curves contain mathematically-
+                // impossible inversions (a higher-bpw measurement greater
+                // than a lower-bpw one); high relative-std at the worst
+                // type means individual-layer ΔPPL can't be reliably
+                // distinguished from the mean. Both conditions argue
+                // against trusting the noisy demote signal at the very
+                // bottom of the ladder (Q2_K), but they don't argue
+                // against the well-measured upper rungs.
+                LlamaTensorType? effectiveRefineFloor = profile.Categories[cat].RecommendedFloor;
                 if (noiseVerdicts is not null
                     && noiseVerdicts.TryGetValue(cat, out var verdict))
                 {
@@ -799,7 +837,21 @@ public static class LlamaQuantRecipeFromProfile
                                        && rs > opts.MaxRelativeStdForRefinement;
                     if (nonMonotonic || highRelStd)
                     {
-                        continue;
+                        if (opts.RefinementFloorWhenNoisy is LlamaTensorType nf)
+                        {
+                            var nfBpw = LlamaQuantRecipe.GetBitsPerElement(nf);
+                            var existingBpw = effectiveRefineFloor is LlamaTensorType ef
+                                ? LlamaQuantRecipe.GetBitsPerElement(ef)
+                                : 0.0;
+                            if (nfBpw > existingBpw)
+                                effectiveRefineFloor = nf;
+                        }
+                        else
+                        {
+                            // Legacy hard-stop: caller explicitly opted
+                            // out of the soft floor by setting it to null.
+                            continue;
+                        }
                     }
                 }
 
@@ -808,7 +860,7 @@ public static class LlamaQuantRecipeFromProfile
                     tensorsInCat,
                     perTensorInCat,
                     ladder, sizeScale,
-                    floor: profile.Categories[cat].RecommendedFloor,
+                    floor: effectiveRefineFloor,
                     baseline: baseline,
                     minPplGainPerBpw: opts.MinPplGainPerBpw,
                     allowPromotion: opts.AllowPerTensorPromotion,

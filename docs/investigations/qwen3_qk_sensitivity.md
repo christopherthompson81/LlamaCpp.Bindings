@@ -239,6 +239,102 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 26 — 2026-04-29 (Soft-floor noise gate — new project record beats Run 22 AND F16)
+
+Issue #44 stage 1 follow-up. Run 25 had shipped a hard-stop gate
+(`NoiseAwareRefinement` skips per-tensor refinement entirely on noise
+flags) which produced 17.0113 PPL on the current DB-derived profile
+— worse than Run 22's 16.8989. The diagnosis was that the gate was
+too blunt: it treated the *legitimate* per-tensor demotes (Run 22's
+`ffn_down` Q6_K×15 + IQ4_XS×9 + Q4_K×4) and the *catastrophic* Q2_K
+demote case as the same thing. Both lived behind the same
+`rel-std@worst > 1.0` flag.
+
+### Mechanism
+
+Replace the hard-stop with a **soft floor**: when a category is
+noise-flagged, raise the per-tensor refinement floor (default `Q3_K`,
+3.4375 bpw) instead of skipping refinement entirely. Q3_K blocks the
+catastrophic demotes (Q2_K, IQ2_S) without disturbing the IQ4_XS /
+Q4_K / Q6_K rungs that Run 22's good picks lived on. New option:
+`LlamaQuantRecipeFromProfileOptions.RefinementFloorWhenNoisy` —
+default `Q3_K`, set to `null` to restore the legacy hard-stop.
+
+Implementation: in `LlamaQuantRecipeFromProfile`, the per-tensor
+refinement loop's gate now computes an `effectiveRefineFloor` (max of
+declared category floor and the noise-fallback type) instead of
+`continue`-skipping. The floor is then passed through to
+`RefineCategoryPerTensor` where the existing `floor` parameter
+already enforces the bpw lower bound on demote/promote candidates.
+
+### Validation
+
+Two harnesses, both built with default soft-floor options
+(`NoiseAwareRefinement = true`, `RefinementFloorWhenNoisy = Q3_K`):
+
+1. **Run 22 replay** (git profile @95d6eb2 + soft floor + default
+   options):
+
+       PPL: 16.8989    Size: 1210 MB    Avg bpw: 4.7389
+
+   Bit-exact reproduction of Run 22's documented numbers, *with no
+   workaround flag*. Previously (hard-stop default) this same script
+   needed `NoiseAwareRefinement = false` to bypass the gate; now the
+   default does the right thing because all of Run 22's picks are
+   above the Q3_K soft floor.
+
+2. **Run 25 build** (current DB-derived profile + soft floor):
+
+       PPL: 16.8460    Size: 1227 MB    Avg bpw: 4.8082
+
+   **New project record.** Beats Run 22 (16.8989) by 0.053 PPL AND
+   beats F16 baseline (16.8870) by 0.041 PPL at 30% of F16's size.
+   The improvement comes from the additional per-tensor data drilled
+   in Run 25's QK sweep being usable now — Run 25 had shipped that
+   data into the DB but the hard-stop gate refused to apply any of
+   it. The soft floor lets the well-measured upper rungs (IQ4_XS,
+   Q4_K, Q5_K, Q6_K) influence per-tensor picks while still blocking
+   the noise-suspect Q2_K demote on attention categories.
+
+### Data hygiene
+
+The current-leader recipe is now persisted at
+`data/recipes/qwen3-1.7B.current-leader.json` with a sidecar
+metadata file (`...meta.json`) recording observed PPL, size, source
+run, and the profile path it was built from. Both harnesses use a
+shared "compare-against-recorded-best, only update on improvement"
+pattern so testing iterations can't silently overwrite a working
+baseline with a regression. Initial leader: this run's 16.8460
+recipe.
+
+### Test coverage
+
+New unit test `NoiseAwareRefinement_SoftFloor_AllowsAboveFloor_BlocksBelow`
+in `QuantRecipeFromProfileTests` distinguishes three behaviors on a
+synthetic non-monotonic profile that has Q3_K data measured:
+
+- Gate off: `blk.2.ffn_up` demotes all the way to Q2_K (0.01 Δ
+  treated as signal).
+- Soft floor (default): demotes to Q3_K (the floor), Q2_K blocked.
+- Hard-stop (`RefinementFloorWhenNoisy = null`): refinement skipped,
+  stays at Q4_K category pick.
+
+The pre-existing `_FallsBackToCategoryPick` and
+`_RefinesAnyway` tests both continue to pass under the new default
+because their synthetic ladders don't include Q3_K — the soft floor
+collapses to "no measured types between Q2_K (blocked) and Q4_K
+(current)", same observable behavior as the hard-stop.
+
+### Net status
+
+`Adaptive Quantization` on Qwen3-1.7B now ships **better PPL than
+F16** at **30% of F16's size** with default options. Run 25's
+negative result is fully reversed — the per-tensor data was good,
+the gate was too blunt. The soft floor extends the v3 recipe
+builder's "honor analyzer signals" guarantee from "block bad demotes
+on noise" to "block bad demotes on noise *while still using the good
+ones*."
+
 ## Run 25 — 2026-04-29 (Per-tensor expansion to QK categories: negative result + compounding diagnosis)
 
 With Run 24's in-place ablator landed and the drill-candidates UI

@@ -783,6 +783,139 @@ public class QuantRecipeFromProfileTests
     }
 
     /// <summary>
+    /// Soft-floor gate: when a category is flagged as noise-suspect, the
+    /// default behavior is to RAISE the per-tensor refinement floor (to
+    /// <c>RefinementFloorWhenNoisy</c>, default <c>Q3_K</c>) rather than
+    /// skip refinement entirely. Refinement still runs — it just can't
+    /// pick types below the floor. Run 22 demonstrated that legitimate
+    /// per-tensor demotes (IQ4_XS, Q4_K) live above any sane noise floor;
+    /// what we actually want to block is the catastrophic Q2_K demote on
+    /// noise-flagged data.
+    /// </summary>
+    [Fact]
+    public void NoiseAwareRefinement_SoftFloor_AllowsAboveFloor_BlocksBelow()
+    {
+        var profile = MakeProfileWithNonMonotonicPerTensor_AndQ3K();
+        var layout = SyntheticLayout(4, 1_000_000);
+
+        // Default options: soft floor at Q3_K.
+        var recipeSoft = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                UsePerTensorData = true,
+                NoiseAwareRefinement = true,            // default
+                // RefinementFloorWhenNoisy default = Q3_K
+                MinPredictedGainPpl = 0,                // isolate gate behavior
+            });
+        var blk2Soft = recipeSoft.Entries
+            .First(e => e.TensorName == "blk.2.ffn_up.weight").ChosenType;
+        Assert.Equal(LlamaTensorType.Q3_K, blk2Soft);
+
+        // Hard-stop legacy behavior: RefinementFloorWhenNoisy = null
+        // → refinement skipped entirely, blk.2 stays at category pick.
+        var recipeHardStop = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                UsePerTensorData = true,
+                NoiseAwareRefinement = true,
+                RefinementFloorWhenNoisy = null,        // legacy hard-stop
+                MinPredictedGainPpl = 0,
+            });
+        var blk2HardStop = recipeHardStop.Entries
+            .First(e => e.TensorName == "blk.2.ffn_up.weight").ChosenType;
+        Assert.Equal(LlamaTensorType.Q4_K, blk2HardStop);  // category pick
+
+        // Gate off: refinement runs unconstrained, blk.2 demotes all
+        // the way to Q2_K based on its noise-flipped per-tensor signal.
+        var recipeOff = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                UsePerTensorData = true,
+                NoiseAwareRefinement = false,           // gate off
+                MinPredictedGainPpl = 0,
+            });
+        var blk2Off = recipeOff.Entries
+            .First(e => e.TensorName == "blk.2.ffn_up.weight").ChosenType;
+        Assert.Equal(LlamaTensorType.Q2_K, blk2Off);
+    }
+
+    /// <summary>
+    /// Variant of <see cref="MakeProfileWithNonMonotonicPerTensor"/>
+    /// that adds Q3_K data at both category and per-tensor scope. The
+    /// extended ladder lets the soft-floor test distinguish three
+    /// outcomes for blk.2: demote to Q2_K (gate off), demote to Q3_K
+    /// (soft floor), or no demote at all (hard-stop / gate skips
+    /// refinement).
+    /// </summary>
+    private static LlamaSensitivityProfile MakeProfileWithNonMonotonicPerTensor_AndQ3K()
+    {
+        var perTensor = new Dictionary<string, LlamaSensitivityTensorCoefficient>(StringComparer.Ordinal);
+        for (int i = 0; i < 4; i++)
+        {
+            var deltas = i == 2
+                ? new Dictionary<LlamaTensorType, double>
+                {
+                    [LlamaTensorType.Q2_K] = 0.01,    // gate-off picks this
+                    [LlamaTensorType.Q3_K] = 0.02,    // soft floor picks this
+                    [LlamaTensorType.Q4_K] = 0.10,
+                    [LlamaTensorType.Q6_K] = 0.04,
+                }
+                : new Dictionary<LlamaTensorType, double>
+                {
+                    [LlamaTensorType.Q2_K] = 4.0,
+                    [LlamaTensorType.Q3_K] = 1.5,
+                    [LlamaTensorType.Q4_K] = 0.5,
+                    [LlamaTensorType.Q6_K] = 0.05,
+                };
+            perTensor[$"blk.{i}.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(deltas);
+        }
+        return new LlamaSensitivityProfile(
+            SchemaVersion: LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId: "synthetic",
+            LayerCount: 4,
+            FamilyNotes: null,
+            Provenance: new LlamaSensitivityProvenance(
+                Method: "ablation",
+                SourceModel: "synthetic.gguf",
+                SourceParameterCount: 100_000_000,
+                Corpus: "synthetic",
+                BuiltAtUtc: DateTime.UtcNow,
+                BuilderVersion: "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize: 512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 4.0,
+                        [LlamaTensorType.Q3_K] = 1.5,
+                        [LlamaTensorType.Q4_K] = 0.5,
+                        [LlamaTensorType.Q6_K] = 0.55,    // inverted → NonMonotonic
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K,
+                    Notes: null),
+                ["ffn_gate"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 0.5,
+                        [LlamaTensorType.Q3_K] = 0.1,
+                        [LlamaTensorType.Q4_K] = 0.05,
+                        [LlamaTensorType.Q6_K] = 0.005,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K,
+                    Notes: null),
+            },
+            PerTensor: perTensor);
+    }
+
+    /// <summary>
     /// Helper: build a profile whose ffn_up category has a clean
     /// monotonic per-category curve but a non-monotonic per-tensor
     /// curve on one of its layers. The recipe builder's analyzer
