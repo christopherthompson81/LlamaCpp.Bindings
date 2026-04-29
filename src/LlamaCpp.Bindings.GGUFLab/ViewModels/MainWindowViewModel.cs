@@ -45,22 +45,29 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var loraMerge = new LoraMergeViewModel(LogBus);
         var hfConvert = new HfConvertViewModel(LogBus);
 
+        // Sidebar order is the user-facing pipeline:
+        //   discovery (1-2) → import (3) → quality calibration (4) →
+        //   produce (5-7) → package/edit (8-9) → runtime adapters (10-11) →
+        //   evaluate (12) → benchmarks group (13-14).
+        // The Benchmarks header is rendered above KL Divergence via its
+        // CategoryLabel override; HellaSwag inherits the section by
+        // adjacency.
         Tools = new ToolPageViewModel[]
         {
-            hfBrowser,
             localModels,
+            hfBrowser,
+            hfConvert,
+            imatrix,
             quantize,
-            adaptiveQuantize,
             profileBuilder,
+            adaptiveQuantize,
+            sharding,
+            ggufEditor,
+            controlVectors,
+            loraMerge,
             perplexity,
             klDivergence,
             hellaswag,
-            ggufEditor,
-            sharding,
-            imatrix,
-            hfConvert,
-            controlVectors,
-            loraMerge,
         };
 
         // Bind the navigator so any tool can route the user to another

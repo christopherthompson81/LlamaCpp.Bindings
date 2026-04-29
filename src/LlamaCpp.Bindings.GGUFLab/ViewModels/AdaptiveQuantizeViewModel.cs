@@ -438,7 +438,7 @@ public sealed partial class AdaptiveQuantizeViewModel : ToolPageViewModel
             }
 
             if (best is null)
-                return (null, $"No profile matches arch={arch}. Build one (Profile Builder) or pick manually.");
+                return (null, $"No profile matches arch={arch}. Build one (Profile Quantization) or pick manually.");
 
             var srcParams = best.Value.Profile.Provenance.SourceParameterCount ?? 0;
             var sizeRatio = srcParams > 0 ? (double)targetParams / srcParams : 1.0;

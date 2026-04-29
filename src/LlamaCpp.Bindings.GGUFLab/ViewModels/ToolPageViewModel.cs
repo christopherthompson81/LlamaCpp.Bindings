@@ -23,6 +23,14 @@ public abstract partial class ToolPageViewModel : ObservableObject
     public abstract string Description { get; }
 
     /// <summary>
+    /// Optional sidebar group label shown above this item to start a new
+    /// section. Default null = no header. Used to cluster the evaluation
+    /// tools (KL Divergence, HellaSwag) under a "Benchmarks" header
+    /// without introducing a hierarchical navigation model.
+    /// </summary>
+    public virtual string? CategoryLabel => null;
+
+    /// <summary>
     /// Set by the shell on construction so the base class can compute
     /// remedy state (e.g. "active model is a safetensors directory but
     /// this tool needs a GGUF — offer a one-click jump to HF→GGUF").

@@ -19,7 +19,7 @@ namespace LlamaCpp.Bindings.GGUFLab.ViewModels;
 /// </summary>
 public sealed partial class HfBrowserViewModel : ToolPageViewModel
 {
-    public override string Title => "HF Browser";
+    public override string Title => "Huggingface Browser";
     public override string Description =>
         "Search HuggingFace Hub for GGUF and safetensors repos, then download into the workspace.";
 

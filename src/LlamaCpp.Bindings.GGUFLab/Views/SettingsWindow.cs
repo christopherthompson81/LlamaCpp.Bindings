@@ -73,7 +73,7 @@ public sealed class SettingsWindow : Window
 
         var rootHelp = new TextBlock
         {
-            Text = "Where the HF Browser saves downloads and the Local Models tool scans.",
+            Text = "Where the Huggingface Browser saves downloads and the Local Models tool scans.",
             Opacity = 0.65,
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,

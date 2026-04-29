@@ -19,7 +19,7 @@ namespace LlamaCpp.Bindings.GGUFLab.ViewModels;
 /// </summary>
 public sealed partial class HfConvertViewModel : ToolPageViewModel
 {
-    public override string Title => "HuggingFace → GGUF";
+    public override string Title => "Huggingface to GGUF";
     public override string Description =>
         "Convert a HuggingFace model directory to a GGUF file. Pure C# — no Python, no external CLI.";
 

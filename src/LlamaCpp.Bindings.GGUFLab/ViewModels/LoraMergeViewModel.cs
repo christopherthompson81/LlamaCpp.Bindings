@@ -17,7 +17,7 @@ namespace LlamaCpp.Bindings.GGUFLab.ViewModels;
 /// </summary>
 public sealed partial class LoraMergeViewModel : ToolPageViewModel
 {
-    public override string Title => "LoRA Merge";
+    public override string Title => "LoRAs";
     public override string Description =>
         "Apply a LoRA adapter to a base model and write a single merged GGUF. Pure C# F32 matmul, F16 output by default.";
 

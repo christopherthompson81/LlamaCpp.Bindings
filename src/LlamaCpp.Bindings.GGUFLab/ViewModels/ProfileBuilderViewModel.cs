@@ -19,7 +19,7 @@ namespace LlamaCpp.Bindings.GGUFLab.ViewModels;
 /// </summary>
 public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 {
-    public override string Title => "Profile Builder";
+    public override string Title => "Profile Quantization";
     public override string Description =>
         "Build a sensitivity profile: ablate each tensor (or category) at each candidate type, measure ΔPPL. Long-running — accumulates into the global investigation DB.";
 

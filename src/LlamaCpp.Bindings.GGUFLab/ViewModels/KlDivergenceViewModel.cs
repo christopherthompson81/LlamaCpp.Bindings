@@ -19,6 +19,7 @@ public sealed partial class KlDivergenceViewModel : ToolPageViewModel
     public override string Title => "KL Divergence";
     public override string Description =>
         "Compare a quantized variant against its baseline (e.g. Q4_K_M vs F16) on a shared corpus. Reports KL, top-K agreement, and ΔPPL.";
+    public override string CategoryLabel => "Benchmarks";
 
     private readonly NativeLogBus _logBus;
 
