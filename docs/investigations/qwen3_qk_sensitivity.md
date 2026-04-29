@@ -239,7 +239,195 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
-## Run 23 — 2026-04-28 (PPL throughput investigation: bottleneck is readback, fix #37 + scored-only mask, #43 closed)
+## Run 24 — 2026-04-28 (In-place ablator: tensor-surgery ProfileBuilder path, ships as default)
+
+After #37 (continuous-flow scheduler, 1.45×) and the scored-only
+logits mask (1.51× cumulative), the next-largest fraction of campaign
+wall time was per-cell model load+free: each consumer in the disk
+path reloads the ablation GGUF (~22 s on Qwen3-1.7B) before every PPL.
+Across 22 cells × 4 concurrency, that's ~120 s of campaign wall
+spent on setup. Per the user observation that "we're typically only
+swapping out one class of tensors or even a single tensor," the work
+is largely redundant — the F16 reference data for ~95 % of tensors
+is identical from cell to cell.
+
+### Architecture
+
+A small C++ shim (<code>tools/native-shims/llamashim.cpp</code>)
+re-exports two stable C entry points layered over llama.cpp's
+internal <code>llama_internal_get_tensor_map</code> symbol:
+
+- <code>llamashim_get_model_tensor(model, name)</code> — linear scan
+  of the model's <code>tensors_by_name</code> vector.
+- <code>llamashim_set_tensor_data(tensor, data, offset, size)</code> —
+  forwards to <code>ggml_backend_tensor_set</code>, which dispatches
+  to the tensor's owning backend (CUDA D2H, CPU memcpy, …).
+
+The shim is built against the pinned llama.cpp binaries
+(<code>tools/native-shims/build.sh</code>) and re-validated on every
+pin bump. <strong>It depends on a non-public C++ ABI</strong> — the
+internal symbol's signature is stable since at least b6500 but is
+not part of the documented C API.
+
+On top of the shim, three new C# pieces:
+
+- <code>LlamaModel.SetTensorData / GetTensorData / FingerprintTensor</code>:
+  public APIs for in-place tensor manipulation.
+- <code>LlamaTensorRoundTrip.Encode / EncodeInto</code>:
+  F16 → F32 → quantize (via <code>ggml_quantize_chunk</code>) →
+  F32 → F16 round-trip helper. Internal F32 working buffers and the
+  quant scratch buffer are pooled via <code>ArrayPool&lt;T&gt;.Shared</code>.
+- <code>LlamaInPlaceAblator</code>: holds a persistent F16 LlamaModel,
+  a memory-mapped view of the F16 source GGUF, and a content cache
+  of original tensor bytes. <code>RunAblationAsync</code> applies a
+  list of (tensor, type) ablations by reading source F16 → round-trip
+  encoding through the candidate type → uploading via
+  <code>SetTensorData</code> — and restores any tensors dirtied by a
+  previous call that aren't in the new set.
+
+The campaign builder gets a new <code>Options.UseInPlaceAblator</code>
+(default <code>true</code>). When enabled,
+<code>RunInPlaceCampaignAsync</code> spawns N consumer workers, each
+holding its own <code>LlamaModel</code> + <code>LlamaInPlaceAblator</code>,
+and drains a <code>Channel&lt;(spec, tensors)&gt;</code> of pre-materialized
+ablation specs. (One subtle bug uncovered during integration: an
+initial bounded channel with <code>capacity = pplConcurrency</code>
+deadlocked because the producer pre-loaded all 22 items before
+workers existed to drain. Switched to unbounded — work items are
+tiny lists of tensor names, no real memory cost.)
+
+### Numerical parity (smoking-gun foundation tests)
+
+Three checks confirmed the path is mathematically faithful before any
+performance work:
+
+1. <strong>Writes affect inference.</strong> Zero out
+   <code>blk.0.attn_q.weight</code> on Qwen3-0.6B → PPL goes from 31.15
+   to 23,886 (766× catastrophe, exactly what zeroing a critical
+   attention weight should do). Confirms <code>SetTensorData</code>
+   actually changes GPU memory the matmul kernels read from.
+2. <strong>Q4_K single-tensor parity.</strong> Disk-path
+   <code>blk.0.attn_v.weight × Q4_K</code> Δ = +0.0799; in-place
+   Δ = +0.0782 (gap −0.0017).
+3. <strong>Q2_K single-tensor parity.</strong> Same probe at Q2_K:
+   disk Δ = +0.1048; in-place Δ = +0.1038 (gap −0.0011).
+4. <strong>Q2_K 28-tensor parity at concurrency=1.</strong> All
+   ffn_down at Q2_K on Qwen3-0.6B: disk Δ = +4.0227; in-place
+   Δ = +3.9992 (gap −0.0235).
+5. <strong>Cross-worker isolation.</strong> Two
+   <code>LlamaModel</code> instances loaded from the same GGUF have
+   matching initial fingerprints; modifying tensor X on model A leaves
+   model B's fingerprint unchanged. No cross-pollution.
+
+The PPL gaps trace back to F16 matmul kernel vs Q-quant matmul kernel
+producing slightly different reduction orders on bit-identical
+dequantized values — same family of effect as the cuBLAS GEMM
+algorithm shift documented in Run 23, but smaller in magnitude
+(~0.002 PPL vs ~0.014).
+
+### Phantom-bug detour: Run 17's "+3709" reference
+
+The 22-cell per-category campaign produced ΔPPL values that didn't
+match Run 17's reference table — most strikingly,
+<code>ffn_down × Q2_K</code> on 1.7B was +0.96 vs the documented
++3709. After exhaustive bisecting (writes work, parity matches at
+small scale, workers don't pollute, …) the explanation turned out
+to be data, not code: <strong>the Qwen3-1.7B imatrix file was
+regenerated 2026-04-27 evening, after Run 17 captured its numbers</strong>.
+The new imatrix calibrates Q2_K's per-block scales much more
+accurately, dramatically reducing the worst-case PPL impact of
+ffn_down × Q2_K. Today's disk path produces the same +0.96 the
+in-place path does. Run 17/22 reference numbers should be read as
+"under the older imatrix"; current numbers are the new ground truth.
+
+### Performance investigation
+
+After parity was confirmed, the campaign-level wall time was the
+focus. Initial measurement: in-place 553 s vs disk path's 521 s
+(scored-mask) — slightly slower. Per-phase trace
+(<code>ABLATOR_TRACE=1</code>) revealed encode time degrading
+4–5× over the campaign:
+
+| cell index | encode wall |
+| ---------- | ----------: |
+| early (1–5) | 16 s avg |
+| mid  (6–14) | 25 s avg |
+| late (15–22) | 60 s avg |
+
+Three contributing causes, in order of impact:
+
+1. <strong>CPU contention with concurrent PPL softmax.</strong> Each
+   worker's encode is single-threaded; concurrent workers' PPL
+   softmax uses ProcessorCount/pplConcurrency = 4 threads each. Once
+   workers desync from their initial all-encode startup, encode
+   threads compete with persistent softmax threads for the 16-thread
+   CPU.
+2. <strong>Allocation churn.</strong> Each <code>Encode</code> call
+   allocated ~140 MB of working memory (two F32 buffers + quant scratch
+   + output). 28 tensors × 22 cells × 4 workers built up GC pressure.
+3. <strong>Source-bytes cache growth.</strong> Each worker caches
+   F16 source bytes per touched tensor; ~3.5 GB per worker by
+   campaign end.
+
+### Optimizations applied
+
+- <strong>Buffer pooling</strong> via <code>ArrayPool&lt;T&gt;.Shared</code>
+  for the F32 round-trip buffers and the quant scratch. Modest win:
+  553 s → 544 s.
+- <strong>Parallel encode within a worker</strong> via
+  <code>Parallel.ForEach</code> over the 28 tensors at DOP =
+  ProcessorCount. Encode shifts from a 30 s sequential drag to a
+  bursty 4 s surge that briefly preempts concurrent softmax workers
+  — the priority shape suggested by the user, achieved without an
+  explicit task queue or thread-priority layer. Apply phase wall:
+  16–65 s → 0.4–10.8 s (8× reduction). Total wall: 544 s → 537 s.
+
+The total wall improvement was small even though apply phase
+collapsed dramatically because PPL is GPU-bound and the binding
+constraint at concurrency 4. Confirmed via concurrency sweep:
+
+| concurrency | wall | avg PPL | throughput (PPLs/s) |
+| ----------- | ---: | ------: | ------------------: |
+| 3           | 561 s | 67 s | 0.0448 |
+| 4           | 537 s | 84 s | 0.0476 |
+
+c=4 has ~6 % higher throughput than c=3 despite each PPL taking
+longer — consistent with GPU saturated but not over-driven (nvtop
+showed 100 % during the run). c=4 is the operating sweet spot.
+
+### Final wall-time landscape
+
+| run | wall | δ vs original | cumulative |
+| --- | ---: | ------------: | ---------: |
+| disk old-batch (original) | 788.9 s | — | 1.00× |
+| + #37 continuous-flow | 543.1 s | −245.8 s | 1.45× |
+| + scored-only logits mask | 521.0 s | −22.1 s | 1.51× |
+| + in-place ablator (this run) | 537.6 s | +16.6 s | 1.47× |
+
+In-place is ~3 % slower than disk-path scored-mask on the per-category
+sweep at this concurrency. Both paths are PPL-bound at the same GPU
+saturation point, so they converge. The in-place path's edge lives
+elsewhere:
+
+- <strong>Disk space.</strong> Disk path holds peak ~5–7 ablation
+  GGUFs in flight (one per pplConcurrency + channel buffer); on
+  Qwen3-1.7B that's 17–25 GB of <code>/tmp</code>. In-place uses
+  effectively zero disk beyond the source.
+- <strong>Per-tensor profile builds.</strong> Per-tensor ablations
+  ablate ONE tensor per cell, not 28. Disk path's per-cell quantize +
+  load + free overhead stays at ~30 s; in-place's apply drops to
+  ~0.2 s. On a 1370-cell per-tensor sweep that's tens of minutes
+  saved.
+
+### Decision
+
+Ship in-place as default (<code>UseInPlaceAblator = true</code>) for
+the disk-space win and to make per-tensor sweeps practical. Keep the
+disk path as fallback (set the option to <code>false</code>) for
+cases where the shim hasn't been re-validated against a llama.cpp
+pin bump.
+
+
 
 Triggered by the perf-issue triage that produced Run 22's continuous-flow scheduler win (#37). With per-PPL becoming the dominant cost at the campaign level, the question was whether the device-side logsumexp+gather subgraph proposed in #43 was the right next move.
 
