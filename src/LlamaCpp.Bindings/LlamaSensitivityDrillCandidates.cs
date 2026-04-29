@@ -18,12 +18,22 @@ public enum LlamaCategoryShape
     /// </summary>
     Smooth,
     /// <summary>
-    /// One large jump on the ladder (typically Q2_K → Q4_K). Drilling
-    /// will likely show a few specific layers responsible for the
-    /// catastrophe; surgical per-tensor demotion of safe layers may
-    /// reclaim budget.
+    /// One large jump on a ladder dense enough that intermediate
+    /// rungs would have caught it if it weren't real. Drilling per
+    /// layer is the recommended action — the catastrophe is likely
+    /// concentrated in a few specific layers.
     /// </summary>
     Cliff,
+    /// <summary>
+    /// One large jump but the ladder is sparse around it: there are
+    /// canonical-ladder types (Q3_K / IQ3_S / IQ4_XS / Q5_K) that
+    /// would fit between the two cliff endpoints but haven't been
+    /// measured. Adding intermediate rungs first is cheaper than
+    /// drilling per-layer and will tell us whether the cliff is real
+    /// (Q3_K is also catastrophic → drill) or a granularity artifact
+    /// (Q3_K is mild → no drill needed).
+    /// </summary>
+    SparseCliff,
     /// <summary>
     /// Non-monotonic curve (e.g. Q6_K worse than Q4_K). Indicates
     /// per-tensor measurement noise or non-uniform layer behavior;
@@ -75,6 +85,28 @@ public static class LlamaSensitivityDrillCandidates
     /// Q2_K × 28 layers = +3709 PPL) while ignoring mild slopes.
     /// </summary>
     public const double CliffJumpRatio = 4.0;
+
+    /// <summary>
+    /// Canonical practical-quant ladder, ordered by ascending bpw.
+    /// Used to detect "sparse" cliffs — categories whose curve has
+    /// gaps in this canonical sequence get the
+    /// <see cref="LlamaCategoryShape.SparseCliff"/> recommendation
+    /// (add the missing rungs before drilling per-layer). Excludes
+    /// F16/BF16/F32 (lossless, no point in adding) and the ternary /
+    /// FP4 families (rarely useful for AQ work).
+    /// </summary>
+    private static readonly LlamaTensorType[] CanonicalLadder = new[]
+    {
+        LlamaTensorType.IQ2_S,    // 2.5
+        LlamaTensorType.Q2_K,     // 2.625
+        LlamaTensorType.IQ3_S,    // 3.4375
+        LlamaTensorType.Q3_K,     // 3.4375
+        LlamaTensorType.IQ4_XS,   // 4.25
+        LlamaTensorType.Q4_K,     // 4.5
+        LlamaTensorType.Q5_K,     // 5.5
+        LlamaTensorType.Q6_K,     // 6.5625
+        LlamaTensorType.Q8_0,     // 8.5
+    };
 
     /// <summary>
     /// Build the drill-candidates table from a profile. Categories
@@ -137,9 +169,16 @@ public static class LlamaSensitivityDrillCandidates
             // Drill priority = worst-ΔPPL × shape factor × (1 − already-drilled).
             // Already-drilled categories drop in priority because the
             // recipe builder is already using their per-tensor data.
+            // Priority weighting: cliff > sparse-cliff > non-monotonic
+            // > smooth. SparseCliff lands above NonMonotonic because
+            // the recommended action (add rungs) is cheap and
+            // diagnostic; the user should do it before drilling other
+            // categories. But it's below proper Cliff because real
+            // cliffs are the highest-yield drill targets.
             double shapeFactor = shape switch
             {
                 LlamaCategoryShape.Cliff => 1.0 + cliffStrength,
+                LlamaCategoryShape.SparseCliff => 0.8 + 0.5 * cliffStrength,
                 LlamaCategoryShape.NonMonotonic => 0.7,
                 LlamaCategoryShape.Smooth => 0.3,
                 _ => 0.0,
@@ -214,12 +253,42 @@ public static class LlamaSensitivityDrillCandidates
 
         if (jumpRatio >= CliffJumpRatio)
         {
-            // Find the type at the cliff's lower-bpw end.
+            // Find the type at the cliff's lower-bpw end and the next
+            // measured rung above it.
             int cliffIdx = jumps.IndexOf(largest);
             var cliffLowType = sortedAscBpw[cliffIdx].Type;
+            var cliffHighType = sortedAscBpw[cliffIdx + 1].Type;
+
+            // Decide sparse vs dense: count canonical-ladder types
+            // whose bpw falls strictly between the two cliff endpoints
+            // and which haven't been measured. Any such type is a
+            // candidate intermediate rung that would localize the
+            // cliff before we commit to drilling.
+            var measuredTypes = sortedAscBpw.Select(x => x.Type).ToHashSet();
+            double lowBpw = sortedAscBpw[cliffIdx].Bpw;
+            double highBpw = sortedAscBpw[cliffIdx + 1].Bpw;
+            var unmeasuredInSpan = CanonicalLadder
+                .Where(t =>
+                {
+                    double bpw = BitsPerElement(t);
+                    return bpw > lowBpw && bpw < highBpw && !measuredTypes.Contains(t);
+                })
+                .ToList();
+
+            double cliffStrength = Math.Min(2.0, jumpRatio / CliffJumpRatio);
+            if (unmeasuredInSpan.Count > 0)
+            {
+                var suggested = string.Join(", ", unmeasuredInSpan);
+                return (LlamaCategoryShape.SparseCliff,
+                        $"cliff between {cliffLowType} and {cliffHighType} on a sparse ladder — " +
+                        $"add intermediate rung(s) ({suggested}) before drilling to tell whether " +
+                        $"the cliff is real or a granularity artifact",
+                        cliffStrength);
+            }
             return (LlamaCategoryShape.Cliff,
-                    $"cliff at {cliffLowType} — drill recommended (likely concentrated in a few layers)",
-                    Math.Min(2.0, jumpRatio / CliffJumpRatio));
+                    $"cliff between {cliffLowType} and {cliffHighType} on a dense ladder — " +
+                    $"drill per-layer to find the responsible layers",
+                    cliffStrength);
         }
         return (LlamaCategoryShape.Smooth, "smooth degradation — drilling unlikely to help much", 0);
     }

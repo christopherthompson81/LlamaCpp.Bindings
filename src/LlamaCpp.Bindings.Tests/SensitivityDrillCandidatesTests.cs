@@ -45,10 +45,11 @@ public class SensitivityDrillCandidatesTests
     }
 
     [Fact]
-    public void CliffCurve_IsClassifiedCliff_AndFlaggedForDrilling()
+    public void SparseCliffCurve_FlaggedForLadderExpansion_NotDrilling()
     {
-        // Big jump from Q2_K (catastrophe) to Q4_K (small), then small
-        // jump Q4_K → Q6_K. Run-22 ffn_down × Q2_K shape.
+        // 3-rung ladder spans 2.625 → 6.5 bpw with a Q2_K catastrophe.
+        // Q3_K, IQ3_S, IQ4_XS aren't measured — analyzer should
+        // recommend filling those rungs first.
         var profile = MakeProfile((
             Name: "ffn_down",
             Curve: new[]
@@ -59,10 +60,74 @@ public class SensitivityDrillCandidatesTests
             }));
 
         var candidates = LlamaSensitivityDrillCandidates.Analyze(profile);
+        Assert.Equal(LlamaCategoryShape.SparseCliff, candidates[0].Shape);
+        Assert.Contains("sparse ladder", candidates[0].Recommendation);
+        Assert.Contains("add intermediate rung", candidates[0].Recommendation);
+        // SparseCliff still scores positive — it's a real signal —
+        // but should rank below an equivalent dense Cliff.
+        Assert.True(candidates[0].DrillPriority > 50);
+    }
+
+    [Fact]
+    public void DenseCliffCurve_RecommendsDrilling_WhenIntermediateRungsExist()
+    {
+        // Q2_K and Q3_K both catastrophic, then sharp recovery at
+        // IQ4_XS. The cliff is between Q3_K and IQ4_XS (Δ jumps
+        // from 2500 to 5 = 2495 vs the second-largest jump of 500).
+        // No canonical-ladder bpw rungs sit strictly between Q3_K
+        // (3.4375 bpw) and IQ4_XS (4.25 bpw) → dense cliff,
+        // drilling is the right next move.
+        var profile = MakeProfile((
+            Name: "ffn_down",
+            Curve: new[]
+            {
+                (LlamaTensorType.Q2_K, 3000.0),
+                (LlamaTensorType.Q3_K, 2500.0),
+                (LlamaTensorType.IQ4_XS, 5.0),
+                (LlamaTensorType.Q4_K, 0.5),
+                (LlamaTensorType.Q5_K, 0.1),
+                (LlamaTensorType.Q6_K, 0.05),
+            }));
+
+        var candidates = LlamaSensitivityDrillCandidates.Analyze(profile);
         Assert.Equal(LlamaCategoryShape.Cliff, candidates[0].Shape);
-        Assert.Contains("cliff", candidates[0].Recommendation);
-        Assert.Contains("drill recommended", candidates[0].Recommendation);
-        Assert.True(candidates[0].DrillPriority > 100, "cliff drill priority should be high");
+        Assert.Contains("dense ladder", candidates[0].Recommendation);
+        Assert.Contains("drill per-layer", candidates[0].Recommendation);
+    }
+
+    [Fact]
+    public void DenseCliff_RanksAboveSparseCliff_WhenWorstDeltaEqual()
+    {
+        // Same total drop on both, but the sparse one has only 3
+        // rungs and the dense one has all canonical rungs in range
+        // measured. The dense category's cliff is between
+        // Q3_K → IQ4_XS with no unmeasured rungs in the span;
+        // the sparse category's cliff is Q2_K → Q4_K with multiple
+        // unmeasured rungs in the span.
+        var profile = MakeProfile(
+            (Name: "sparse",
+             Curve: new[]
+             {
+                 (LlamaTensorType.Q2_K, 3000.0),
+                 (LlamaTensorType.Q4_K, 0.5),
+                 (LlamaTensorType.Q6_K, 0.05),
+             }),
+            (Name: "dense",
+             Curve: new[]
+             {
+                 (LlamaTensorType.Q2_K, 3000.0),
+                 (LlamaTensorType.Q3_K, 2500.0),
+                 (LlamaTensorType.IQ4_XS, 5.0),
+                 (LlamaTensorType.Q4_K, 0.5),
+                 (LlamaTensorType.Q5_K, 0.1),
+                 (LlamaTensorType.Q6_K, 0.05),
+             }));
+
+        var candidates = LlamaSensitivityDrillCandidates.Analyze(profile);
+        Assert.Equal("dense", candidates[0].CategoryName);
+        Assert.Equal(LlamaCategoryShape.Cliff, candidates[0].Shape);
+        Assert.Equal("sparse", candidates[1].CategoryName);
+        Assert.Equal(LlamaCategoryShape.SparseCliff, candidates[1].Shape);
     }
 
     [Fact]

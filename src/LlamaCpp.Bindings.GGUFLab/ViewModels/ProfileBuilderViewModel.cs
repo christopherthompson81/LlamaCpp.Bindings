@@ -841,6 +841,7 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
                 var badge = c.Shape switch
                 {
                     LlamaCategoryShape.Cliff => "cliff",
+                    LlamaCategoryShape.SparseCliff => "sparse cliff",
                     LlamaCategoryShape.Smooth => "smooth",
                     LlamaCategoryShape.NonMonotonic => "non-monotonic",
                     LlamaCategoryShape.NotEnoughData => "thin",
