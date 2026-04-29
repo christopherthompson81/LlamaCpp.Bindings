@@ -101,6 +101,22 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     /// </summary>
     public ObservableCollection<CategoryItem> Categories { get; } = new();
 
+    /// <summary>
+    /// Drill-recommendation rows derived from the current model's
+    /// existing per-category measurements (DB-backed). Refreshed when
+    /// source / corpus / imatrix / ctx changes, and after a build
+    /// completes. Empty when no measurements exist yet for the
+    /// current campaign signature.
+    /// </summary>
+    /// <remarks>
+    /// Surface the bpw → ΔPPL curve shape for each category so users
+    /// can recognize candidates worth drilling per-layer (catastrophic
+    /// jump at one bpw rung = layer heterogeneity averaged away in the
+    /// per-category number; smooth degradation = drilling unlikely to
+    /// help). Backed by <see cref="LlamaSensitivityDrillCandidates"/>.
+    /// </remarks>
+    public ObservableCollection<DrillCandidateRow> DrillCandidates { get; } = new();
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CostEstimateText))]
     private string _detectedArchitecture = string.Empty;
@@ -711,6 +727,10 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
             _log.Stop();    // flush any pending tick before idle
             StopElapsedTimer();
             IsRunning = false;
+            // Refresh the drill-candidates panel — a successful build
+            // (or even a cancelled one with partial measurements) has
+            // landed new rows in the DB that change recommendations.
+            RefreshDrillCandidates();
             _cts?.Dispose();
             _cts = null;
         }
@@ -775,6 +795,88 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
         if (UseQ6K)    picks.Add(LlamaTensorType.Q6_K);
         if (UseQ8_0)   picks.Add(LlamaTensorType.Q8_0);
         return picks;
+    }
+
+    /// <summary>
+    /// Refresh <see cref="DrillCandidates"/> from the DB-backed
+    /// per-category measurements that match the current campaign
+    /// signature (model+corpus+imatrix+ctx). No-op when one of the
+    /// inputs is missing or no measurements exist yet — the panel
+    /// stays empty until there's data to analyze.
+    /// </summary>
+    private void RefreshDrillCandidates()
+    {
+        DrillCandidates.Clear();
+
+        if (string.IsNullOrWhiteSpace(SourceModelPath) || !File.Exists(SourceModelPath)) return;
+        if (string.IsNullOrWhiteSpace(CorpusPath) || !File.Exists(CorpusPath)) return;
+
+        try
+        {
+            var modelSha   = LlamaInvestigationDb.ComputeContentSha(SourceModelPath);
+            var corpusText = File.ReadAllText(CorpusPath);
+            var corpusSha  = LlamaInvestigationDb.ComputeTextSha(corpusText);
+            var imatrixSha = string.IsNullOrEmpty(ImatrixPath)
+                ? LlamaInvestigationDb.NoImatrixSha
+                : LlamaInvestigationDb.ComputeContentSha(ImatrixPath);
+
+            var gguf = LlamaGgufFile.Open(SourceModelPath);
+            var archEntry = gguf.Metadata.FirstOrDefault(m => m.Key == "general.architecture");
+            var archId = archEntry?.Value.AsString() ?? "unknown";
+            int layerCount = DetectedLayerCount > 0 ? DetectedLayerCount : 1;
+            long paramCount = DetectedParamCount;
+
+            using var db = LlamaInvestigationDb.Open();
+            var profile = LlamaSensitivityProfile.DeriveFromDb(
+                db, modelSha, corpusSha, imatrixSha, ContextSize,
+                archId, paramCount, layerCount,
+                includePerTensor: true);
+            if (profile is null || profile.Categories.Count == 0) return;
+
+            var candidates = LlamaSensitivityDrillCandidates.Analyze(profile);
+            foreach (var c in candidates)
+            {
+                var summary = string.Join(" → ",
+                    c.Curve.Select(p => $"{p.Type} {p.DeltaPpl:+0.00;-0.00}"));
+                var badge = c.Shape switch
+                {
+                    LlamaCategoryShape.Cliff => "cliff",
+                    LlamaCategoryShape.Smooth => "smooth",
+                    LlamaCategoryShape.NonMonotonic => "non-monotonic",
+                    LlamaCategoryShape.NotEnoughData => "thin",
+                    _ => "?"
+                };
+                DrillCandidates.Add(new DrillCandidateRow(
+                    CategoryName: c.CategoryName,
+                    ShapeBadge: badge,
+                    Recommendation: c.Recommendation,
+                    CurveSummary: summary,
+                    DrillPriority: c.DrillPriority,
+                    AlreadyDrilled: c.AlreadyDrilled));
+            }
+        }
+        catch
+        {
+            // Best-effort refresh: bad paths, missing DB, partial
+            // builds shouldn't crash the page. Leave the panel empty.
+        }
+    }
+
+    /// <summary>
+    /// Switch the page into per-layer mode and check the named
+    /// category, leaving layer-list empty (= all layers). Wired from
+    /// the "Drill" button in the drill-candidates panel.
+    /// </summary>
+    [RelayCommand]
+    private void DrillIntoCategory(string? categoryName)
+    {
+        if (string.IsNullOrEmpty(categoryName)) return;
+        Mode = CampaignMode.PerLayer;
+        foreach (var item in Categories)
+        {
+            item.IsSelected = string.Equals(item.Name, categoryName, StringComparison.Ordinal);
+        }
+        LayersText = string.Empty;  // all layers
     }
 
     /// <summary>
@@ -1214,9 +1316,16 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
     partial void OnSourceModelPathChanged(string value)
     {
         RefreshArchitectureFromSource();
+        RefreshDrillCandidates();
         NotifyRemediesChanged();
     }
-    partial void OnImatrixPathChanged(string value) => NotifyRemediesChanged();
+    partial void OnImatrixPathChanged(string value)
+    {
+        RefreshDrillCandidates();
+        NotifyRemediesChanged();
+    }
+    partial void OnCorpusPathChanged(string value) => RefreshDrillCandidates();
+    partial void OnContextSizeChanged(int value) => RefreshDrillCandidates();
 
     partial void OnWorkingDirectoryChanged(string value)
     {
@@ -1290,6 +1399,19 @@ public sealed partial class ProfileBuilderViewModel : ToolPageViewModel
 
         public string DeltaText => Delta is double d ? d.ToString("F2") : "";
     }
+
+    /// <summary>
+    /// One row in the drill-candidates panel. Materialized from
+    /// <see cref="LlamaDrillCandidate"/> with strings already
+    /// formatted for binding (avoids per-render conversion).
+    /// </summary>
+    public sealed record DrillCandidateRow(
+        string CategoryName,
+        string ShapeBadge,        // "cliff", "smooth", "non-monotonic", "thin"
+        string Recommendation,    // human-readable hint
+        string CurveSummary,      // "Q2_K +50.0 → Q4_K +0.2 → Q6_K +0.05"
+        double DrillPriority,
+        bool AlreadyDrilled);
 
     /// <summary>One row in the categories checkbox list.</summary>
     public sealed partial class CategoryItem : ObservableObject

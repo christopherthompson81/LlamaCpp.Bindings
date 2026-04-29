@@ -232,6 +232,67 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Drill candidates: shows up only when there's existing
+                     per-category data in the DB to analyze. Each row gives
+                     a recommendation on whether per-tensor drilling is
+                     likely to help, plus a quick-jump button that switches
+                     mode + preselects the category. -->
+                <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12"
+                        IsVisible="{Binding DrillCandidates.Count}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Drill candidates (from existing measurements)"
+                                   FontWeight="SemiBold" FontSize="11" Opacity="0.7" />
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.6"
+                                   Text="Categories sorted by drill priority. A 'cliff' shape (one large jump on the bpw ladder) usually means a few specific layers are responsible for the catastrophe — drilling per-layer reveals which. 'Smooth' means homogeneous degradation; drilling rarely helps. 'Non-monotonic' means measurement noise or hidden layer heterogeneity. 'Already drilled' rows show the per-layer std as a heterogeneity signal." />
+                        <ItemsControl ItemsSource="{Binding DrillCandidates}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:ProfileBuilderViewModel+DrillCandidateRow">
+                                    <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
+                                            BorderThickness="0,0,0,1"
+                                            Padding="0,4,0,4">
+                                        <Grid ColumnDefinitions="160,80,1*,Auto">
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding CategoryName}"
+                                                       FontFamily="Cascadia Mono,Consolas,monospace"
+                                                       VerticalAlignment="Center" />
+                                            <Border Grid.Column="1"
+                                                    Background="{DynamicResource SystemBaseLowColor}"
+                                                    CornerRadius="3"
+                                                    Padding="4,2"
+                                                    HorizontalAlignment="Left"
+                                                    VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding ShapeBadge}"
+                                                           FontSize="10" FontWeight="SemiBold" />
+                                            </Border>
+                                            <StackPanel Grid.Column="2" Spacing="2"
+                                                        VerticalAlignment="Center" Margin="8,0">
+                                                <TextBlock Text="{Binding CurveSummary}"
+                                                           FontFamily="Cascadia Mono,Consolas,monospace"
+                                                           FontSize="11" />
+                                                <TextBlock Text="{Binding Recommendation}"
+                                                           FontSize="11" Opacity="0.7"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <!-- Use ReflectionBinding so the cross-DataContext
+                                                 hop to the page VM's command isn't blocked
+                                                 by compiled-binding's DataType inference. -->
+                                            <Button Grid.Column="3"
+                                                    Content="Drill"
+                                                    VerticalAlignment="Center"
+                                                    Command="{ReflectionBinding DataContext.DrillIntoCategoryCommand,
+                                                              RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding CategoryName}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
                 <!-- Layer drill (per-layer mode only) -->
                 <Border BorderBrush="{DynamicResource SystemBaseLowColor}"
                         BorderThickness="1"
