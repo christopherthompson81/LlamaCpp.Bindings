@@ -589,6 +589,160 @@ public class QuantRecipeFromProfileTests
     }
 
     /// <summary>
+    /// Stage 2 of #44: NoiseAwareCategoryPick should bump the floor
+    /// to NoiseFallbackFloor (default Q4_K) when a category curve is
+    /// NonMonotonic AND every measured Δ is below the noise band.
+    /// This blocks the optimizer from picking Q2_K (or any sub-floor
+    /// type) on a category whose measurements can't reliably be
+    /// distinguished from zero.
+    /// </summary>
+    [Fact]
+    public void NoiseAwareCategoryPick_AllNoiseCurve_BumpsFloorToFallback()
+    {
+        // Synthetic two-category profile. ffn_up's category curve is
+        // NonMonotonic (Q4_K=-0.10 < Q2_K=-0.08, then Q6_K=-0.04 >
+        // Q4_K=-0.10 — both inverted) AND the entire absolute Δ
+        // range is < 1.0 PPL: pure noise. Without the gate, the
+        // optimizer would pick the cheapest type (Q2_K) since its Δ
+        // is "cheap" at -0.08. With the gate on, the floor bumps to
+        // Q4_K and the optimizer picks Q4_K (or higher).
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion: LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId: "synthetic",
+            LayerCount: 4,
+            FamilyNotes: null,
+            Provenance: new LlamaSensitivityProvenance(
+                "ablation", "synthetic.gguf", 100_000_000, "synthetic",
+                DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize: 512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = -0.08,
+                        [LlamaTensorType.Q4_K] = -0.10,
+                        [LlamaTensorType.Q6_K] = -0.04,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K,
+                    Notes: null),
+                // Anchor category that the optimizer can use to spend
+                // the budget elsewhere. Without it, the optimizer has
+                // nowhere to go and might force pick into uncomfortable
+                // corners.
+                ["ffn_gate"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 4.0,
+                        [LlamaTensorType.Q4_K] = 0.5,
+                        [LlamaTensorType.Q6_K] = 0.05,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q4_K,
+                    Notes: null),
+            });
+
+        var layout = SyntheticLayout(4, 1_000_000);
+
+        // Gate ON (default). MinPredictedGainPpl=0 disables the
+        // snap-to-stock safeguard so we isolate the gate's effect.
+        var recipeGated = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                NoiseAwareCategoryPick = true,
+                MinPredictedGainPpl = 0,
+            });
+        var gatedFfnUpType = recipeGated.Entries
+            .First(e => e.TensorName.EndsWith("ffn_up.weight")).ChosenType;
+        Assert.True(
+            LlamaQuantRecipe.GetBitsPerElement(gatedFfnUpType) >=
+            LlamaQuantRecipe.GetBitsPerElement(LlamaTensorType.Q4_K),
+            $"expected gated pick to be at-or-above Q4_K floor; got {gatedFfnUpType}");
+
+        // Gate OFF — the optimizer should freely pick Q2_K because
+        // every measured Δ is "cheap" (negative, in the noise band).
+        // Snap-to-stock is also disabled for the same isolation reason.
+        var recipeUngated = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                NoiseAwareCategoryPick = false,
+                MinPredictedGainPpl = 0,
+            });
+        var ungatedFfnUpType = recipeUngated.Entries
+            .First(e => e.TensorName.EndsWith("ffn_up.weight")).ChosenType;
+        Assert.True(
+            LlamaQuantRecipe.GetBitsPerElement(ungatedFfnUpType) <
+            LlamaQuantRecipe.GetBitsPerElement(LlamaTensorType.Q4_K),
+            $"expected ungated pick to drop below Q4_K when measurements look cheap; got {ungatedFfnUpType}");
+    }
+
+    /// <summary>
+    /// NoiseAwareCategoryPick should NOT raise the floor on a
+    /// non-monotonic curve that has real signal somewhere — only
+    /// when the entire curve is below the noise band. A category
+    /// with a Q2_K catastrophe (+4.0 PPL) but a slightly inverted
+    /// Q4_K → Q6_K transition shouldn't be flagged as all-noise
+    /// just because of the small inversion at the high end.
+    /// </summary>
+    [Fact]
+    public void NoiseAwareCategoryPick_NonMonotonicWithRealSignal_DoesNotBumpFloor()
+    {
+        var profile = new LlamaSensitivityProfile(
+            SchemaVersion: LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId: "synthetic",
+            LayerCount: 4,
+            FamilyNotes: null,
+            Provenance: new LlamaSensitivityProvenance(
+                "ablation", "synthetic.gguf", 100_000_000, "synthetic",
+                DateTime.UtcNow, "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize: 512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 4.0,    // real signal
+                        [LlamaTensorType.Q4_K] = 0.5,
+                        [LlamaTensorType.Q6_K] = 0.55,   // tiny inversion
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K,
+                    Notes: null),
+                ["ffn_gate"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 0.5,
+                        [LlamaTensorType.Q4_K] = 0.05,
+                        [LlamaTensorType.Q6_K] = 0.005,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K,
+                    Notes: null),
+            });
+
+        var layout = SyntheticLayout(4, 1_000_000);
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                NoiseAwareCategoryPick = true,
+            });
+
+        // The Q2_K catastrophe (+4.0) still drives the optimizer
+        // away from Q2_K naturally — no bump needed. The recipe
+        // should pick Q4_K based on the measured Δ, not because the
+        // gate forced it. Either way, the result should be Q4_K or
+        // higher (not Q2_K).
+        var ffnUpType = recipe.Entries
+            .First(e => e.TensorName.EndsWith("ffn_up.weight")).ChosenType;
+        Assert.NotEqual(LlamaTensorType.Q2_K, ffnUpType);
+    }
+
+    /// <summary>
     /// Companion test: with <c>NoiseAwareRefinement=false</c>, the
     /// same non-monotonic profile DOES end up with per-tensor
     /// variance — the gate is what produced the difference, not some
@@ -608,6 +762,10 @@ public class QuantRecipeFromProfileTests
                 UsePerTensorData = true,
                 AllowPerTensorPromotion = true,
                 NoiseAwareRefinement = false,    // explicit opt-out
+                NoiseAwareCategoryPick = false,  // also off so the
+                                                 // floor isn't bumped
+                                                 // by stage 2 logic
+                MinPredictedGainPpl = 0,         // and don't snap to stock
             });
 
         // Without the noise gate the per-tensor refinement runs and

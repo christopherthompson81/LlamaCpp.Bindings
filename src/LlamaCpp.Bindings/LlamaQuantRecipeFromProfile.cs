@@ -260,6 +260,79 @@ public sealed class LlamaQuantRecipeFromProfileOptions
     /// can't be reliably extracted from noise.
     /// </summary>
     public double MaxRelativeStdForRefinement { get; set; } = 1.0;
+
+    /// <summary>
+    /// Restrict the optimizer's per-category type pick when the
+    /// drill-candidates analyzer classifies a category's bpw curve
+    /// as noise-dominated (<see cref="LlamaCategoryShape.NonMonotonic"/>
+    /// AND every measured Δ below
+    /// <see cref="MaxNoiseAbsDelta"/>). Defaults to <c>false</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Companion to <see cref="NoiseAwareRefinement"/>. That option
+    /// (default on) blocks the *per-tensor* refinement loop from
+    /// acting on noisy data; this option blocks the *category-level*
+    /// enumeration from picking low-bpw types when the category curve
+    /// itself is noise-dominated.
+    /// </para>
+    /// <para>
+    /// <strong>Default off because the floor bump is unconditional</strong>
+    /// — it raises the floor regardless of whether the resulting
+    /// recipe can still hit the bpw budget. On real workloads (Run 25
+    /// re-validation: see <c>docs/investigations/qwen3_qk_sensitivity.md</c>)
+    /// flagging 4 of 7 categories as noise-dominated and bumping each
+    /// to Q4_K consumes ~41 % of the bpw budget at 4.5 bpw, which
+    /// leaves no headroom to upgrade signal-rich categories
+    /// (<c>ffn_up</c>, <c>ffn_down</c>) to Q6_K — every category lands
+    /// at Q4_K and PPL collapses back near stock. A budget-aware
+    /// floor or a saturation-factor approach (issue #44 stage 3) is
+    /// the right long-term fix; this knob is kept as opt-in for
+    /// scenarios where a user explicitly wants the conservative bump.
+    /// </para>
+    /// <para>
+    /// When triggered, the category's effective floor is bumped to
+    /// <see cref="NoiseFallbackFloor"/> (default <c>Q4_K</c>) so the
+    /// optimizer can't enumerate types below it. The category's
+    /// declared <see cref="LlamaSensitivityCategoryCoefficient.RecommendedFloor"/>
+    /// is still honored — the noise floor only raises it, never
+    /// lowers it.
+    /// </para>
+    /// </remarks>
+    public bool NoiseAwareCategoryPick { get; set; } = false;
+
+    /// <summary>
+    /// Threshold (in absolute Δ-PPL) below which a category curve's
+    /// measurements are treated as below the noise band. Default
+    /// <c>1.0</c> — Δ &lt; 1.0 PPL on a model with baseline 10–20
+    /// PPL is well within measurement noise; Δ above that is
+    /// reliably distinguishable signal.
+    /// </summary>
+    /// <remarks>
+    /// Combined with <see cref="NoiseAwareCategoryPick"/>: a
+    /// non-monotonic curve whose maximum absolute Δ is still below
+    /// this threshold is treated as "all noise", and the optimizer's
+    /// floor is bumped to <see cref="NoiseFallbackFloor"/>. Tuning
+    /// note: bigger values are more aggressive (more categories
+    /// flagged as noise); smaller values are more conservative.
+    /// </remarks>
+    public double MaxNoiseAbsDelta { get; set; } = 1.0;
+
+    /// <summary>
+    /// Effective floor type used when
+    /// <see cref="NoiseAwareCategoryPick"/> triggers on a
+    /// noise-dominated category. Default <c>Q4_K</c> — a workhorse
+    /// 4.5-bpw type that's safe across most architectures and budgets.
+    /// </summary>
+    /// <remarks>
+    /// Picking too high a fallback (e.g. <c>Q6_K</c>) makes the
+    /// recipe overspend budget on categories the optimizer can't
+    /// score. Too low (e.g. <c>Q3_K</c>) defeats the gate's purpose
+    /// of avoiding catastrophic-compounding low-bpw picks. Q4_K is
+    /// the empirical sweet spot for Q4_K_M-class budgets; tune up
+    /// for higher-bpw targets if recipes feel too aggressive.
+    /// </remarks>
+    public LlamaTensorType NoiseFallbackFloor { get; set; } = LlamaTensorType.Q4_K;
 }
 
 /// <summary>
@@ -503,13 +576,51 @@ public static class LlamaQuantRecipeFromProfile
         // embeddings (Qwen3-4B, Llama-3.2-1B): the profile category is
         // present but no target tensor matches, so it contributes nothing
         // and would otherwise crash the per-(cat, T) lookup below.
+        //
+        // Compute the analyzer verdict once at the top of Build —
+        // both the category-level floor (here) and the per-tensor
+        // refinement step (later) consult it. NoiseAwareCategoryPick
+        // bumps the floor to NoiseFallbackFloor when a category curve
+        // is non-monotonic AND below the noise threshold, blocking
+        // the optimizer from picking low-bpw types based on what is
+        // demonstrably measurement noise.
+        Dictionary<string, LlamaDrillCandidate>? analyzerVerdicts = null;
+        if (opts.NoiseAwareRefinement || opts.NoiseAwareCategoryPick)
+        {
+            analyzerVerdicts = LlamaSensitivityDrillCandidates.Analyze(profile)
+                .ToDictionary(c => c.CategoryName, StringComparer.Ordinal);
+        }
+
         var perCategoryChoices = new Dictionary<string, IReadOnlyList<LlamaTensorType>>();
         foreach (var (cat, coef) in profile.Categories)
         {
             if (!categoryElements.ContainsKey(cat)) continue;  // no matching target tensors
 
+            // Compute the effective floor: max of declared
+            // RecommendedFloor and the noise-aware fallback (when
+            // category is flagged as noise-dominated).
+            LlamaTensorType? effectiveFloor = coef.RecommendedFloor;
+            if (opts.NoiseAwareCategoryPick
+                && analyzerVerdicts is not null
+                && analyzerVerdicts.TryGetValue(cat, out var verdict)
+                && verdict.Shape == LlamaCategoryShape.NonMonotonic)
+            {
+                double maxAbsDelta = coef.DeltaPplByType.Values.Select(Math.Abs).DefaultIfEmpty(0).Max();
+                if (maxAbsDelta < opts.MaxNoiseAbsDelta)
+                {
+                    var fallbackBpw = LlamaQuantRecipe.GetBitsPerElement(opts.NoiseFallbackFloor);
+                    var declaredBpw = effectiveFloor is LlamaTensorType df
+                        ? LlamaQuantRecipe.GetBitsPerElement(df)
+                        : 0.0;
+                    if (fallbackBpw > declaredBpw)
+                    {
+                        effectiveFloor = opts.NoiseFallbackFloor;
+                    }
+                }
+            }
+
             var allowed = ladder
-                .Where(t => coef.RecommendedFloor is not LlamaTensorType f ||
+                .Where(t => effectiveFloor is not LlamaTensorType f ||
                             LlamaQuantRecipe.GetBitsPerElement(t) >= LlamaQuantRecipe.GetBitsPerElement(f))
                 .ToList();
             if (allowed.Count == 0)
@@ -643,15 +754,11 @@ public static class LlamaQuantRecipeFromProfile
         var perTensorRefined = new Dictionary<string, (LlamaTensorType Type, double Delta)>(StringComparer.Ordinal);
         if (opts.UsePerTensorData && profile.PerTensor is { } perTensorMap)
         {
-            // Run the drill-candidates analyzer once and index its
-            // verdict by category. When NoiseAwareRefinement is on,
-            // we skip per-tensor refinement for categories the
-            // analyzer flags as noise-dominated — this is issue #44's
-            // first-stage fix: honor analyzer signals so the recipe
-            // builder doesn't trust per-tensor measurements that are
-            // below the noise floor.
-            Dictionary<string, LlamaDrillCandidate>? noiseVerdicts = null;
-            if (opts.NoiseAwareRefinement)
+            // Reuse the analyzer verdict computed at the top of Build
+            // (used by NoiseAwareCategoryPick); fall back to running
+            // it here if only NoiseAwareRefinement is on.
+            var noiseVerdicts = analyzerVerdicts;
+            if (noiseVerdicts is null && opts.NoiseAwareRefinement)
             {
                 noiseVerdicts = LlamaSensitivityDrillCandidates.Analyze(profile)
                     .ToDictionary(c => c.CategoryName, StringComparer.Ordinal);
