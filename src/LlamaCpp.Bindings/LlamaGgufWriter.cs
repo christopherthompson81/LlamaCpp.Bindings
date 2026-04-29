@@ -355,7 +355,11 @@ public sealed class LlamaGgufWriter
 
         // Tensor data section. Each tensor copies its bytes (in-memory or
         // streamed from a source file), then we pad to the next tensor's
-        // declared offset so offsets[i+1] is honored byte-for-byte.
+        // declared offset so offsets[i+1] is honored byte-for-byte. The
+        // trailing pad on the last tensor uses the same offset frame —
+        // computing it from src.ByteSize alone underestimates by the sum
+        // of all prior offsets, producing a negative `pad` that wraps via
+        // `(int)pad` to ~1.8 GB of spurious zeros.
         for (int i = 0; i < _tensors.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -363,8 +367,11 @@ public sealed class LlamaGgufWriter
             await src.CopyToAsync(dest, cancellationToken);
             long nextEnd = (i + 1 < _tensors.Count)
                 ? offsets[i + 1]
-                : AlignUp(src.ByteSize, Alignment);
+                : AlignUp(offsets[i] + src.ByteSize, Alignment);
             long pad = nextEnd - (offsets[i] + src.ByteSize);
+            if (pad < 0)
+                throw new InvalidOperationException(
+                    $"Internal error: negative trailing pad ({pad}) for tensor '{_tensors[i].Name}'. offsets[{i}]={offsets[i]} byteSize={src.ByteSize} nextEnd={nextEnd}.");
             await WriteZerosAsync(dest, (int)pad, cancellationToken);
         }
     }

@@ -131,21 +131,19 @@ public static class LlamaHfConverter
         var blockCount = ResolveBlockCount(def, config);
         var planned = PlanTensorWrites(def, blockCount, safetensors, config.TieWordEmbeddings);
 
+        // Pre-resolve attention head counts once. Required by the
+        // permute_q / permute_k transforms (Llama family); harmless to
+        // resolve up-front for architectures that don't use them.
+        // Both lookups are best-effort — architectures whose tensor map
+        // never references permute_qk simply ignore the values.
+        int? nHead   = TryResolveMetadataUInt32(def, config, "attention.head_count");
+        int? nHeadKv = TryResolveMetadataUInt32(def, config, "attention.head_count_kv");
+
         for (int i = 0; i < planned.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
             var entry = planned[i];
             progress?.Report(new LlamaHfConvertProgress(i + 1, planned.Count, entry.GgufName));
-
-            // V1: only "passthrough" transform — read source bytes,
-            // dtype-convert to the chosen output type, write. The
-            // definition default is "passthrough"; tensor entries can
-            // omit the field entirely.
-            if (entry.Mapping.Transform != "passthrough")
-            {
-                throw new NotSupportedException(
-                    $"Tensor transform '{entry.Mapping.Transform}' is not in V1's library. Add it to LlamaHfTensorTransforms.");
-            }
 
             var srcInfo = safetensors.Get(entry.HfName);
             var srcBytes = safetensors.ReadTensorBytes(entry.HfName);
@@ -158,7 +156,23 @@ public static class LlamaHfConverter
             var effectiveOutputType = srcInfo.Shape.Length == 1
                 ? LlamaHfConvertOutputType.F32
                 : outputType;
-            var (outBytes, outTypeId) = LlamaHfTensorTransforms.Passthrough(srcBytes, srcInfo.Dtype, effectiveOutputType);
+
+            (byte[] outBytes, uint outTypeId) = entry.Mapping.Transform switch
+            {
+                "passthrough" => LlamaHfTensorTransforms.Passthrough(srcBytes, srcInfo.Dtype, effectiveOutputType),
+                "permute_q"   => LlamaHfTensorTransforms.PermuteQK(
+                                    srcBytes, srcInfo.Dtype, effectiveOutputType, srcInfo.Shape,
+                                    nHead: nHead ?? throw new InvalidDataException(
+                                        $"Tensor '{entry.HfName}' uses permute_q but architecture metadata lacks attention.head_count."),
+                                    nHeadKv: nHead, isK: false),
+                "permute_k"   => LlamaHfTensorTransforms.PermuteQK(
+                                    srcBytes, srcInfo.Dtype, effectiveOutputType, srcInfo.Shape,
+                                    nHead: nHead ?? throw new InvalidDataException(
+                                        $"Tensor '{entry.HfName}' uses permute_k but architecture metadata lacks attention.head_count."),
+                                    nHeadKv: nHeadKv, isK: true),
+                _ => throw new NotSupportedException(
+                    $"Tensor transform '{entry.Mapping.Transform}' is not in V1's library. Add it to LlamaHfTensorTransforms."),
+            };
 
             // Reverse shape order: HF/PyTorch is row-major ([rows, cols] =
             // [vocab, hidden] for token_embd), ggml is fastest-varying-first
@@ -174,13 +188,34 @@ public static class LlamaHfConverter
             writer.AddTensor(entry.GgufName, outTypeId, ggmlShape, outBytes);
         }
 
+        // ----- extra tensors (computed from config; not in safetensors) -----
+        // Generators may return null when the config doesn't call for the
+        // tensor (e.g., llama3 RoPE freqs are emitted only when
+        // rope_scaling.rope_type == "llama3"). Skipped extras don't error.
+        int extraCount = 0;
+        foreach (var extra in def.ExtraTensors)
+        {
+            ct.ThrowIfCancellationRequested();
+            var generated = extra.Generator switch
+            {
+                "llama3_rope_freqs" => LlamaHfExtraTensors.Llama3RopeFreqs(config),
+                _ => throw new NotSupportedException(
+                    $"Extra-tensor generator '{extra.Generator}' is not in V1's library. Add it to LlamaHfExtraTensors."),
+            };
+            if (generated is { } g)
+            {
+                writer.AddTensor(extra.Gguf, g.TypeId, g.Shape, g.Data);
+                extraCount++;
+            }
+        }
+
         writer.WriteAsync(outputPath, ct).GetAwaiter().GetResult();
         sw.Stop();
 
         return new LlamaHfConvertResult(
             OutputPath: outputPath,
             Architecture: def.GgufArchitecture,
-            TensorCount: planned.Count,
+            TensorCount: planned.Count + extraCount,
             OutputBytes: new FileInfo(outputPath).Length,
             OutputType: outputType,
             Elapsed: sw.Elapsed);
@@ -197,7 +232,23 @@ public static class LlamaHfConverter
         // Find the metadata entry whose resolved gguf key is
         // "${arch}.block_count" — its HF path tells us where to look.
         // Required for tensor-template expansion of {i}.
-        var target = $"{def.GgufArchitecture}.block_count";
+        return TryResolveMetadataUInt32(def, config, "block_count")
+            ?? throw new InvalidDataException(
+                $"Architecture definition '{def.GgufArchitecture}' has no metadata entry mapping to '{def.GgufArchitecture}.block_count'.");
+    }
+
+    /// <summary>
+    /// Best-effort resolve of a per-arch <c>uint32</c> metadata value:
+    /// look up the metadata entry whose resolved gguf key matches
+    /// <c>"&lt;gguf_arch&gt;.&lt;suffix&gt;"</c>, then read that field
+    /// from <c>config.json</c>. Returns null when either the entry is
+    /// missing from the definition or the field is missing from
+    /// config.json (or isn't a uint32).
+    /// </summary>
+    private static int? TryResolveMetadataUInt32(
+        LlamaHfArchitectureDefinition def, LlamaHfConfig config, string keySuffix)
+    {
+        var target = $"{def.GgufArchitecture}.{keySuffix}";
         foreach (var m in def.MetadataMap)
         {
             var resolvedGguf = m.Gguf.Replace("${arch}", def.GgufArchitecture, StringComparison.Ordinal);
@@ -207,8 +258,7 @@ public static class LlamaHfConverter
                 if (v.HasValue) return (int)v.Value;
             }
         }
-        throw new InvalidDataException(
-            $"Architecture definition '{def.GgufArchitecture}' has no metadata entry mapping to '{target}'.");
+        return null;
     }
 
     private static void WriteArchitectureMetadata(

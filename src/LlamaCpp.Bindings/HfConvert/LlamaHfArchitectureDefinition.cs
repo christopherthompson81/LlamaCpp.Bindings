@@ -76,6 +76,21 @@ public sealed class LlamaHfArchitectureDefinition
     public IReadOnlyList<TensorMappingEntry> TensorMap { get; init; } = Array.Empty<TensorMappingEntry>();
 
     /// <summary>
+    /// Tensors that aren't in HF safetensors but get computed at convert
+    /// time from the model's config. The generator runs after the main
+    /// tensor map; it can elect to skip emission (e.g., the llama3 RoPE
+    /// freqs only matter when <c>rope_scaling.rope_type == "llama3"</c>).
+    /// </summary>
+    /// <remarks>
+    /// Each entry references a named generator in
+    /// <see cref="LlamaHfExtraTensors"/>. Adding a new extra tensor
+    /// requires a new generator in code — the JSON entry just declares
+    /// the dispatch.
+    /// </remarks>
+    [JsonPropertyName("extra_tensors")]
+    public IReadOnlyList<ExtraTensorEntry> ExtraTensors { get; init; } = Array.Empty<ExtraTensorEntry>();
+
+    /// <summary>
     /// Tokenizer-family hint. Recognized values: <c>"bpe-gpt2"</c>
     /// (HF tokenizer.json with BPE model + GPT2-style pre-tokenizer —
     /// covers Llama-3, Mistral, Qwen2/3). Future entries can map to
@@ -240,5 +255,25 @@ public sealed class TensorMappingEntry
     /// </summary>
     [JsonPropertyName("optional_when_tied")]
     public bool OptionalWhenTied { get; init; }
+}
+
+/// <summary>
+/// One entry in <see cref="LlamaHfArchitectureDefinition.ExtraTensors"/>.
+/// </summary>
+public sealed class ExtraTensorEntry
+{
+    /// <summary>GGUF tensor name (no <c>{i}</c> templating; extras are typically architecture-global).</summary>
+    [JsonPropertyName("gguf")]
+    public string Gguf { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Generator function name. Resolved against
+    /// <see cref="LlamaHfExtraTensors"/> at convert time. Generators
+    /// can return null to signal "not applicable on this config" (e.g.,
+    /// the <c>llama3_rope_freqs</c> generator returns null when
+    /// <c>rope_scaling.rope_type</c> isn't <c>"llama3"</c>).
+    /// </summary>
+    [JsonPropertyName("generator")]
+    public string Generator { get; init; } = string.Empty;
 }
 

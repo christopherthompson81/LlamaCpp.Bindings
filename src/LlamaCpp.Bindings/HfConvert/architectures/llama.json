@@ -1,0 +1,54 @@
+{
+  "hf_architecture": "LlamaForCausalLM",
+  "gguf_arch": "llama",
+  "description": "Meta Llama 1/2/3 family — classical decoder-only transformer with rotary position embeddings, GQA attention (Llama-3+), and SwiGLU MLP. Tokenizer: tiktoken-style BPE on Llama-3+, SentencePiece on Llama-2 (the latter is not supported by the bpe-gpt2 family — only tiktoken-style BPE checkpoints work in V1).",
+
+  "tokenizer_family": "bpe-gpt2",
+  "tokenizer_pre": "llama-bpe",
+  "eot_token": "<|eot_id|>",
+
+  "force_control_token_patterns": [
+    "<|begin_of_text|>",
+    "<|end_of_text|>",
+    "<|start_header_id|>",
+    "<|end_header_id|>",
+    "<|eot_id|>",
+    "<|finetune_right_pad_id|>",
+    "<|python_tag|>",
+    "<|reserved_special_token_*|>"
+  ],
+
+  "metadata_map": [
+    { "gguf": "${arch}.context_length",                  "hf": "max_position_embeddings", "type": "uint32" },
+    { "gguf": "${arch}.embedding_length",                "hf": "hidden_size",             "type": "uint32" },
+    { "gguf": "${arch}.block_count",                     "hf": "num_hidden_layers",       "type": "uint32" },
+    { "gguf": "${arch}.feed_forward_length",             "hf": "intermediate_size",       "type": "uint32" },
+    { "gguf": "${arch}.attention.head_count",            "hf": "num_attention_heads",     "type": "uint32" },
+    { "gguf": "${arch}.attention.head_count_kv",         "hf": "num_key_value_heads",     "type": "uint32" },
+    { "gguf": "${arch}.attention.key_length",            "hf": "head_dim",                "type": "uint32", "optional": true },
+    { "gguf": "${arch}.attention.value_length",          "hf": "head_dim",                "type": "uint32", "optional": true },
+    { "gguf": "${arch}.attention.layer_norm_rms_epsilon","hf": "rms_norm_eps",            "type": "float32" },
+    { "gguf": "${arch}.rope.freq_base",                  "hf": "rope_theta",              "type": "float32", "optional": true },
+    { "gguf": "${arch}.rope.dimension_count",            "hf": "head_dim",                "type": "uint32", "optional": true }
+  ],
+
+  "extra_tensors": [
+    { "gguf": "rope_freqs.weight", "generator": "llama3_rope_freqs" }
+  ],
+
+  "tensor_map": [
+    { "gguf": "token_embd.weight",          "hf": "model.embed_tokens.weight" },
+    { "gguf": "output_norm.weight",         "hf": "model.norm.weight" },
+    { "gguf": "output.weight",              "hf": "lm_head.weight",                                   "optional_when_tied": true },
+
+    { "gguf": "blk.{i}.attn_norm.weight",   "hf": "model.layers.{i}.input_layernorm.weight" },
+    { "gguf": "blk.{i}.attn_q.weight",      "hf": "model.layers.{i}.self_attn.q_proj.weight",         "transform": "permute_q" },
+    { "gguf": "blk.{i}.attn_k.weight",      "hf": "model.layers.{i}.self_attn.k_proj.weight",         "transform": "permute_k" },
+    { "gguf": "blk.{i}.attn_v.weight",      "hf": "model.layers.{i}.self_attn.v_proj.weight" },
+    { "gguf": "blk.{i}.attn_output.weight", "hf": "model.layers.{i}.self_attn.o_proj.weight" },
+    { "gguf": "blk.{i}.ffn_norm.weight",    "hf": "model.layers.{i}.post_attention_layernorm.weight" },
+    { "gguf": "blk.{i}.ffn_gate.weight",    "hf": "model.layers.{i}.mlp.gate_proj.weight" },
+    { "gguf": "blk.{i}.ffn_up.weight",      "hf": "model.layers.{i}.mlp.up_proj.weight" },
+    { "gguf": "blk.{i}.ffn_down.weight",    "hf": "model.layers.{i}.mlp.down_proj.weight" }
+  ]
+}
