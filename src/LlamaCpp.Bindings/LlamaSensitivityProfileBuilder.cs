@@ -89,6 +89,43 @@ public static class LlamaSensitivityProfileBuilder
 
         /// <summary>Optional GPU model string recorded per row (e.g. "RTX 3090").</summary>
         public string? GpuModel { get; set; }
+
+        /// <summary>
+        /// Skip the per-cell quantize+load+free cycle and apply each
+        /// ablation as a tensor-data swap on a persistent F16 model
+        /// (<see cref="LlamaInPlaceAblator"/>). Each consumer worker
+        /// loads the F16 model once, then rewrites only the ablated
+        /// tensors' bytes between PPL passes.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Default <c>true</c>. Saves the disk space the disk path
+        /// otherwise consumes for per-cell GGUFs (peak ~5–7 ablation
+        /// files × source size in flight) and matches the disk path's
+        /// wall time within ~3 % on per-category sweeps; on per-tensor
+        /// sweeps (1 tensor per cell) it pulls ahead by skipping the
+        /// 22 s per-cell load+free overhead. Set to <c>false</c> to
+        /// fall back to the disk path when needed (e.g. when running
+        /// against a llama.cpp pin whose internals haven't been
+        /// re-validated against the shim — see Run 24 for details).
+        /// </para>
+        /// <para>
+        /// PPL agrees with the disk path within ~0.002 PPL (verified
+        /// on Qwen3-0.6B / Q4_K and Q2_K). The small gap is from
+        /// F16-kernel vs Q-quant-kernel matmul choice on data that is
+        /// bit-identical post-dequant. Recipe-vs-recipe deltas — the
+        /// surface AQ decisions are made on — are unaffected since
+        /// both legs use identical kernels.
+        /// </para>
+        /// <para>
+        /// Requires the <c>libllamashim</c> native binary alongside
+        /// the fetched libllama.so (build via
+        /// <c>tools/native-shims/build.sh</c>). Failure to provide the
+        /// shim surfaces as a <see cref="DllNotFoundException"/> on the
+        /// first ablation.
+        /// </para>
+        /// </remarks>
+        public bool UseInPlaceAblator { get; set; } = true;
     }
 
     /// <summary>
@@ -551,26 +588,6 @@ public static class LlamaSensitivityProfileBuilder
                 .Where(s => !ablationPpl.ContainsKey((s.Target, s.Type)))
                 .ToList();
 
-            // Continuous-flow pipeline. Quantize is serial (one writer
-            // saturating CPU); PPL runs at pplConcurrency in parallel.
-            // A bounded channel hands quantized files off to consumers
-            // and back-pressures the producer when all consumers are
-            // busy, so peak files-on-disk stays bounded.
-            //
-            // Peak in flight = 1 (producer mid-write)
-            //                + channelCapacity (queued, ready for PPL)
-            //                + pplConcurrency  (consumers actively scoring).
-            // We size channelCapacity so the total = pplConcurrency + 1,
-            // matching the old design's "1 baseline + batchSize" peak.
-            int channelCapacity = 1;
-            var channel = Channel.CreateBounded<(AblationSpec Spec, string Path)>(
-                new BoundedChannelOptions(channelCapacity)
-                {
-                    FullMode = BoundedChannelFullMode.Wait,
-                    SingleReader = false,
-                    SingleWriter = true,
-                });
-
             // Each consumer task uses pplOpts directly. The thread budget
             // matches what RunParallelAsync would have computed:
             // ProcessorCount / pplConcurrency. We snapshot it here once
@@ -591,6 +608,47 @@ public static class LlamaSensitivityProfileBuilder
             // Report callback may post to a SynchronizationContext but
             // is itself fast, so holding the lock briefly is fine.
             var sharedLock = new object();
+
+            // Branch on the campaign mode. UseInPlaceAblator skips the
+            // per-cell GGUF quantize and per-cell GPU model load,
+            // applying each ablation as a tensor-data swap on a
+            // persistent F16 model — see LlamaInPlaceAblator.
+            if (opts.UseInPlaceAblator)
+            {
+                await RunInPlaceCampaignAsync(
+                    sourceModelPath, corpusText, opts, weightTensors,
+                    pendingSpecs, baseline, modelSha, architectureId, paramCount,
+                    corpusSha, corpusName, imatrixSha, pplOpts, consumerPplOpts,
+                    pplConcurrency, db, ablationPpl, sharedLock,
+                    () => Fraction(),
+                    setScored: v => { scored = v; },
+                    getScored: () => scored,
+                    totalJobs, progress,
+                    cancellationToken).ConfigureAwait(false);
+
+                progress?.Report(new Progress(Stage.Done, scored, totalJobs, Fraction: 1.0));
+                return new CampaignResults(baseline, ablationPpl);
+            }
+
+            // Continuous-flow pipeline. Quantize is serial (one writer
+            // saturating CPU); PPL runs at pplConcurrency in parallel.
+            // A bounded channel hands quantized files off to consumers
+            // and back-pressures the producer when all consumers are
+            // busy, so peak files-on-disk stays bounded.
+            //
+            // Peak in flight = 1 (producer mid-write)
+            //                + channelCapacity (queued, ready for PPL)
+            //                + pplConcurrency  (consumers actively scoring).
+            // We size channelCapacity so the total = pplConcurrency + 1,
+            // matching the old design's "1 baseline + batchSize" peak.
+            int channelCapacity = 1;
+            var channel = Channel.CreateBounded<(AblationSpec Spec, string Path)>(
+                new BoundedChannelOptions(channelCapacity)
+                {
+                    FullMode = BoundedChannelFullMode.Wait,
+                    SingleReader = false,
+                    SingleWriter = true,
+                });
 
             var producerTask = Task.Run(async () =>
             {
@@ -760,6 +818,151 @@ public static class LlamaSensitivityProfileBuilder
             .Where(t => t.Dimensions.Length > 1 && t.Name.EndsWith(".weight", StringComparison.Ordinal))
             .Select(t => t.Name)
             .ToList();
+
+    /// <summary>
+    /// Materialize an ablation spec into the explicit list of
+    /// <c>(tensorName, type)</c> pairs the in-place ablator consumes.
+    /// Mirrors the recipe-building logic but without the F16-everywhere-else
+    /// padding (the in-place ablator handles "everything else stays F16"
+    /// implicitly via its source-data restoration step).
+    /// </summary>
+    private static List<(string TensorName, LlamaTensorType Type)>
+        MaterializeAblationTensors(IReadOnlyList<string> tensors, AblationSpec spec)
+    {
+        var list = new List<(string, LlamaTensorType)>();
+        foreach (var name in tensors)
+        {
+            if (spec.IsAblated(name)) list.Add((name, spec.Type));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Replacement producer/consumer loop for the in-place path. Each
+    /// worker holds a persistent F16 LlamaModel + LlamaInPlaceAblator;
+    /// the queue carries ablation specs (already-materialized into
+    /// tensor-name lists) rather than file paths to fresh GGUFs.
+    /// </summary>
+    private static async Task RunInPlaceCampaignAsync(
+        string sourceModelPath,
+        string corpusText,
+        Options opts,
+        IReadOnlyList<string> weightTensors,
+        IReadOnlyList<AblationSpec> pendingSpecs,
+        double baseline,
+        string modelSha,
+        string architectureId,
+        long paramCount,
+        string corpusSha,
+        string corpusName,
+        string imatrixSha,
+        LlamaPerplexityOptions pplOpts,
+        LlamaPerplexityOptions consumerPplOpts,
+        int pplConcurrency,
+        LlamaInvestigationDb db,
+        Dictionary<(string Target, LlamaTensorType Type), double> ablationPpl,
+        object sharedLock,
+        Func<double> fraction,
+        Action<int> setScored,
+        Func<int> getScored,
+        int totalJobs,
+        IProgress<Progress>? progress,
+        CancellationToken cancellationToken)
+    {
+        // Pre-load the imatrix once at campaign scope. All workers read
+        // the same dictionary (by-tensor lookup) without contention,
+        // since the dictionary itself is not mutated after construction.
+        IReadOnlyDictionary<string, float[]>? sharedImatrix = null;
+        if (!string.IsNullOrEmpty(opts.ImatrixPath))
+        {
+            sharedImatrix = LlamaCustomQuantizer.LoadImatrixForExternalUse(opts.ImatrixPath!);
+        }
+
+        // Materialize each pending spec into the explicit tensor list
+        // up front, so workers don't replay the predicate on every
+        // dequeue. Done once; cheap (O(specs × tensors)).
+        var workItems = pendingSpecs
+            .Select(s => (Spec: s, Tensors: MaterializeAblationTensors(weightTensors, s)))
+            .ToList();
+
+        // Unbounded channel — the work items are tiny (a list of tensor
+        // names per cell), so memory cost of pre-loading all of them
+        // is trivial and we avoid the back-pressure deadlock that a
+        // bounded channel would create when the producer enqueues
+        // before the worker pool exists.
+        var channel = Channel.CreateUnbounded<
+            (AblationSpec Spec, IReadOnlyList<(string TensorName, LlamaTensorType Type)> Tensors)>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = false,
+                SingleWriter = true,
+            });
+
+        // Prime the channel synchronously — the unbounded variant of
+        // WriteAsync never blocks, so this completes immediately and
+        // workers see all 22 items waiting when they start draining.
+        foreach (var item in workItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await channel.Writer.WriteAsync(item, cancellationToken).ConfigureAwait(false);
+        }
+        channel.Writer.Complete();
+
+        async Task WorkerLoopAsync(int workerId)
+        {
+            var modelOpts = new LlamaModelParameters { UseMmap = true, GpuLayerCount = -1 };
+            using var model = new LlamaModel(sourceModelPath, modelOpts);
+            using var ablator = new LlamaInPlaceAblator(model, sourceModelPath);
+
+            await foreach (var (spec, tensors) in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                lock (sharedLock)
+                {
+                    progress?.Report(new Progress(
+                        Stage.Quantizing, getScored(), totalJobs,
+                        CurrentLabel: $"{spec.Target} @ {spec.Type} (in-place)",
+                        CellTarget: spec.Target,
+                        CellType: spec.Type,
+                        CellState: CellState.Quantizing,
+                        Fraction: fraction()));
+                }
+
+                var result = await ablator.RunAblationAsync(
+                    tensors, corpusText, consumerPplOpts,
+                    sharedImatrix, cancellationToken).ConfigureAwait(false);
+                var ablation = result.Perplexity;
+
+                lock (sharedLock)
+                {
+                    ablationPpl[(spec.Target, spec.Type)] = ablation;
+                    db.RecordMeasurement(BuildMeasurementRecord(
+                        modelSha, architectureId, paramCount, corpusSha, corpusName,
+                        imatrixSha, pplOpts.ContextSize,
+                        target:        spec.Target,
+                        ablationType:  spec.Type,
+                        baselineType:  LlamaTensorType.F16,
+                        baselinePpl:   baseline,
+                        ablationPpl:   ablation,
+                        deltaPpl:      ablation - baseline,
+                        gpuModel:      opts.GpuModel));
+                    setScored(getScored() + 1);
+                    progress?.Report(new Progress(
+                        Stage.Scoring, getScored(), totalJobs,
+                        CurrentLabel: $"{spec.Target} @ {spec.Type} = {ablation:F4}",
+                        CellTarget: spec.Target,
+                        CellType: spec.Type,
+                        CellState: CellState.Done,
+                        CellDelta: ablation - baseline,
+                        Fraction: fraction()));
+                }
+            }
+        }
+
+        var workers = Enumerable.Range(0, pplConcurrency)
+            .Select(WorkerLoopAsync)
+            .ToArray();
+        await Task.WhenAll(workers).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Tensor-name category matcher. Mirrors the categorization used in
