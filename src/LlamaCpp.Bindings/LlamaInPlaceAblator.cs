@@ -42,6 +42,16 @@ namespace LlamaCpp.Bindings;
 ///         model the <see cref="LlamaModel"/> was loaded from — the
 ///         ablator reads original F16 tensor bytes directly from the
 ///         file at the offsets recorded in the GGUF header.</item>
+///   <item><strong>The model must NOT be loaded with
+///         <c>UseMmap = true</c>.</strong> Tied-embedding architectures
+///         (Llama-3.2-1B, Qwen3-4B) keep <c>token_embd.weight</c> on a
+///         CPU-resident buffer that, under mmap, points directly at
+///         <c>PROT_READ</c> file pages. The first
+///         <see cref="RunAblationAsync"/> call that targets such a tensor
+///         attempts to <c>memcpy</c> into a read-only page and the
+///         process SIGSEGVs (issue #46). Pass
+///         <c>new LlamaModelParameters { UseMmap = false, … }</c>
+///         when constructing the model.</item>
 /// </list>
 /// </para>
 /// </remarks>

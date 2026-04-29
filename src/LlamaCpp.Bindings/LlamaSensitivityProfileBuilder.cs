@@ -910,7 +910,15 @@ public static class LlamaSensitivityProfileBuilder
 
         async Task WorkerLoopAsync(int workerId)
         {
-            var modelOpts = new LlamaModelParameters { UseMmap = true, GpuLayerCount = -1 };
+            // mmap MUST be off here: tied-embedding architectures
+            // (Llama-3.2-1B, Qwen3-4B, etc.) keep token_embd.weight on a
+            // CPU-resident buffer that, under mmap=true, points directly
+            // at PROT_READ file pages. Any SetTensorData write to that
+            // buffer SIGSEGVs the process. With mmap=false llama.cpp
+            // copies tensor bytes into malloc'd pages at load time, so
+            // the in-place ablator's writes are safe across all backends.
+            // See issue #46.
+            var modelOpts = new LlamaModelParameters { UseMmap = false, GpuLayerCount = -1 };
             using var model = new LlamaModel(sourceModelPath, modelOpts);
             using var ablator = new LlamaInPlaceAblator(model, sourceModelPath);
 
