@@ -553,4 +553,154 @@ public class QuantRecipeFromProfileTests
             Assert.Contains(profile.Categories.Keys, c =>
                 c.Contains('.') ? e.TensorName.EndsWith(c) : e.TensorName.Contains(c)));
     }
+
+    /// <summary>
+    /// Noise-aware refinement should drop per-tensor refinement for
+    /// any category whose drilled curve is non-monotonic (a higher-bpw
+    /// measurement greater than a lower-bpw one is a mathematically
+    /// impossible pattern that only arises from measurement noise).
+    /// </summary>
+    [Fact]
+    public void NoiseAwareRefinement_NonMonotonicPerTensor_FallsBackToCategoryPick()
+    {
+        var profile = MakeProfileWithNonMonotonicPerTensor();
+        var layout = SyntheticLayout(4, 1_000_000);
+
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                UsePerTensorData = true,
+                AllowPerTensorPromotion = true,
+                NoiseAwareRefinement = true,    // default; explicit for clarity
+            });
+
+        // ffn_up's per-tensor data is non-monotonic (Q4_K Δ > Q2_K Δ
+        // on one tensor). Noise-aware refinement should drop the
+        // per-tensor refinement and leave every ffn_up tensor at the
+        // per-category pick.
+        var ffnUpTypes = recipe.Entries
+            .Where(e => e.TensorName.EndsWith("ffn_up.weight"))
+            .Select(e => e.ChosenType)
+            .Distinct()
+            .ToList();
+        Assert.Single(ffnUpTypes);  // every ffn_up tensor at the same type
+    }
+
+    /// <summary>
+    /// Companion test: with <c>NoiseAwareRefinement=false</c>, the
+    /// same non-monotonic profile DOES end up with per-tensor
+    /// variance — the gate is what produced the difference, not some
+    /// unrelated change to the rest of the pipeline.
+    /// </summary>
+    [Fact]
+    public void NoiseAwareRefinementOff_NonMonotonicPerTensor_RefinesAnyway()
+    {
+        var profile = MakeProfileWithNonMonotonicPerTensor();
+        var layout = SyntheticLayout(4, 1_000_000);
+
+        var recipe = LlamaQuantRecipeFromProfile.BuildFromTensorLayout(
+            profile, layout, targetParameterCount: 100_000_000,
+            targetBitsPerElement: 4.5,
+            options: new LlamaQuantRecipeFromProfileOptions
+            {
+                UsePerTensorData = true,
+                AllowPerTensorPromotion = true,
+                NoiseAwareRefinement = false,    // explicit opt-out
+            });
+
+        // Without the noise gate the per-tensor refinement runs and
+        // typically picks a non-uniform mix (one of the ffn_up
+        // tensors had a noise-flipped Δ that the optimizer treats as
+        // signal). Assert that at least one tensor lands at a type
+        // different from the others.
+        var ffnUpTypes = recipe.Entries
+            .Where(e => e.TensorName.EndsWith("ffn_up.weight"))
+            .Select(e => e.ChosenType)
+            .Distinct()
+            .ToList();
+        Assert.True(ffnUpTypes.Count >= 2,
+            $"expected per-tensor refinement to pick mixed types when noise gate is off; got {string.Join(",", ffnUpTypes)}");
+    }
+
+    /// <summary>
+    /// Helper: build a profile whose ffn_up category has a clean
+    /// monotonic per-category curve but a non-monotonic per-tensor
+    /// curve on one of its layers. The recipe builder's analyzer
+    /// should classify ffn_up as
+    /// <see cref="LlamaCategoryShape.NonMonotonic"/> and (when
+    /// noise-aware refinement is on) skip per-tensor refinement.
+    /// </summary>
+    private static LlamaSensitivityProfile MakeProfileWithNonMonotonicPerTensor()
+    {
+        // Per-tensor data designed so the refinement loop will *actually*
+        // demote blk.2 to Q2_K when allowed:
+        //   - blk.2's Q2_K Δ is below the default
+        //     PerTensorPromotionThresholdPpl (0.05) so the demote gate
+        //     opens.
+        //   - The other layers' Q2_K Δ sits at the per-category number
+        //     (4.0) so they stay at the per-category pick.
+        var perTensor = new Dictionary<string, LlamaSensitivityTensorCoefficient>(StringComparer.Ordinal);
+        for (int i = 0; i < 4; i++)
+        {
+            var deltas = i == 2
+                ? new Dictionary<LlamaTensorType, double>
+                {
+                    [LlamaTensorType.Q2_K] = 0.01,    // below promotion threshold
+                    [LlamaTensorType.Q4_K] = 0.10,
+                    [LlamaTensorType.Q6_K] = 0.04,
+                }
+                : new Dictionary<LlamaTensorType, double>
+                {
+                    [LlamaTensorType.Q2_K] = 4.0,
+                    [LlamaTensorType.Q4_K] = 0.5,
+                    [LlamaTensorType.Q6_K] = 0.05,
+                };
+            perTensor[$"blk.{i}.ffn_up.weight"] = new LlamaSensitivityTensorCoefficient(deltas);
+        }
+        // Category-level ffn_up: Q4_K → Q6_K is inverted (Q6_K Δ > Q4_K
+        // Δ by 0.05 > 0.01 noise band), which is mathematically
+        // impossible and triggers the analyzer's NonMonotonic verdict.
+        // This is what gates the refinement skip.
+        return new LlamaSensitivityProfile(
+            SchemaVersion: LlamaSensitivityProfile.CurrentSchemaVersion,
+            ArchitectureId: "synthetic",
+            LayerCount: 4,
+            FamilyNotes: null,
+            Provenance: new LlamaSensitivityProvenance(
+                Method: "ablation",
+                SourceModel: "synthetic.gguf",
+                SourceParameterCount: 100_000_000,
+                Corpus: "synthetic",
+                BuiltAtUtc: DateTime.UtcNow,
+                BuilderVersion: "test"),
+            F16BaselinePerplexity: 10.0,
+            BaselineContextSize: 512,
+            Categories: new Dictionary<string, LlamaSensitivityCategoryCoefficient>
+            {
+                ["ffn_up"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 4.0,
+                        [LlamaTensorType.Q4_K] = 0.5,
+                        [LlamaTensorType.Q6_K] = 0.55,    // inverted vs Q4_K → NonMonotonic
+                    },
+                    // Floor allows Q2_K so per-tensor refinement isn't
+                    // blocked at the floor — only the noise gate would
+                    // stop blk.2 from being demoted.
+                    RecommendedFloor: LlamaTensorType.Q2_K,
+                    Notes: null),
+                ["ffn_gate"] = new LlamaSensitivityCategoryCoefficient(
+                    DeltaPplByType: new Dictionary<LlamaTensorType, double>
+                    {
+                        [LlamaTensorType.Q2_K] = 0.5,
+                        [LlamaTensorType.Q4_K] = 0.05,
+                        [LlamaTensorType.Q6_K] = 0.005,
+                    },
+                    RecommendedFloor: LlamaTensorType.Q2_K,
+                    Notes: null),
+            },
+            PerTensor: perTensor);
+    }
 }

@@ -220,6 +220,46 @@ public sealed class LlamaQuantRecipeFromProfileOptions
     /// promotions; raise it to be more conservative.
     /// </remarks>
     public double PerTensorPromotionThresholdPpl { get; set; } = 0.05;
+
+    /// <summary>
+    /// Skip per-tensor refinement for categories whose per-tensor data
+    /// is noise-dominated, using the
+    /// <see cref="LlamaSensitivityDrillCandidates"/> analyzer's verdict
+    /// as the gate. Defaults to <c>true</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Run 25 documented why this matters: when per-tensor measurements
+    /// at the worst-bpw rung have small absolute Δ-PPL, measurement
+    /// noise can flip individual layers' apparent rank order
+    /// (NonMonotonic curve shape) or push the per-layer std above the
+    /// mean. The recipe builder's per-tensor refinement was treating
+    /// those noise-dominated values as trustworthy signal, picking
+    /// surprisingly low-bpw types for individual tensors and
+    /// catastrophically compounding when many such picks combine.
+    /// </para>
+    /// <para>
+    /// When enabled, before refining a category the builder consults
+    /// the analyzer's <see cref="LlamaCategoryShape"/> verdict: if the
+    /// shape is <see cref="LlamaCategoryShape.NonMonotonic"/> or the
+    /// relative std at the worst type exceeds
+    /// <see cref="MaxRelativeStdForRefinement"/>, per-tensor refinement
+    /// is skipped for that category and every tensor falls back to the
+    /// per-category type pick. The drilled measurements stay in the
+    /// DB and JSON profile — they're just not applied as refinement
+    /// when the analyzer flags them as unreliable.
+    /// </para>
+    /// </remarks>
+    public bool NoiseAwareRefinement { get; set; } = true;
+
+    /// <summary>
+    /// Per-tensor relative-std threshold above which a category is
+    /// treated as noise-dominated and per-tensor refinement is skipped
+    /// (see <see cref="NoiseAwareRefinement"/>). Default <c>1.0</c> —
+    /// rel-std above 1× the mean ΔPPL means the per-layer signal
+    /// can't be reliably extracted from noise.
+    /// </summary>
+    public double MaxRelativeStdForRefinement { get; set; } = 1.0;
 }
 
 /// <summary>
@@ -603,6 +643,20 @@ public static class LlamaQuantRecipeFromProfile
         var perTensorRefined = new Dictionary<string, (LlamaTensorType Type, double Delta)>(StringComparer.Ordinal);
         if (opts.UsePerTensorData && profile.PerTensor is { } perTensorMap)
         {
+            // Run the drill-candidates analyzer once and index its
+            // verdict by category. When NoiseAwareRefinement is on,
+            // we skip per-tensor refinement for categories the
+            // analyzer flags as noise-dominated — this is issue #44's
+            // first-stage fix: honor analyzer signals so the recipe
+            // builder doesn't trust per-tensor measurements that are
+            // below the noise floor.
+            Dictionary<string, LlamaDrillCandidate>? noiseVerdicts = null;
+            if (opts.NoiseAwareRefinement)
+            {
+                noiseVerdicts = LlamaSensitivityDrillCandidates.Analyze(profile)
+                    .ToDictionary(c => c.CategoryName, StringComparer.Ordinal);
+            }
+
             // Group weight tensors by category so we can refine each
             // category independently.
             var byCategory = new Dictionary<string, List<(string Name, long Elements)>>(StringComparer.Ordinal);
@@ -622,6 +676,25 @@ public static class LlamaQuantRecipeFromProfile
                     .Where(t => perTensorMap.ContainsKey(t.Name))
                     .ToDictionary(t => t.Name, t => perTensorMap[t.Name], StringComparer.Ordinal);
                 if (perTensorInCat.Count == 0) continue;
+
+                // Noise-aware gate: drop per-tensor refinement for
+                // categories whose drilled data is below the noise
+                // floor. NonMonotonic curves contain mathematically-
+                // impossible inversions (a higher-bpw measurement
+                // greater than a lower-bpw one); high relative-std at
+                // the worst type means individual-layer ΔPPL can't be
+                // reliably distinguished from the mean.
+                if (noiseVerdicts is not null
+                    && noiseVerdicts.TryGetValue(cat, out var verdict))
+                {
+                    bool nonMonotonic = verdict.Shape == LlamaCategoryShape.NonMonotonic;
+                    bool highRelStd = verdict.PerTensorRelativeStdAtWorst is double rs
+                                       && rs > opts.MaxRelativeStdForRefinement;
+                    if (nonMonotonic || highRelStd)
+                    {
+                        continue;
+                    }
+                }
 
                 var refined = RefineCategoryPerTensor(
                     cat, picked, ScaledDelta(cat, picked),
