@@ -239,6 +239,164 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 25 — 2026-04-29 (Per-tensor expansion to QK categories: negative result + compounding diagnosis)
+
+With Run 24's in-place ablator landed and the drill-candidates UI
+analyzer in place, the natural next step was extending the
+per-tensor measurement set to the four attention weight categories
+(`attn_q` / `attn_k` / `attn_v` / `attn_output`) — the QK-norm-sensitive
+set Run 1's analysis identified as where the per-layer story
+ought to live. Run 22 had shipped with per-tensor data only on
+`ffn_down`; the hope was that drilling attention would unlock another
+recipe improvement on top of Run 22's 16.8989 PPL / 1210 MB result.
+
+### Sweeps run
+
+Two per-tensor sweeps via the in-place ablator path (
+`Options.UseInPlaceAblator = true` default since Run 24):
+
+1. **QK sweep** (4 categories × 28 layers × 4 types = 448 cells):
+   202 min wall, ~27 s/cell at concurrency 4. Clean run.
+2. **ffn_down sweep** (1 × 28 × 4 = 112 cells): 56 min wall.
+   Re-recorded ffn_down per-tensor data that had been wiped during
+   the perf-test invalidations between Runs 22 and 25.
+
+The ffn_down re-sweep was triggered by a sharp observation from the
+user: "did the perf-test invalidations wipe ffn_down's IQ4_XS rung?"
+Yes — `db.DeleteMatching(model, corpus, imatrix, ctx)` with no target
+filter wipes the entire campaign signature, including per-tensor
+data that wasn't being re-measured. The git-committed Run 22 profile
+JSON (`95d6eb2`) preserved a snapshot.
+
+### Recipe builds
+
+Same Run 22 build settings (4.95 bpw, ApplyStockBaseline=off,
+UsePerTensorData=on, AllowPerTensorPromotion=on,
+PerTensorPromotionThresholdPpl=0.05):
+
+| recipe                                     |     PPL |   size |
+| ------------------------------------------ | ------: | -----: |
+| F16 baseline                               | 16.8870 | 4070 MB |
+| Stock Q4_K_M                               | 17.4080 | 1282 MB |
+| Run 22 (Option B, ffn_down only drilled)   | **16.8989** | **1210 MB** |
+| Run 25 (QK-only per-tensor)                | 17.0055 |  1210 MB |
+| Run 25 (QK + ffn_down per-tensor restored) | **18.2386** |  1142 MB |
+
+Both Run 25 attempts came back *worse* than Run 22, not better.
+Adding more measurement data made the recipe worse.
+
+### PPL signal verification
+
+Before assuming a recipe-builder bug, verified our PPL against
+llama.cpp's reference `llama-perplexity` binary:
+
+| measurement                                  | LlamaPerplexity (ours) | llama-perplexity (reference) |     Δ |
+| -------------------------------------------- | ---------------------: | ---------------------------: | ----: |
+| Qwen3-1.7B F16 baseline                      |                16.9000 |              16.8954 ± 0.16  | +0.005 |
+| F16 + ffn_down × Q2_K (all 28 layers)        |                17.8484 |              17.8653 ± 0.16  | −0.017 |
+
+Both within float32 noise + reported uncertainty. **Our PPL signal is
+not drifted.** And — significantly — the catastrophe Run 17/22
+documented as `ffn_down × Q2_K = +3709` no longer holds: a single
+ffn_down-everywhere Q2_K ablation costs only +0.97 PPL today. The
+2026-04-27 imatrix regeneration genuinely fixed Q2_K's per-block
+calibration on this model.
+
+### Real diagnosis: multi-category compounding
+
+With signal and individual measurements both verified, the regression
+traces to the recipe builder treating per-category measurements as
+independent and additive. Run 25's recipe puts **five categories at
+Q2_K simultaneously**:
+
+| category    | Q2_K Δ (single-category) | Run 25 picks  |
+| ----------- | -----------------------: | ------------- |
+| `attn_q`    |                    −0.08 | Q2_K × 28      |
+| `attn_v`    |                    −0.61 | Q2_K × 19      |
+| `ffn_down`  |                    +0.96 | Q2_K × 23      |
+| `ffn_gate`  |                    −0.01 | Q2_K × 28      |
+| `attn_output` |                  +0.11 | Q2_K × 8       |
+
+Each category individually says "Q2_K is fine for me." The optimizer
+sums those tiny costs against Q2_K's bpw savings and concludes Q2_K
+is a great deal. But running multiple categories at Q2_K
+simultaneously **compounds non-additively** — the same lesson
+Run 22's variants A/B/C/D demonstrated (0.04 + 0.26 → 0.51, not 0.30).
+The combined recipe lands at 18.24 PPL vs the additive expectation
+of ~17.4.
+
+### Why Run 22 didn't hit this
+
+Run 22's profile was a **happy accident of data heterogeneity**:
+
+- Per-category coefficients: from Run 17 (2026-04-27 16:45,
+  **pre-imatrix-regen**) — showed catastrophic
+  `ffn_down × Q2_K = +3709`, `attn_v × Q2_K = +15.85`, etc.
+- Per-tensor coefficients (ffn_down only): collected 2026-04-28
+  with the **post-regen imatrix** — mild per-layer numbers.
+
+The old per-category catastrophes forced the optimizer to pick `Q6_K`
+or `Q5_K` for every category at the category level. Per-tensor
+refinement could then only **demote** a few layers within reason —
+that's how Run 22 got `ffn_down: Q6_K×15 + IQ4_XS×9 + Q4_K×4`.
+
+Today's profile has internally consistent post-regen measurements
+throughout. Without the old-imatrix per-category numbers acting as a
+de-facto safety floor, the optimizer freely picks Q2_K everywhere.
+**Run 22 was protected by an accident; the cleaner Run 25 dataset
+exposed a recipe-builder modeling gap.**
+
+### Drill-candidates analyzer earned its keep
+
+The analyzer (Run 24) flagged exactly the issue without being asked.
+On today's profile:
+
+| category    | shape           | rel-std@worst | priority | note                         |
+| ----------- | --------------- | ------------: | -------: | ---------------------------- |
+| `ffn_up`    | SparseCliff     |             — |      5.4 | (not drilled yet)            |
+| `ffn_down`  | SparseCliff     |          2.29 |      0.3 | drilled, high variance       |
+| `attn_k`    | NonMonotonic    |          3.40 |      0.1 | drilled, high variance       |
+| `attn_v`    | NonMonotonic    |          3.05 |      0.0 | drilled, high variance       |
+| `attn_output` | Smooth        |         97.43 |      0.0 | drilled, **97× rel-std**     |
+| `attn_q`    | NonMonotonic    |          5.97 |      0.0 | drilled, high variance       |
+
+Four of the five drilled categories came back **NonMonotonic** —
+some per-layer ΔPPL measurements at higher bpw were *worse* than
+those at lower bpw, which is mathematically impossible and indicates
+measurement noise dominating the signal. The recipe builder doesn't
+currently consult this — it treats every per-tensor measurement as
+trustworthy regardless of the analyzer's noise verdict.
+
+### Decision and follow-up
+
+Run 22 ships unchanged as the production recipe (preserved in git at
+`95d6eb2`). The new measurements are correct and remain in the DB +
+the regenerated `data/profiles/qwen3-1.7B-per-layer.profile.json` —
+they're the right ground truth. The fix is in the recipe builder, not
+the data.
+
+Tracked as a follow-up issue: **recipe builder must model
+multi-category compounding** when many categories pick the same
+low-bpw type. Sketches of approaches:
+
+1. **Compounding penalty / saturation factor**: when N categories pick
+   the same low-bpw type, multiply the predicted Δ by a saturation
+   factor that grows with N. Tune empirically against held-out
+   recipes.
+2. **Quick combined-recipe sanity check**: build the candidate
+   recipe, quantize against a smaller corpus chunk, measure PPL; if
+   it exceeds the additive prediction by >X%, reject and retry with
+   a more conservative budget.
+3. **Honor drill-candidates analyzer signals**: when a category's
+   per-tensor data is NonMonotonic or has rel-std > 1.0 at the worst
+   type, fall back to category-level coefficients (don't refine
+   per-tensor). The drilled measurements stay in the DB but the
+   recipe builder ignores them when noise dominates signal.
+
+(3) is the cheapest first move — wires existing analyzer output into
+the recipe builder. (1) is principled but needs calibration data.
+(2) is heaviest but most defensible.
+
 ## Run 24 — 2026-04-28 (In-place ablator: tensor-surgery ProfileBuilder path, ships as default)
 
 After #37 (continuous-flow scheduler, 1.45×) and the scored-only
