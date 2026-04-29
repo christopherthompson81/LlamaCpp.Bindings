@@ -239,6 +239,220 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 23 — 2026-04-28 (PPL throughput investigation: bottleneck is readback, fix #37 + scored-only mask, #43 closed)
+
+Triggered by the perf-issue triage that produced Run 22's continuous-flow scheduler win (#37). With per-PPL becoming the dominant cost at the campaign level, the question was whether the device-side logsumexp+gather subgraph proposed in #43 was the right next move.
+
+### Conflicting prior claims
+
+The Run 18 deferred-work note (line 920 of this doc, prior to this entry) said:
+
+> bottleneck is real GPU compute (57ms/chunk × 547 chunks = 31s of the 51s wall on Qwen3-1.7B), not readback as initially hypothesized. ComputeBatchedAsync(n_seq=4) saves ~5%; explicit GPU+CPU pipelining could give ~1.65× theoretical, deferred for modest payoff.
+
+The in-code comment in `LlamaPerplexity.Compute` claimed the opposite — readback ~65 % of wall, only meaningful win is a device-side reduction subgraph for ~3× wall. **Both can't be right.**
+
+### Eager-touch experiment
+
+Added env-var-gated phase timers (`PPL_PERF_TRACE`, `PPL_EAGER_TOUCH`) around `llama_decode`, an optional bulk pre-touch of the full logits buffer, and the parallel softmax loop. Workload: Qwen3-1.7B Q4_K_M, wiki.test, ctx=512, second-half-only.
+
+| setting        | wall   | decode | touch  | score |
+|----------------|------:|-------:|-------:|------:|
+| eager-touch=0  | 46.9 s |  1.0 s |  0.0 s | 45.8 s |
+| eager-touch=1  | 47.7 s |  1.0 s | **32.6 s** | 14.0 s |
+
+The eager-touch flushed the lazy d2h transfer time out from "softmax score" into a clearly-attributed phase. Decode-as-measured is **1 s, not 31 s** — the Run 18 note conflated `llama_decode`'s API-return latency (which fires before all queued GPU work is done) with the actual pipeline length. The 31 s the note attributed to compute is mostly d2h transfer of `[V, P]` logits to host pinned memory.
+
+PPL was bit-identical (17.4080) across all five runs — sanity ✓. The original in-code comment was correct: readback is ~70 % of wall on this workload.
+
+### Why the proposed device-side subgraph isn't reachable from the public API
+
+Pursuing the device-side reduction surfaced three structural blockers in llama.cpp's public surface:
+
+1. **The logits buffer is host-pinned, not device-resident.** llama.cpp allocates the output buffer using `ggml_backend_dev_host_buffer_type(output_dev)` — for CUDA, `cudaMallocHost`. The d2h transfer is a node IN the model graph, so by the time `llama_get_logits` returns, the bulk transfer has been issued. There's no device-resident buffer we could share.
+2. **`llama_context`'s backend / sched isn't exposed.** No public API to ship our own subgraph to the same device or share the same buffer-pool.
+3. **The eval callback (`cb_eval`) does fire per-graph-node mid-execution** and gives single-tensor read access via `ggml_backend_tensor_get`, but doesn't naturally support running a parallel ggml subgraph during graph evaluation, and a per-tensor `tensor_get` of the LM-head output still pays the V-wide d2h.
+
+Constructing a separate ggml CUDA context and copying the existing logits to it would pay an extra h2d-then-d2h round-trip — strictly worse than the current path.
+
+The right fix is upstream: an "output-mode = per-token-NLL" option in `llama_context_params` that reduces logits to `(logsumexp, target_logit)` inside the model graph BEFORE the d2h. The reduction is one log-softmax + one gather, both implementable from primitives ggml already has. Output buffer drops from `[V, P]` to `[2, P]` per chunk; d2h drops by V/2. **#43 is closed with a writeup pointing at this upstream-fix path, so a future repo search for "device-side logsumexp" finds it.**
+
+### Side-finding: scored-only logits mask (the cheap win this investigation produced)
+
+While reading upstream `llama-perplexity` for context, found that it sets `batch.logits[idx] = (pos >= first) ? 1 : 0` — only requesting logits at positions it'll actually score. Our `PopulateBatchAllLogits` requested them everywhere. With `ScoreSecondHalfOnly` (the default), requesting only the second half halves both the LM-head matmul work and the logits readback volume.
+
+Replacing `PopulateBatchAllLogits` with a `firstNeededPosition`-aware variant (and the same fix on the multi-seq batched path):
+
+| measurement                         | before  | after   |
+|-------------------------------------|--------:|--------:|
+| Standalone PPL on Qwen3-1.7B Q4_K_M | 46.9 s  | 39.1 s (1.20×) |
+| 22-cell campaign with #37 scheduler | 543.1 s | 521.0 s (1.04× incremental, 1.51× cumulative vs pre-#37) |
+| Q4_K_M PPL                          | 17.4080 | 17.4080 (bit-identical) |
+| F16 PPL                             | 16.8865 | 16.9000 (+0.0135, cuBLAS algorithm shift at smaller batch) |
+
+The campaign-level gain is smaller than the per-PPL gain because at #37's continuous-flow concurrency the producer's serial quantize work has become a non-trivial share of wall — improving per-PPL further would shift the bottleneck to that side. The F16 baseline shift of +0.0135 PPL is real (a one-time, post-commit, kernel-stable shift); Q4_K_M is bit-identical because dequant kernels are batch-size-stable while pure cuBLAS GEMM has more algorithm variability.
+
+Recipe-vs-recipe and recipe-vs-stock DELTAS — the actual surface AQ decisions are made on — are unaffected, since both legs of any delta use identical kernel choices.
+
+### Resulting state
+
+- Continuous-flow PPL scheduler shipped in #37 (Run 22).
+- Scored-only logits mask shipped here.
+- #43 closed with a clear "fix-it-upstream" writeup; the in-code comment in `LlamaPerplexity.cs` updated to reflect the corrected bottleneck breakdown and to point at this Run-23 entry plus the closed issue.
+- Run 18 deferred-work note's "GPU compute is 31 s" claim is superseded by the eager-touch finding above; that line should be read as historical context rather than current state.
+
+## Run 22 — 2026-04-28 (Option B: per-family clamp at refinement scope only — beats Run 21)
+
+Run 21 shipped uniform Q6_K on all 28 ffn_down layers because the
+demote-only refinement pass had no measured type below Q6_K to demote
+to (the per-layer ffn_down measurements were Q2_K / Q4_K / IQ4_XS /
+Q6_K, and the cross-family monotone clamp pulled IQ4_XS up to Q6_K's
+clamped value, hiding the IQ-quant signal). Run 22 reopens that
+pathway by changing where the clamp lives.
+
+### The IQ-vs-K family question
+
+Public results (and the user's own experience) show IQ4_XS routinely
+beats higher-bpw K-quants on certain tensor distributions despite
+having less raw bit budget — codebook + importance-aware machinery
+can fit per-block error patterns that K-quant's per-block scale
+can't. A cross-family "lower bpw must be at least as bad as higher
+bpw" clamp violates that empirically, so **the monotone-from-above
+rule only holds within a single quant family**.
+
+### The per-family clamp regression (deferred Run)
+
+A first attempt moved the per-family running max into the
+category-enumeration step in `BuildClampedScaledDeltas`. That recipe
+came back at **17.4435 PPL / 1209 MB** — *worse* than stock
+(17.4080) and well behind Run 21 (16.9336). The per-family clamp at
+category scope freed the optimizer to enumerate IQ4_XS for any
+category whose K-curve was clamped flat, and several categories
+flipped to IQ4_XS in combination — which compounded badly.
+
+### Isolation experiments
+
+To disambiguate "IQ-quants are bad in this model" from "this
+particular mix of IQ-quants is bad", four single-edit variants were
+quantized and PPL'd against the Run 21 baseline:
+
+| variant                                    | PPL      | Δ vs Run 21 |
+|--------------------------------------------|---------:|------------:|
+| Run 21 baseline (uniform K within budget)  | 16.9336  | (anchor)    |
+| A — `attn_k` only IQ4_XS                   | 16.9740  | +0.04       |
+| B — `ffn_down` only IQ4_XS                 | 17.1888  | +0.26       |
+| C — both `attn_k` + `ffn_down` IQ4_XS      | 17.4434  | **+0.51**   |
+| D — uniform IQ4_XS everywhere              | 17.5046  | +0.57       |
+
+Single-category IQ4_XS is fine on `attn_k` and modestly costly on
+`ffn_down`, but the *combination* costs more than the sum (0.04 +
+0.26 = 0.30, but C measured 0.51). Single-tensor / single-category
+ablations therefore *under-predict* IQ-quant cost when the
+optimizer enumerates IQ-quants for several categories at once.
+
+### Option B — clamp scope split
+
+The fix is to apply the clamps at different scopes with different
+rules:
+
+- **Category-enumeration scope** (`BuildClampedScaledDeltas`): keep
+  a single global running max. Conservative, cross-family monotone.
+  Prevents the optimizer from picking IQ4_XS for several categories
+  in combination.
+- **Per-tensor refinement scope** (`RefineCategoryPerTensor`): use
+  per-family running max. The category type is already chosen; this
+  pass only edits *individual tensors* within the chosen category.
+  The compounding cost from Variant C cannot occur here because only
+  one category is being touched.
+
+That's the entire diff: revert the per-family clamp at category
+scope, keep it at per-tensor scope.
+
+### Result — strict Pareto improvement over Run 21 *and* stock
+
+Apply settings identical to Run 21
+(`ApplyStockBaseline=off`, `UsePerTensorData=on`,
+`AllowPerTensorPromotion=on`, target 4.95 bpw, imatrix-aware,
+wikitext-2 raw, ctx 512, second-half scoring).
+
+|                     | PPL        | Δ from F16 | File size       | Avg bpw |
+|---------------------|-----------:|-----------:|----------------:|--------:|
+| F16 baseline        | 16.8870    | (anchor)   | 4,069 MB        | 16.000  |
+| Stock Q4_K_M        | 17.4080    | +0.521     | 1,282 MB        | ~4.95   |
+| Run 21 (all-K)      | 16.9336    | +0.047     | 1,232 MB        | 4.919   |
+| **Run 22 (Option B)** | **16.8989** | **+0.012** | **1,210 MB**  | **4.739** |
+
+Smaller, lower-bpw, *and* better PPL than Run 21 — and dramatically
+better than stock. Δ from F16 collapsed from stock's +0.521 to
++0.012 (97.7% of the F16-vs-Q4_K_M gap closed).
+
+### What the recipe actually picked (`ffn_down`)
+
+Run 21's ffn_down was uniform Q6_K (28 layers). Option B's
+per-tensor refinement reshuffles them:
+
+- **15 layers Q6_K** — the layers where the per-layer measurement
+  flagged real cost at lower bpw.
+- **9 layers IQ4_XS** — layers where IQ4_XS measured at-or-below
+  the budget tolerance, so the demote-and-budget pass took it.
+- **4 layers Q4_K** — middle ground.
+
+This is the per-tensor refinement payoff that Run 21 could not
+realize: the per-layer ffn_down data was always there, but the
+cross-family monotone clamp was hiding the IQ4_XS signal at every
+layer regardless of measurement.
+
+### Why this design is right (and what it concedes)
+
+- Concedes that single-category ablations don't capture the
+  *interaction* cost between categories at low bpw — Variant C's
+  +0.51 isn't predictable from A + B. Until the profile builder
+  measures pairwise interactions, the conservative thing at
+  category scope is to assume cross-family clamping.
+- Keeps the empirical IQ-quant lift available where it provably
+  works: per-tensor decisions inside a category, where only one
+  family is being shuffled at a time and there's no
+  multi-category-mix surface to compound across.
+- Symmetric with how stock's `use_more_bits` already operates —
+  per-layer surgical edits inside categories — but driven by
+  measurement instead of a hardcoded layer list.
+
+### Code shape
+
+`LlamaQuantRecipeFromProfile.BuildClampedScaledDeltas`: single
+running max across the descending-bpw ladder.
+
+`LlamaQuantRecipeFromProfile.RefineCategoryPerTensor`: dictionary
+keyed by `LlamaQuantFamily`, monotone within family only. Also
+filters the demote-target candidate set to *measured types only* so
+monotone-filled types aren't valid demote choices.
+
+47/47 tests pass. The deleted test
+`NoiseClamp_PerFamilyMonotone_PreservesIQuantSignalAgainstNoisyKQuant`
+asserted the per-family-at-category-scope behavior that the
+isolation experiments showed was empirically wrong — removed
+rather than rewritten because the new behavior is "single global
+clamp at category scope", which the existing
+`NoiseClamp_*_PreservesMonotoneOrdering` tests already cover.
+
+### Operational note on test infrastructure
+
+The IQ-isolation experiments (variants A–D) were run as four
+sequential one-off `dotnet run` projects, each producing one quant
+and one PPL number. The profile builder's
+`LlamaPerplexity.RunParallelAsync` infrastructure could have run all
+four in a single call with VRAM-aware concurrency, cutting the
+cycle time substantially. Future variant-comparison work should
+batch through that path rather than spinning up individual
+projects.
+
+### Verdict
+
+**Option B is the new default.** It strictly Pareto-dominates Run
+21 and stock Q4_K_M on Qwen3-1.7B at this budget. The next runs
+should re-validate on Qwen3-0.6B and Qwen3-4B (cross-size, same
+family) and Llama-3.2-1B (cross-architecture) to confirm the design
+choice generalizes.
+
 ## Run 21 — 2026-04-28 19:49  (First Pareto win over stock Q4_K_M — Qwen3-1.7B)
 
 Run 17 ended with the recipe builder shipping at parity to stock on
