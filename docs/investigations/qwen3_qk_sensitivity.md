@@ -239,6 +239,112 @@ empirically the loudest), can't see this — it's hard-coded to the
    just academic — the GGUFLab page can recommend the recipe over
    the heuristic for Qwen3-class models.
 
+## Run 28 — 2026-04-29 (Per-tensor Llama-3.2-1B `ffn_down`: soft-floor over-fires on gentle profiles)
+
+### Question
+
+Run 27 validated the v3 recipe builder cross-architecture using *category-only* data on Llama-3.2-1B. The soft-floor noise gate (#44/Run 26) only fires inside the per-tensor refinement loop, so we don't yet know whether it behaves correctly on a non-Qwen3 architecture. The Llama-3.2-1B category profile has exactly one analyzer-suspect category — `ffn_down` shows a non-monotonic Q2_K +2.28 → Q3_K +2.52 inversion at category scope. If that inversion repeats at per-layer scope, the gate will fire on it; we want to see whether the soft floor (Q3_K) blocks bad demotes the way it does on Qwen3, or whether on a gentler profile the gate over-fires and hurts the recipe.
+
+Targeted scope (per user direction): drill `ffn_down` only — 16 layers × 7 candidate types = 112 cells, ~30 min on the in-place path now that #46/#48 are fixed.
+
+### Setup
+
+- Model: `bartowski/Llama-3.2-1B-Instruct-f16.gguf`, 16 layers, GQA (32 heads / 8 kv-heads), tied embeddings.
+- Imatrix: regenerated 2026-04-29 against `wiki.test.raw` (post-fix collector, dated Apr 29 12:32).
+- Corpus: `wiki.test.raw`.
+- F16 baseline PPL: 13.8248.
+- Build wall: 38 min (in-place + #48 disk fallback for any token_embd cells; 113 cells incl. baseline).
+
+### Per-tensor data
+
+ΔPPL by layer × type for `blk.{i}.ffn_down.weight`:
+
+| layer  |   Q2_K |   Q3_K | IQ4_XS |   Q4_K |   Q5_K |   Q6_K |   Q8_0 |
+| ------ | -----: | -----: | -----: | -----: | -----: | -----: | -----: |
+| blk.0  | +0.145 | +0.389 | +0.018 | +0.010 | +0.004 | +0.001 | +0.003 |
+| blk.1  | +0.087 | **+1.187** | +0.072 | +0.001 | -0.001 | +0.040 | -0.002 |
+| blk.2  | +0.133 | +0.083 | -0.020 | +0.004 | -0.004 | -0.003 | +0.003 |
+| blk.3  | +0.080 | +0.026 | -0.011 | +0.011 | -0.013 | -0.001 | -0.003 |
+| blk.4  | +0.121 | +0.036 | +0.008 | +0.010 | +0.004 | +0.000 | -0.001 |
+| blk.5  | +0.055 | +0.024 | +0.018 | +0.007 | -0.004 | +0.002 | -0.001 |
+| blk.6  | +0.105 | +0.049 | +0.008 | +0.008 | -0.004 | +0.000 | +0.000 |
+| blk.7  | +0.060 | +0.028 | +0.014 | +0.004 | -0.000 | +0.001 | -0.002 |
+| blk.8  | +0.123 | +0.037 | +0.018 | +0.004 | +0.004 | +0.002 | -0.001 |
+| blk.9  | +0.160 | +0.048 | +0.014 | +0.001 | +0.002 | +0.001 | -0.001 |
+| blk.10 | +0.156 | +0.048 | +0.014 | +0.014 | +0.004 | +0.000 | +0.000 |
+| blk.11 | +0.131 | +0.040 | +0.014 | +0.013 | -0.001 | -0.001 | -0.000 |
+| blk.12 | +0.126 | +0.029 | +0.012 | +0.007 | +0.001 | -0.000 | +0.001 |
+| blk.13 | +0.120 | +0.045 | +0.004 | +0.008 | +0.002 | +0.002 | +0.001 |
+| blk.14 | +0.123 | +0.038 | +0.015 | +0.010 | +0.002 | +0.000 | -0.000 |
+| blk.15 | +0.179 | +0.078 | +0.021 | +0.021 | +0.004 | -0.000 | +0.001 |
+| **mean** | +0.119 | +0.136 | +0.014 | +0.008 | +0.000 | +0.003 | -0.000 |
+| **stdev** | +0.035 | +0.294 | +0.019 | +0.005 | +0.005 | +0.010 | +0.002 |
+
+Observations:
+- **Q2_K**: layer-uniform around +0.12, no catastrophic outlier.
+- **Q3_K**: dominated by `blk.1`'s **+1.19** outlier (14× the second-highest). Without blk.1, mean drops to +0.066 — at or below Q2_K. Q3_K is genuinely worse than Q2_K specifically at one layer; elsewhere it's fine.
+- **Q4_K and up**: every layer at or below the F32-noise band (~0.005). All "free" relative to the F16 baseline.
+- **Inversions**: `Q3_K > Q2_K` on blk.0 and blk.1. `Q4_K ≈ Q5_K ≈ Q6_K ≈ Q8_0` everywhere within F32 noise (frequent last-bit sign flips).
+
+### Recipe A/B at 4.95 bpw
+
+Recipe builder run twice against the same profile, only the soft-floor knob varies:
+
+| | Soft floor (default `Q3_K`) | Hard-stop (`RefinementFloorWhenNoisy=null`) |
+| --- | --- | --- |
+| `ffn_down` picks | **Q6_K×8 + Q3_K×5 + IQ4_XS×3** | Q6_K×8 + Q5_K×8 |
+| Differing layers | blk.{2,3,5,6,8,9,11,12} demoted | (matches Run 27) |
+| Avg bpw | 4.86 | 4.99 |
+| Quantized size | 749 MB | **779 MB** |
+| Wiki-test PPL (ctx=512) | **14.3630** | **14.1810** |
+| Δ vs F16 | +0.5382 | +0.3562 |
+| Δ vs hard-stop | **+0.1820 PPL** | (anchor) |
+
+**The soft floor's demotes hurt by 0.18 PPL.** They look "free" per the per-tensor coefficients (each tensor's Q3_K Δ is well below the Q6_K category-level Δ used as the demote threshold) but compound non-additively when 8 of 16 layers demote simultaneously — the same multi-tensor compounding pattern Run 25 documented on Qwen3 (Run 22's variants A/B/C/D summing pairs that didn't add linearly).
+
+### Why the gate fires here at all
+
+The analyzer flags `ffn_down` as `NonMonotonic` because the *category-level* curve has Q3_K (+2.52) > Q2_K (+2.28). The per-tensor data (computed in this run) shows that inversion is real but driven by a *single layer* (blk.1's Q3_K +1.19 outlier). At the rest of the stack Q3_K is fine. The category-shape analyzer can't see that — it only sees the inverted aggregate.
+
+Once the gate fires, soft floor (Q3_K) lets refinement run with a Q3_K-or-above floor. The demote loop walks the ladder ascending: Q2_K (below floor, skip), Q3_K (try). For 5 of the 16 layers Q3_K Δ is below the category-pick Q6_K Δ (+0.04), so the loop demotes them. For 3 more layers IQ4_XS Δ is below threshold and Q3_K isn't, so they demote one rung higher. The remaining 8 are protected by the stock baseline floor at Q6_K (the use_more_bits set on this architecture) which the optimizer can't undercut.
+
+### Cross-architecture asymmetry of the soft floor
+
+Comparing soft-floor outcomes across the two architectures we now have evidence on:
+
+| Profile | Per-tensor data | Hard-stop recipe vs F16 | Soft-floor recipe vs F16 | Verdict |
+| --- | --- | --- | --- | --- |
+| Qwen3-1.7B (Run 26) | Genuine layer variance (Run 22's mixed picks) | 16.9596 PPL (refinement skipped → uniform Q6_K) | **16.8460 PPL** (refinement picks Q6_K×15 + IQ4_XS×9 + Q4_K×4) | soft-floor saves 0.11 PPL |
+| Llama-3.2-1B (Run 28) | Below-noise (Q4_K and up all ~0) | **14.1810 PPL** (refinement skipped) | 14.3630 PPL (8 layers demoted) | soft-floor *costs* 0.18 PPL |
+
+**Diagnosis.** The soft-floor design assumed that when the gate fires (NonMonotonic / high-rel-std category-shape), the per-tensor data still had *enough signal above noise* that refinement decisions would be sound. That assumption holds on Qwen3 where the noise gate fires precisely because the underlying per-tensor signal is strong but the category-level aggregate looks weird. It breaks on Llama-3.2-1B where the category-level inversion is driven by a single outlier and the rest of the per-tensor data is at the noise floor — refinement then makes noise-driven demotes that compound badly.
+
+The hard-stop "wins" on Llama not because skipping refinement is virtuous, but because *doing nothing* is strictly better than *acting on noise*.
+
+### Mitigation: per-cell signal-magnitude check
+
+The current gate looks at curve *shape* (NonMonotonic, rel-std). It needs an additional guard: when the category-pick Δ is itself below an absolute noise threshold (e.g., 0.05 PPL on the wiki.test corpus), refinement should skip regardless of curve shape — there's no headroom to spend, and any demote that "looks free" is at least partly noise-driven.
+
+Pseudocode:
+```
+if categoryDelta < AbsoluteCategoryNoiseFloor (default 0.05):
+    skip refinement   # nothing meaningful to optimize
+else if NonMonotonic or highRelStd:
+    apply soft floor (existing logic)
+else:
+    refine freely (existing logic)
+```
+
+Filing as a follow-up issue. For now the workaround is `RefinementFloorWhenNoisy = null` on profiles known to have below-noise category-pick Δs (which is hard to characterize without already running the recipe builder once).
+
+### Net status
+
+Cross-architecture validation of the recipe builder is now richer:
+- Run 27 (category-only): v3 builder Pareto-dominates stock Q4_K_M on Llama-3.2-1B with default options.
+- Run 28 (with per-tensor data): the soft-floor noise gate's defaults are *not* universally safe — they assume per-tensor data has signal above noise, which holds on Qwen3 but not on Llama-3.2-1B's gentle profile.
+
+Recipe-shipping advice: until the magnitude check lands, on architectures whose per-tensor `ffn_down` Q4_K Δs cluster around zero (Llama family per this run; likely Qwen3-4B per its category-only profile), prefer category-only profiles or set `RefinementFloorWhenNoisy = null` to avoid noise-driven demotes.
+
 ## Run 27 — 2026-04-29 (Cross-architecture validation: v3 recipe builder beats stock on Llama-3.2-1B)
 
 First cross-architecture validation of the v3 recipe builder + soft-floor noise gate on a non-Qwen3 model. Llama-3.2-1B-Instruct's terrain is qualitatively different from Qwen3 — classical multi-head attention (no QK-norm), no Q2_K cliffs, gentle ΔPPL curves throughout — so it tests whether the recipe builder's defaults still produce a Pareto-positive recipe when the headroom is small.
