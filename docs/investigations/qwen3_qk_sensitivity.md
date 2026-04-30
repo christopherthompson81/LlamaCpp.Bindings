@@ -321,21 +321,32 @@ Comparing soft-floor outcomes across the two architectures we now have evidence 
 
 The hard-stop "wins" on Llama not because skipping refinement is virtuous, but because *doing nothing* is strictly better than *acting on noise*.
 
-### Mitigation: per-cell signal-magnitude check
+### Attempted mitigation: per-cell signal-magnitude check (filed as #49, then reverted)
 
-The current gate looks at curve *shape* (NonMonotonic, rel-std). It needs an additional guard: when the category-pick Δ is itself below an absolute noise threshold (e.g., 0.05 PPL on the wiki.test corpus), refinement should skip regardless of curve shape — there's no headroom to spend, and any demote that "looks free" is at least partly noise-driven.
+First attempt: gate refinement on `Math.Abs(categoryPickDelta) < 0.05` and skip when below threshold. The intuition was that when the category is already saturated at its picked type, refinement has no headroom to spend.
 
-Pseudocode:
-```
-if categoryDelta < AbsoluteCategoryNoiseFloor (default 0.05):
-    skip refinement   # nothing meaningful to optimize
-else if NonMonotonic or highRelStd:
-    apply soft floor (existing logic)
-else:
-    refine freely (existing logic)
-```
+Implementation took ~30 min, unit-tested cleanly, and **fixed Llama-3.2-1B's recipe** — soft-floor and hard-stop produced identical recipes matching Run 27 (14.18 PPL).
 
-Filing as a follow-up issue. For now the workaround is `RefinementFloorWhenNoisy = null` on profiles known to have below-noise category-pick Δs (which is hard to characterize without already running the recipe builder once).
+**Then re-running the Qwen3-1.7B Run 22 replay regressed from 16.8989 to 16.9596 PPL**: the same magnitude check blocked refinement that was *valuable* on Qwen3.
+
+Diagnosis (worked through by hand-walking the Run 22 profile):
+
+| Profile | category-pick (clamped) Δ | per-tensor Q4_K Δ | refinement should... |
+| --- | ---: | ---: | --- |
+| Qwen3-1.7B Run 22 ffn_down | 0 (Q6_K, clamped from −0.01) | many negatives → 0 after clamp | run (budget-only mode) |
+| Llama-3.2-1B Run 28 ffn_down | +0.04 (Q6_K) | mostly +0.02–0.04 | NOT run (acts on noise) |
+
+A single threshold on `categoryPickDelta` either fires on both (≥ 0.05 catches Qwen3's 0) or neither — it can't discriminate the "budget-only safe" case from the "noise-trade unsafe" case.
+
+The Qwen3 demotes work because per-tensor Δs at the demote target are at the zero-floor (clamped from negative noise) and the demote check (`d ≤ categoryDelta`) becomes `0 ≤ 0` — trivially safe in expected terms. The Llama demotes fail because per-tensor Δs at the demote target are in 0.02–0.04 range, passing `d ≤ 0.04` but acting on values within the noise band.
+
+Implementation reverted. The right discriminator probably needs either:
+
+1. **Per-cell margin guard** that's only active when `categoryDelta > epsilon` (budget-only mode below epsilon, quality-trade mode above with margin).
+2. **Empirical feedback** (#45 titration): build candidate refined recipe, measure PPL, accept only on improvement. Bypasses the modeling problem at the cost of one quantize+PPL cycle.
+3. **Multi-tensor compounding model**: predict joint PPL effect of N demotes given per-tensor coefficients. Hard to calibrate without more cross-arch data points.
+
+#49 stays open with this analysis logged. For now, the workaround on noisy profiles is `UsePerTensorData = false` or `RefinementFloorWhenNoisy = null`.
 
 ### Net status
 
